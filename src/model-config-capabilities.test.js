@@ -232,7 +232,7 @@ test('CONFIG 翻译成视频 profile：时长控件形态与既有实现一致',
     assert.equal(toVideoProfileOverrides(config, findEntry('ravenhash-image.gpt-image-2')), null);
 });
 
-test('CONFIG 覆盖 profile 能力但保留线路元数据', () => {
+test('旧 CONFIG 未声明展示字段时保留线路元数据', () => {
     const base = {
         label: 'Seedance 2.5',
         routeLabel: '线路一（推荐）',
@@ -242,7 +242,10 @@ test('CONFIG 覆盖 profile 能力但保留线路元数据', () => {
         supportsWebSearch: true,
         referenceLimits: { image: 99, video: 9, audio: 9 }
     };
-    const merged = mergeVideoProfile(base, toVideoProfileOverrides(config, findEntry('ravenhash-video.sd2.5-route1')));
+    const legacyEntry = { ...findEntry('ravenhash-video.sd2.5-route1') };
+    delete legacyEntry.presentation;
+    delete legacyEntry.pricing;
+    const merged = mergeVideoProfile(base, toVideoProfileOverrides(config, legacyEntry));
     assert.equal(merged.routeLabel, '线路一（推荐）');
     assert.equal(merged.routeGroup, 'seedance25-fixed');
     assert.deepEqual(merged.price, { amount: 6, currency: 'CNY' });

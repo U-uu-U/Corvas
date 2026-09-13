@@ -129,11 +129,11 @@ function resolveLibraryTarget(libraryId, requestedFolder) {
   const context = boardContext();
   const library = context.libraries.find(item => item.id === String(libraryId || ''))
     || context.libraries[0];
-  if (!library) throw new Error('Flow Canvas 没有可用的素材库');
+  if (!library) throw new Error('Corvas 没有可用的素材库');
   const allowedFolders = library.folders.filter(folder => path.isAbsolute(folder));
   const targetFolder = requestedFolder || library.defaultFolder;
   if (!targetFolder || !allowedFolders.some(folder => normalizedPath(folder) === normalizedPath(targetFolder))) {
-    throw new Error('目标目录不属于所选 Flow Canvas 素材库');
+    throw new Error('目标目录不属于所选 Corvas 素材库');
   }
   fs.mkdirSync(targetFolder, { recursive: true });
   return { context, library, targetFolder };
@@ -342,7 +342,7 @@ function moveVerified(source, targetFolder) {
     throw new Error(`下载文件不存在: ${source || '(empty)'}`);
   }
   if (!targetFolder || !path.isAbsolute(targetFolder)) {
-    throw new Error('Flow Canvas 没有可用的目标目录');
+    throw new Error('Corvas 没有可用的目标目录');
   }
   const target = uniqueTarget(targetFolder, source);
   fs.copyFileSync(source, target);

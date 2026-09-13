@@ -55,6 +55,7 @@ SRC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── 1. 依赖检查 ──────────────────────────────────────────────
 command -v node >/dev/null 2>&1 || die "没有 node，请先装 Node.js 20+（apt install nodejs / dnf install nodejs，或用 nodesource 源）"
+NODE_BIN="$(readlink -f "$(command -v node)")"
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 [[ "$NODE_MAJOR" -ge 20 ]] || die "Node 版本过低（当前 $(node -v)），需要 20 及以上"
 log "Node $(node -v) ✓"
@@ -76,11 +77,19 @@ log "目录：代码 $APP_DIR · 数据 $DATA_DIR"
 # ── 3. 复制代码（幂等：重复执行 = 升级） ─────────────────────
 if [[ "$(readlink -f "$SRC_DIR")" != "$(readlink -f "$APP_DIR")" ]]; then
     log "复制服务端代码到 $APP_DIR"
-    tar -C "$SRC_DIR" --exclude=./data --exclude=./node_modules --exclude=./.git -cf - . \
+    tar -C "$SRC_DIR" --exclude=./data --exclude=./node_modules --exclude=./runtime --exclude=./.git -cf - . \
         | tar -C "$APP_DIR" -xf -
 else
     log "已在目标目录内运行，跳过复制"
 fi
+
+# systemd cannot use an interactive NVM PATH or read /root under ProtectHome.
+mkdir -p "$APP_DIR/runtime"
+if [[ "$NODE_BIN" != "$(readlink -f "$APP_DIR/runtime/node")" ]]; then
+    install -m 755 "$NODE_BIN" "$APP_DIR/runtime/node.next"
+    mv -f "$APP_DIR/runtime/node.next" "$APP_DIR/runtime/node"
+fi
+log "服务运行时：$APP_DIR/runtime/node"
 
 # ── 4. 安装 ajv（可选依赖，装不上也能跑，只是降级为结构校验） ──
 if command -v npm >/dev/null 2>&1; then
@@ -113,6 +122,7 @@ fi
 chown -R "$APP_USER:$APP_USER" "$APP_DIR" "$DATA_DIR"
 
 ENV_FILE=/etc/default/flow-config
+if [[ ! -f "$ENV_FILE" ]]; then
 cat > "$ENV_FILE" <<EOF
 # Flow Canvas CONFIG 服务（不含任何明文凭据；密码哈希在 $ADMIN_FILE）
 # 端口 / 数据目录 / 对外域名以 systemd 单元里的 Environment= 为准，
@@ -120,6 +130,7 @@ cat > "$ENV_FILE" <<EOF
 # 例：CONFIG_COOKIE_SECURE=1
 EOF
 chmod 644 "$ENV_FILE"
+fi
 
 UNIT=/etc/systemd/system/flow-config.service
 sed -e "s|__APP_DIR__|$APP_DIR|g" \
@@ -132,7 +143,8 @@ log "已写入 $UNIT"
 
 systemctl daemon-reload
 if [[ "$START_SERVICE" == "1" ]]; then
-    systemctl enable --now flow-config >/dev/null
+    systemctl enable flow-config >/dev/null
+    systemctl restart flow-config
     log "服务已启动：systemctl status flow-config"
 fi
 

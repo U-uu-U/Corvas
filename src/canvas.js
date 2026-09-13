@@ -1522,7 +1522,7 @@ export class CanvasManager {
             return false;
         }
         if (!window.flowCanvas?.asset?.archiveFile) {
-            this._showCanvasStatus('入库功能需要在 Flow Canvas 桌面版中使用', 3200);
+            this._showCanvasStatus('入库功能需要在 Corvas 桌面版中使用', 3200);
             return false;
         }
 
@@ -1575,7 +1575,7 @@ export class CanvasManager {
         const product = this._getMediaProduct(item?.data);
         if (!product?.filePath || product.mediaType !== 'image') return false;
         if (!window.flowCanvas?.image?.crop) {
-            this._showCanvasStatus('裁切功能需要在 Flow Canvas 桌面版中使用', 3200);
+            this._showCanvasStatus('裁切功能需要在 Corvas 桌面版中使用', 3200);
             return false;
         }
         const displayNode = item.group?.findOne('.displayNode');
@@ -3792,7 +3792,7 @@ export class CanvasManager {
         const filePaths = (Array.isArray(filePathOrPaths) ? filePathOrPaths : [filePathOrPaths]).filter(Boolean);
         if (filePaths.length === 0) return;
         if (!window.flowCanvas?.folder?.copyFilesToExplorer) {
-            this._showCanvasStatus('请重启 Flow Canvas 后再使用 Alt 拖到系统文件夹', 3200);
+            this._showCanvasStatus('请重启 Corvas 后再使用 Alt 拖到系统文件夹', 3200);
             return;
         }
 
@@ -7901,7 +7901,7 @@ export class CanvasManager {
             return;
         }
         if (!window.flowCanvas?.ai?.describeImages) {
-            this._showCanvasStatus('画面提取接口不可用，请重启 Flow Canvas', 3600);
+            this._showCanvasStatus('画面提取接口不可用，请重启 Corvas', 3600);
             return;
         }
 
@@ -9173,7 +9173,8 @@ export class CanvasManager {
             provider.id === data.config?.providerId
             || (provider.sourceProviderId === data.config?.sourceProviderId && provider.model === data.config?.model)
         );
-        label.textContent = [selected?.routeLabel, selected?.model || data.config?.model].filter(Boolean).join(' · ')
+        const modelLabel = selected?.modelLabel && selected.modelLabel !== '未收录模型' ? selected.modelLabel : selected?.model;
+        label.textContent = [selected?.routeLabel, modelLabel || data.config?.model].filter(Boolean).join(' · ')
             || (providers.length ? '选择模型' : '请先添加 API');
         button.title = selected
             ? `${selected.name || '未命名 API'} · ${selected.model || '未命名模型'}`
@@ -9217,6 +9218,13 @@ export class CanvasManager {
         });
     }
 
+    refreshGenerationModelPresentation() {
+        const active = this._generationComposer;
+        if (!active) return;
+        this._syncGenerationComposerModelButton(active.nodeId);
+        active.popover?.refreshModels?.();
+    }
+
     _showGenerationComposerModelMenu(nodeId, anchor) {
         const active = this._generationComposer;
         const data = this.items.get(nodeId)?.data;
@@ -9225,7 +9233,6 @@ export class CanvasManager {
             this._closeGenerationComposerPopover(active);
             return;
         }
-        const providers = this.options.getGenerationProviders?.(data.nodeType) || [];
         const popover = document.createElement('section');
         popover.className = 'generation-composer-popover generation-composer-model-popover';
         popover.setAttribute('role', 'dialog');
@@ -9240,23 +9247,33 @@ export class CanvasManager {
         `;
         const search = popover.querySelector('input');
         const list = popover.querySelector('.generation-composer-model-options');
-        const rows = [];
-        const groups = new Map();
-        for (const provider of providers) {
-            const sourceId = provider.sourceProviderId;
-            const key = sourceId && provider.routeGroup && provider.routeLabel
-                ? JSON.stringify([sourceId, provider.routeGroup]) : null;
-            let row = key && groups.get(key);
-            if (!row) {
-                row = [];
-                rows.push(row);
-                if (key) groups.set(key, row);
-            }
-            row.push(provider);
-        }
-        rows.forEach(row => row.sort((a, b) => (a.routeLabel || '') < (b.routeLabel || '') ? -1
-            : (a.routeLabel || '') > (b.routeLabel || '') ? 1 : 0));
+        let routeEvents = null;
+        let closeTimers = [];
+        const cleanup = () => {
+            routeEvents?.abort();
+            closeTimers.forEach(clear => clear());
+            closeTimers = [];
+        };
         const render = () => {
+            cleanup();
+            routeEvents = new AbortController();
+            const providers = this.options.getGenerationProviders?.(data.nodeType) || [];
+            const rows = [];
+            const groups = new Map();
+            for (const provider of providers) {
+                const sourceId = provider.sourceProviderId;
+                const key = sourceId && provider.routeGroup && provider.routeLabel
+                    ? JSON.stringify([sourceId, provider.routeGroup]) : null;
+                let row = key && groups.get(key);
+                if (!row) {
+                    row = [];
+                    rows.push(row);
+                    if (key) groups.set(key, row);
+                }
+                row.push(provider);
+            }
+            rows.forEach(row => row.sort((a, b) => (a.routeLabel || '') < (b.routeLabel || '') ? -1
+                : (a.routeLabel || '') > (b.routeLabel || '') ? 1 : 0));
             const query = search.value.trim().toLowerCase();
             const matches = rows.filter(row => row.some(provider => !query
                 || `${provider.routeLabel || ''} ${provider.model || ''} ${provider.modelLabel || ''} ${provider.description || ''} ${provider.name || ''}`.toLowerCase().includes(query)));
@@ -9271,20 +9288,22 @@ export class CanvasManager {
                 return;
             }
             matches.forEach(row => {
-                const split = row.length === 2 && row[0].routeLabel !== row[1].routeLabel;
+                const split = row.length > 1 && row.every(provider => provider.routeGroup && provider.routeLabel);
                 let container = list;
                 if (split) {
                     const group = document.createElement('div');
                     group.className = 'generation-composer-model-routes';
                     group.setAttribute('role', 'group');
-                    group.setAttribute('aria-label', 'Seedance 2.5 固定 30 秒线路选择');
+                    const groupLabel = row[0].routeGroupLabel || row[0].modelLabel || row[0].model;
+                    group.setAttribute('aria-label', `${groupLabel}线路选择`);
                     const current = row.find(provider => provider.id === data.config?.providerId
                         || (provider.sourceProviderId === data.config?.sourceProviderId && provider.model === data.config?.model));
                     const trigger = document.createElement('button');
                     trigger.type = 'button';
                     trigger.className = 'generation-composer-route-trigger';
                     trigger.classList.toggle('selected', !!current);
-                    trigger.innerHTML = '<span><strong>Seedance 2.5 · 固定 30 秒</strong><small></small></span><svg class="flow-icon" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-arrow-up"></use></svg>';
+                    trigger.innerHTML = '<span><strong></strong><small></small></span><svg class="flow-icon" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-arrow-up"></use></svg>';
+                    trigger.querySelector('strong').textContent = groupLabel;
                     trigger.querySelector('small').textContent = (current || row[0]).description || current?.routeLabel || row[0].name || '视频';
                     const panel = document.createElement('div');
                     panel.className = 'generation-composer-route-panel';
@@ -9293,6 +9312,7 @@ export class CanvasManager {
                     container.className = 'generation-composer-route-options';
                     panel.appendChild(container);
                     let closeTimer;
+                    closeTimers.push(() => clearTimeout(closeTimer));
                     const expand = open => {
                         clearTimeout(closeTimer);
                         group.classList.toggle('expanded', open);
@@ -9327,13 +9347,13 @@ export class CanvasManager {
                     group.addEventListener('mouseleave', deferClose);
                     panel.addEventListener('mouseenter', () => clearTimeout(closeTimer));
                     panel.addEventListener('mouseleave', deferClose);
-                    popover.addEventListener('mouseleave', deferClose);
+                    popover.addEventListener('mouseleave', deferClose, { signal: routeEvents.signal });
                     list.addEventListener('scroll', () => {
                         if (!panel.matches(':popover-open')) return;
                         const bounds = trigger.getBoundingClientRect();
                         const viewport = list.getBoundingClientRect();
                         expand(bounds.bottom > viewport.top && bounds.top < viewport.bottom);
-                    });
+                    }, { signal: routeEvents.signal });
                     group.addEventListener('focusin', () => expand(true));
                     group.addEventListener('focusout', event => {
                         if (!group.contains(event.relatedTarget)) expand(false);
@@ -9369,7 +9389,7 @@ export class CanvasManager {
                     const copy = document.createElement('span');
                     const model = document.createElement('strong');
                     model.textContent = (split
-                        ? provider.routeLabel + (provider.routeLabel === '线路一' ? '（推荐）' : '')
+                        ? provider.routeLabel + (provider.recommended ? '（推荐）' : '')
                         : (provider.modelLabel && provider.modelLabel !== '未收录模型' ? provider.modelLabel : provider.model)) || '未命名模型';
                     const source = document.createElement('small');
                     source.textContent = split
@@ -9397,6 +9417,11 @@ export class CanvasManager {
         search.addEventListener('input', render);
         render();
         this._mountGenerationComposerPopover(active, popover, anchor);
+        active.popover.cleanup = cleanup;
+        active.popover.refreshModels = () => {
+            render();
+            this._positionGenerationComposerPopover(active);
+        };
         search.focus({ preventScroll: true });
     }
 
@@ -9908,6 +9933,7 @@ export class CanvasManager {
         const popover = active?.popover;
         if (!popover) return;
         active.popover = null;
+        popover.cleanup?.();
         popover.anchor?.classList.remove('is-open');
         popover.anchor?.setAttribute('aria-expanded', 'false');
         popover.element?.remove();
@@ -13939,7 +13965,7 @@ export class CanvasManager {
                 planId,
                 rowId,
                 prompt,
-                title: row.cells?.title || plan.title || (wantsVideo ? 'Flow Canvas video' : 'Flow Canvas image'),
+                title: row.cells?.title || plan.title || (wantsVideo ? 'Corvas video' : 'Corvas image'),
                 x: outputX,
                 y: outputY,
                 width: wantsVideo ? 1280 : 1024,
@@ -15774,7 +15800,7 @@ export class CanvasManager {
         };
 
         const markdownSections = [
-            '# Flow Canvas References',
+            '# Corvas References',
             '',
             'This file is exported for AI IDEs and scripts. Prefer the JSON block for parsing.',
             'The JSON block is ASCII escaped, so paths remain machine-readable even if a viewer misdetects text encoding.',
@@ -15816,7 +15842,7 @@ export class CanvasManager {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `flow-canvas-references.md`;
+        a.download = `corvas-references.md`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);

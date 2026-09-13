@@ -1,7 +1,7 @@
 import './diagnostics-settings.css';
 
 function mountDiagnostics() {
-    const host = document.querySelector('#agentSettings');
+    const host = document.getElementById('agentApiDiagnostics');
     const api = window.flowCanvas?.diagnostics;
     if (!host || !api || document.getElementById('diagnosticsSettings')) return;
     const root = document.createElement('details');

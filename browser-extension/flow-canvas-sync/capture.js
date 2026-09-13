@@ -88,7 +88,7 @@ function renderFolders() {
   const folders = Array.isArray(library?.folders) ? library.folders : [];
   dom.folder.innerHTML = folders.length
     ? folders.map(folder => `<option value="${escapeHtml(folder)}">${escapeHtml(folder.split(/[\\/]/).filter(Boolean).pop() || folder)}</option>`).join('')
-    : '<option value="">请先在 Flow Canvas 关联目录</option>';
+    : '<option value="">请先在 Corvas 关联目录</option>';
   if (library?.defaultFolder && folders.includes(library.defaultFolder)) dom.folder.value = library.defaultFolder;
   dom.import.disabled = selected.size === 0 || !folders.length;
 }
@@ -324,7 +324,7 @@ async function importSelected() {
     if (failures.length) {
       setStatus(`已导入 ${importedCount} 项，${failures.length} 项失败：${failures[0]}`, 'error');
     } else {
-      setStatus(`已导入 ${importedCount} 项，Flow Canvas 素材库会自动刷新`, 'success');
+      setStatus(`已导入 ${importedCount} 项，Corvas 素材库会自动刷新`, 'success');
     }
   } finally {
     dom.scan.disabled = false;
@@ -378,7 +378,7 @@ async function initialize() {
     page = tab;
     dom.pageTitle.textContent = tab.title || tab.url || '当前页面';
   }
-  setStatus(context.libraries?.length ? '已连接 Flow Canvas 素材库' : 'Flow Canvas 素材库不可用');
+  setStatus(context.libraries?.length ? '已连接 Corvas 素材库' : 'Corvas 素材库不可用');
 }
 
 initialize().catch(error => setStatus(error?.message || String(error), 'error'));

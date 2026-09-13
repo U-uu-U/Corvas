@@ -124,7 +124,7 @@ async function createAgentServices({ store, bridge, apiConfigStore, dataDir, get
         const projectId = input.projectId ?? store.load().activeGroupId;
         if (name.startsWith('flow_canvas.agent.')) {
             const action = name.slice('flow_canvas.agent.'.length);
-            if (action === 'confirm') throw new Error('请在 Flow Canvas 任务卡中确认计划');
+            if (action === 'confirm') throw new Error('请在 Corvas 任务卡中确认计划');
             if (!['start', 'get', 'list', 'cancel', 'resume', 'revise', 'retry'].includes(action)) throw new Error('Unknown runtime action');
             return runtime[action]({ ...input, projectId, conversationId: input.conversationId || 'external-harness' });
         }

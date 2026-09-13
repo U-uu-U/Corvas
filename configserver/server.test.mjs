@@ -315,6 +315,28 @@ test('/admin/validate 只校验不落盘', async () => {
     }
 });
 
+test('表单脚本需要登录，且从 /admin 页面使用绝对路由', async () => {
+    const server = await startServer();
+    try {
+        const anonymous = await fetch(`${server.base}/admin/assets/admin-editor.mjs`, { redirect: 'manual' });
+        assert.equal(anonymous.status, 303);
+        const { cookie } = await login(server.base);
+        const { html } = await openAdmin(server.base, cookie);
+        assert.match(html, /action="\/admin\/save"/);
+        assert.match(html, /action="\/admin\/logout"/);
+        for (const name of ['admin-editor.mjs', 'admin-editor-model.mjs']) {
+            const response = await fetch(`${server.base}/admin/assets/${name}`, { headers: { cookie } });
+            assert.equal(response.status, 200);
+            assert.match(response.headers.get('content-type'), /text\/javascript/);
+            assert.equal(response.headers.get('cache-control'), 'no-cache');
+        }
+        const missing = await fetch(`${server.base}/admin/assets/server.mjs`, { headers: { cookie } });
+        assert.equal(missing.status, 404);
+    } finally {
+        await server.cleanup();
+    }
+});
+
 test('默认监听 127.0.0.1:8087，且可被环境变量覆盖', () => {
     // 回归守卫：部署脚本与 nginx 配置的默认端口必须和这里一致
     const defaults = resolveServerConfig({});

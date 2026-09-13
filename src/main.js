@@ -2,7 +2,6 @@ import { CanvasManager } from './canvas.js';
 import './mcp-client-settings.js';
 import './diagnostics-settings.js';
 import './generation-recovery.css';
-import './model-config-settings.css';
 import './light-theme.css';
 import { initTheme } from './theme.js';
 import { initCanvasUiScaleSettings } from './canvas-ui-scale.js';
@@ -53,14 +52,14 @@ if (window.flowCanvas?.platform === 'darwin') {
 async function bootstrap() {
     try {
         if (!window.flowCanvas?.store?.load) {
-            throw new Error('Flow Canvas preload bridge is unavailable');
+            throw new Error('Corvas preload bridge is unavailable');
         }
 
         // 1. 加载数据
         storeData = await window.flowCanvas.store.load();
         // 模型能力 CONFIG：内置默认立刻可用，随后按 1 小时周期从服务器静默更新。
         // 不 await：拉取失败或网络慢都不能拖住启动，UI 先用内置/缓存配置渲染。
-        initModelConfigUi();
+        const modelConfig = initModelConfigUi();
         storeData.items = (Array.isArray(storeData.items) ? storeData.items : [])
             .filter(item => item?.kind !== 'generation');
         delete storeData.generationNodes;
@@ -140,6 +139,10 @@ async function bootstrap() {
             applyBoardTransaction: (transaction) => applyAgentBoardTransaction(transaction),
             undoBoardTransaction: (undoToken) => undoAgentBoardTransaction(undoToken)
         }));
+
+        modelConfig.subscribe((_config, _status, reason) => {
+            if (['refresh', 'cache', 'reset'].includes(reason)) canvasManager?.refreshGenerationModelPresentation();
+        });
 
         // 3. 关联事件
         sidebarManager.on('filter', (types) => {
@@ -630,7 +633,7 @@ function initOptionalModule(name, factory) {
 }
 
 function showStartupError(err, area = 'startup') {
-    showStatusNotification(`Flow Canvas ${area} error: ${err?.message || err}`, {
+    showStatusNotification(`Corvas ${area} error: ${err?.message || err}`, {
         kind: 'error', onDismiss: () => document.body.classList.remove('app-startup-error')
     });
     document.body.classList.add('app-startup-error');
@@ -1182,7 +1185,7 @@ async function relinkMaterialManually(target) {
         return 0;
     }
     if (!isSupportedBoardFile(result.filePath) || isTemporaryBoardFile(result.filePath)) {
-        showHistoryStatus('请选择 Flow Canvas 支持的素材文件');
+        showHistoryStatus('请选择 Corvas 支持的素材文件');
         return 0;
     }
     const replacementType = getBoardMediaType(result.filePath);

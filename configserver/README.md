@@ -17,6 +17,9 @@ configserver/
 ├── lib/validate.mjs        复用客户端那份 JSON Schema（ajv），缺 ajv 时降级为结构校验
 ├── lib/auth.mjs            scrypt 密码 + 会话 cookie + 登录限流
 ├── lib/pages.mjs           登录页 / 管理面板 / 落地页
+├── lib/admin-editor-view.mjs  模型表单 HTML 与样式
+├── lib/admin-editor.mjs     浏览器编辑器：模型列表、表单 / JSON 双向同步
+├── lib/admin-editor-model.mjs  只修改已编辑字段的纯函数（服务端测试与浏览器共用）
 ├── schema/                 随包 schema（由 scripts/sync-model-config.mjs 同步，勿手改）
 ├── seed/                   首次启动的种子配置（同上，勿手改）
 └── data/                   ← 运行时数据，不进版本库（.gitignore 已忽略）
@@ -62,6 +65,10 @@ cd /srv/configserver-* && sudo ./deploy/install.sh
 **重复执行就是升级**，数据与密码保持不变。可用
 `--domain` `--port` `--password` `--app-dir` `--data-dir` `--user` `--no-start` 覆盖。
 停止 / 卸载见下一节 d)。
+
+安装器会把当前 Node 可执行文件复制到代码目录的 `runtime/node`，systemd 不依赖登录 shell 或
+root 的 NVM 目录。升级会保留已有 `/etc/default/flow-config` 并明确重启服务。
+Node 的 V8 JIT 需要可执行内存，不要为此服务开启 `MemoryDenyWriteExecute=yes`。
 
 **b) 手动安装 / 自定义路径**
 
@@ -166,12 +173,29 @@ sudo ./deploy/stop.sh --uninstall --purge   # 连数据目录一起删（会要�
 
 ## 5. 接口
 
+### 模型表单
+
+登录 `/admin` 后默认进入表单：左侧搜索并选择模型，右侧修改名称、简介、线路分组、推荐标记和展示售价。
+模型参数、协议和未编辑的字段会原样保留。需要编辑参数时切到 JSON；无效 JSON 不会被转换或覆盖。
+
+- 名称留空恢复默认名称；清空已经填写的简介/线路字段会写入空字符串（隐藏简介/解除线路分组）。未操作的空字段不产生覆盖值。
+- 售价状态分为“沿用客户端默认价”“费用未知”“指定售价”。指定售价需要填写域名、金额、币种、计价单位与来源；域名可用换行或逗号分隔，不带 `https://`、路径或通配符。
+- 币种明确分为人民币 `CNY` 与美元 `USD`。价格更新时间只在价格内容修改时自动更新；改名称不改价格时间。这里不修改中转站实际扣费。
+- “还原此模型”仅还原该模型在本次打开页面后的修改，不影响其他模型。切换模型不丢输入；未完成的价格字段需要先修正或还原。
+- 点击“校验”不会发布；勾选“仅保存为草稿”后按钮为“保存草稿”，否则是“发布配置”。版本记录可载入、下载或应用历史版本。
+- 页面发布失败时保留原 JSON、草稿选择和变更说明。浏览器关闭未保存的页面时使用系统原生提醒。
+
+浏览器代码以同源 ES module 加载，无需构建或 CDN。部署仍复制完整 `lib/` 目录即可，不需要修改中转站的数据库或计费服务。
+
+### HTTP 接口
+
 | 方法 | 路径 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/config` | 公开 | 现行 CONFIG（`application/json`、`no-cache`、ETag/304、`Access-Control-Allow-Origin: *`） |
 | GET | `/health` | 公开 | `{ ok, current, versions, validator, uptimeSeconds }`，给监控用 |
 | GET | `/` | 公开 | 落地页：现行版本摘要 + 入口 |
 | GET | `/admin` | 会话 | 管理面板；`?version=<文件名>` 可把某个历史版本载入编辑器 |
+| GET | `/admin/assets/admin-editor.mjs`、`/admin/assets/admin-editor-model.mjs` | 会话 | 表单编辑器模块，固定文件白名单 |
 | GET | `/admin/login` · POST 同名 | 公开 | 登录（表单 `password`），成功后种 HttpOnly + SameSite=Strict 会话 cookie |
 | POST | `/admin/logout` | 会话 | 退出（需 CSRF） |
 | POST | `/admin/save` | 会话 | 表单：`content`(JSON 文本)、`note`、`draft=1` 表示只存版本不切换现行 |
@@ -198,6 +222,11 @@ sudo ./deploy/stop.sh --uninstall --purge   # 连数据目录一起删（会要�
 
 ## 7. 与客户端的契约
 
+模型条目的可选 `presentation` / `pricing` 可管理卡片名称、简介、线路分组、推荐标记和展示售价，
+契约与字段示例见 `../docs/model-config.md` 的 4.1 节。表单与 JSON 编辑的是同一份完整配置，共用校验、发布和回滚接口。
+字段需要新版客户端才能显示；不修改实际扣费、API 密钥或生成协议。配置服务升级时一并同步 schema，
+本阶段仍保持 `schemaVersion: 1`。
+
 客户端（Flow Canvas）把更新源写死为 `https://artconfig.ravenhash.org/config`（可在设置面板改成
 任意 http(s) 地址，或清空以关闭远端更新），每 1 小时自动拉取一次，设置面板也能手动刷新。
 服务端必须满足：
@@ -216,6 +245,12 @@ schema 报错），否则客户端会静静地回退到旧配置，看起来像�
 `npm test` 会断言这两份副本与 `shared/` 逐字一致，防止漂移。
 
 ## 8. 运维小抄
+
+当前生产部署记录见 [model-config-deployment.md](../docs/model-config-deployment.md)。
+
+本地验证：`node --test configserver/admin-editor.test.mjs configserver/server.test.mjs`。
+浏览器全流程验证：`node scripts/config-admin-smoke.mjs`（需要 Playwright 与 Chrome，可用 `PLAYWRIGHT_MODULE` 指定已有依赖路径）。
+测试使用独立临时配置，不访问生产服务；覆盖登录、表单/JSON 切换、隔离编辑、币种、草稿、发布、回滚、无效输入保留及桌面/手机布局。
 
 ```bash
 curl -s https://artconfig.ravenhash.org/health | jq
