@@ -1,6 +1,7 @@
 // 服务端渲染的页面：登录页、管理面板、公开落地页。
 // 不引入任何前端框架/构建步骤——纯 HTML + 少量原生 JS，方便直接拷到服务器上跑。
 import { SESSION_COOKIE } from './auth.mjs';
+import { EDITOR_STYLE, modelEditorMarkup } from './admin-editor-view.mjs';
 
 const STYLE = `
 :root { color-scheme: dark; }
@@ -43,6 +44,7 @@ pre.errors { background: #1a1113; border: 1px solid #54282a; border-radius: 8px;
 .login input { width: 100%; }
 .audit { font-size: 12.5px; }
 code { background: #161b24; padding: 1px 5px; border-radius: 5px; }
+${EDITOR_STYLE}
 `;
 
 export function escapeHtml(value) {
@@ -70,7 +72,7 @@ export function loginPage({ error = '', publicConfigPath = '/config' } = {}) {
   <h1 style="font-size:16px">模型配置服务</h1>
   <p class="muted">客户端从这里获取模型能力 CONFIG：<a href="${escapeHtml(publicConfigPath)}"><code>${escapeHtml(publicConfigPath)}</code></a></p>
   ${error ? `<div class="flash err">${escapeHtml(error)}</div>` : ''}
-  <form method="post" action="login">
+  <form method="post" action="/admin/login">
     <input type="password" name="password" placeholder="管理密码" autocomplete="current-password" autofocus required>
     <button class="primary" type="submit">登录</button>
   </form>
@@ -94,18 +96,18 @@ function versionRows(versions, { csrf, editing }) {
             `<td>${version.current ? '<span class="badge ok">现行</span>' : (version.name === editing ? '<span class="badge">编辑中</span>' : '')}</td>`
         ];
         const actions = [];
-        actions.push(`<a class="link" href="admin?version=${encodeURIComponent(version.name)}">载入编辑器</a>`);
+        actions.push(`<a class="link" href="/admin?version=${encodeURIComponent(version.name)}">载入编辑器</a>`);
         if (!version.current) {
-            actions.push(`<form method="post" action="apply" style="display:inline">
+            actions.push(`<form method="post" action="/admin/apply" style="display:inline">
                 <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
                 <input type="hidden" name="name" value="${escapeHtml(version.name)}">
                 <button class="link" type="submit">应用为现行</button></form>`);
-            actions.push(`<form method="post" action="delete" style="display:inline" onsubmit="return confirm('确认删除 ${escapeHtml(version.name)}？该操作不可撤销。')">
+            actions.push(`<form method="post" action="/admin/delete" style="display:inline" onsubmit="return confirm('确认删除 ${escapeHtml(version.name)}？该操作不可撤销。')">
                 <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
                 <input type="hidden" name="name" value="${escapeHtml(version.name)}">
                 <button class="link danger" type="submit" style="color:#e7a1a1">删除</button></form>`);
         }
-        actions.push(`<a class="link" href="download?name=${encodeURIComponent(version.name)}">下载</a>`);
+        actions.push(`<a class="link" href="/admin/download?name=${encodeURIComponent(version.name)}">下载</a>`);
         cells.push(`<td class="row" style="gap:8px">${actions.join('')}</td>`);
         return `<tr class="${version.current ? 'current' : ''}${version.broken ? ' broken' : ''}">${cells.join('')}</tr>`;
     }).join('');
@@ -114,7 +116,7 @@ function versionRows(versions, { csrf, editing }) {
 export function adminPage({
     versions = [], current = null, editorText = '', editing = '', history = [],
     flash = '', error = '', csrf = '', validatorMode = 'schema', validatorNote = '',
-    publicConfigPath = '/config', publicOrigin = ''
+    publicConfigPath = '/config', publicOrigin = '', draft = false, note = ''
 } = {}) {
     const currentLabel = current
         ? `r${escapeHtml(current.config?.revision ?? 0)} · ${escapeHtml(Array.isArray(current.config?.models) ? current.config.models.length : 0)} 个模型 · <span class="mono">${escapeHtml(current.name)}</span>`
@@ -140,7 +142,7 @@ export function adminPage({
   <span class="badge">现行：${currentLabel}</span>
   <span class="spacer"></span>
   <span class="muted">客户端地址 <a href="${escapeHtml(publicConfigPath)}"><code>${escapeHtml(configUrl)}</code></a></span>
-  <form method="post" action="logout"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">退出登录</button></form>
+  <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">退出登录</button></form>
 </header>
 <main>
   ${flash ? `<div class="flash ok">${escapeHtml(flash)}</div>` : ''}
@@ -149,83 +151,41 @@ export function adminPage({
 
   <section>
     <h2>编辑配置${editing ? `（基于 <span class="mono">${escapeHtml(editing)}</span>）` : '（基于现行版本）'}</h2>
-    <form method="post" action="save" id="configForm">
+    <form method="post" action="/admin/save" id="configForm">
       <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
       <input type="hidden" name="basedOn" value="${escapeHtml(editing)}">
-      <textarea name="content" id="configText" spellcheck="false" aria-label="配置 JSON">${escapeHtml(editorText)}</textarea>
-      <div class="row" style="margin-top:10px">
-        <button class="primary" type="submit">保存并应用</button>
-        <label class="muted"><input type="checkbox" name="draft" value="1"> 仅保存为版本（不切换现行）</label>
-        <input type="text" name="note" placeholder="变更说明（可选）" style="min-width:240px">
+      ${modelEditorMarkup()}
+      <div id="jsonPane" role="tabpanel" aria-labelledby="jsonTab">
+        <textarea name="content" id="configText" spellcheck="false" aria-label="配置 JSON">${escapeHtml(editorText)}</textarea>
+        <button type="button" id="formatBtn">格式化 JSON</button>
       </div>
-      <div class="row">
-        <button type="button" id="formatBtn">格式化</button>
+      <div class="publish-bar">
+        <button class="primary" type="submit" id="saveBtn">${draft ? '保存草稿' : '发布配置'}</button>
+        <label class="muted"><input type="checkbox" name="draft" value="1"${draft ? ' checked' : ''}> 仅保存为草稿</label>
+        <input type="text" name="note" aria-label="变更说明" placeholder="变更说明（可选）" value="${escapeHtml(note)}">
         <button type="button" id="validateBtn">校验</button>
-        <button type="button" id="resetBtn">放弃修改，重新载入现行</button>
-        <input type="text" id="jumpRevision" placeholder="跳到指定版本名" style="min-width:260px">
-        <button type="button" id="jumpBtn">载入</button>
-        <span class="muted" id="editorState"></span>
+        <button type="button" id="resetBtn">重新载入现行</button>
       </div>
-      <pre class="errors" id="editorErrors" hidden></pre>
     </form>
   </section>
 
   <section>
-    <h2>版本（共 ${versions.length} 个 · 每次保存都会生成带时间戳的新文件，老版本自动留档）</h2>
-    <table>
+    <h2>版本记录 · ${versions.length}</h2>
+    <div class="table-scroll"><table>
       <thead><tr><th>版本文件</th><th>revision</th><th>模型数</th><th>大小</th><th>配置 updatedAt</th><th>状态</th><th>操作</th></tr></thead>
       <tbody>${versionRows(versions, { csrf, editing })}</tbody>
-    </table>
+    </table></div>
   </section>
 
   <section>
     <h2>操作记录（最近 ${history.length} 条）</h2>
-    <table class="audit">
+    <div class="table-scroll"><table class="audit">
       <thead><tr><th>时间</th><th>动作</th><th>版本</th><th>操作者</th><th>备注</th></tr></thead>
       <tbody>${auditRows}</tbody>
-    </table>
+    </table></div>
   </section>
 </main>
-<script>
-(() => {
-  const form = document.getElementById('configForm');
-  const text = document.getElementById('configText');
-  const state = document.getElementById('editorState');
-  const errors = document.getElementById('editorErrors');
-  const csrf = ${JSON.stringify(csrf)};
-  const setState = (message, bad) => { state.textContent = message || ''; state.style.color = bad ? '#e7a1a1' : '#8fd3a6'; };
-  const showErrors = list => {
-    if (!list || !list.length) { errors.hidden = true; errors.textContent = ''; return; }
-    errors.hidden = false;
-    errors.textContent = list.map((item, index) => (index + 1) + '. ' + item).join('\\n');
-  };
-  document.getElementById('formatBtn').addEventListener('click', () => {
-    try { text.value = JSON.stringify(JSON.parse(text.value), null, 2); setState('已格式化'); showErrors(null); }
-    catch (error) { setState('JSON 解析失败', true); showErrors([error.message]); }
-  });
-  document.getElementById('validateBtn').addEventListener('click', async () => {
-    setState('校验中…');
-    try {
-      const response = await fetch('validate', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-csrf-token': csrf },
-        body: text.value
-      });
-      const result = await response.json();
-      if (result.ok) { setState('校验通过 · ' + result.modelCount + ' 个模型 · ' + result.mode + ' 模式'); showErrors(null); }
-      else { setState('校验未通过', true); showErrors(result.errors); }
-    } catch (error) { setState('校验请求失败：' + error.message, true); }
-  });
-  document.getElementById('resetBtn').addEventListener('click', () => { location.href = 'admin'; });
-  document.getElementById('jumpBtn').addEventListener('click', () => {
-    const name = document.getElementById('jumpRevision').value.trim();
-    if (name) location.href = 'admin?version=' + encodeURIComponent(name);
-  });
-  form.addEventListener('keydown', event => {
-    if ((event.ctrlKey || event.metaKey) && event.key === 's') { event.preventDefault(); form.requestSubmit(); }
-  });
-})();
-</script>`);
+<script type="module" src="/admin/assets/admin-editor.mjs"></script>`);
 }
 
 export function landingPage({ current = null, publicConfigPath = '/config', adminPath = '/admin' } = {}) {

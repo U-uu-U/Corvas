@@ -6,7 +6,7 @@
 //   2. 起真实 Electron 主进程 + 真实 dist 渲染层，窗口隐藏；
 //   3. 渲染层把自己指向这个本地服务（通过 localStorage，顺便验证持久化地址在启动时生效）；
 //   4. 打开真实画布视频节点，断言时长和比例选项使用服务端配置；
-//   5. 用管理接口回滚到旧版本，再在界面上点「立即刷新」，断言客户端跟着回到旧版本；
+//   5. 断言 CONFIG 维护入口不对普通用户显示；
 //   6. 直接走 IPC 验证远端拉取的三种结果：合法、404、非白名单地址。
 //
 // 运行：npm run test:model-config:smoke
@@ -47,6 +47,7 @@ const seeded = new ApiConfigStore(profile).save({
         capability: 'video',
         endpoint: 'https://smoke.test/v1',
         model: 'sd2.5-route1',
+        models: ['sd2.5-route1', 'sd2.5-route2'],
         apiKey: 'smoke-key'
     }],
     globalConfig: { videoProviderId: 'smoke-video' }
@@ -129,14 +130,18 @@ const READ_DOM = `(() => {
     const settings = document.getElementById('modelConfigSettings');
     return {
         settingsMounted: Boolean(settings),
-        settingsSummary: text(settings && settings.querySelector('[data-config-summary]')),
-        settingsState: text(settings && settings.querySelector('[data-config-state]')),
+        configSnapshot: window.__flowCanvasGetModelConfigSnapshot?.() || null,
         bridgeAvailable: typeof window.flowCanvas?.modelConfig?.fetch === 'function',
         legacyWorkspaceCount: document.querySelectorAll('#videoWorkspace, #imageWorkspace, #videoModelPicker, #videoPromptDock, #agentTextModelSelect, #agentImageModelSelect, #agentVideoModelSelect').length,
         agentMounted: Boolean(document.getElementById('agentMessages') && document.getElementById('agentInput')),
         canvasNodeMounted: Boolean(window.Konva?.stages[0]?.findOne('#smoke-video-node')),
         videoDurationControl: text(document.querySelector('.generation-composer-duration-output')),
-        ratioOptions: document.querySelectorAll('.generation-composer-select-popover[aria-label="画面比例"] [role="option"]').length
+        ratioOptions: document.querySelectorAll('.generation-composer-select-popover[aria-label="画面比例"] [role="option"]').length,
+        modelButton: text(document.querySelector('[data-model-label]')),
+        routeTitle: text(document.querySelector('.generation-composer-route-trigger strong')),
+        modelCards: text(document.querySelector('.generation-composer-model-options')),
+        agentModels: text(document.querySelector('.agent-model-list-item')),
+        prompt: text(document.querySelector('.generation-composer-prompt'))
     };
 })()`;
 
@@ -223,21 +228,18 @@ app.on('browser-window-created', (_event, win) => {
             return;
         }
         console.log('[smoke] 第二趟加载完成，开始断言');
-        // 状态卡是折叠的 <details>：展开才会重绘摘要（这是刻意的省渲染设计），
-        // 所以断言前先点开——顺便验证「展开即刷新状态」这条交互。
-        await win.webContents.executeJavaScript(`document.querySelector('#modelConfigSettings summary').click();`);
-
         try {
             const problems = [];
             const expect = (ok, label) => { if (!ok) problems.push(label); };
 
             // ── 从服务器拉取并应用（启动时自动刷新）────────────────
-            await waitFor(win, dom => (/已从服务器获取最新配置/.test(dom.settingsState) && new RegExp(`r${seedRevision + 1}\\b`).test(dom.settingsSummary)),
+            await waitFor(win, dom => (dom.configSnapshot?.status?.origin === 'remote'
+                && dom.configSnapshot.status.revision === seedRevision + 1),
                 { label: '客户端应用服务器配置 r1' });
             const applied = await openVideoParameters(win);
-            expect(applied.settingsMounted, '设置卡未挂载（initModelConfigUi 没跑到）');
-            expect(applied.settingsSummary.includes(`${MODEL_COUNT} 个模型`), `内置配置模型数异常：${applied.settingsSummary}`);
-            expect(/自定义地址/.test(applied.settingsSummary), `更新源应显示为自定义地址：${applied.settingsSummary}`);
+            expect(!applied.settingsMounted, '模型配置维护界面仍对用户可见');
+            expect(applied.configSnapshot?.status?.modelCount === MODEL_COUNT,
+                `远端配置模型数异常：${JSON.stringify(applied.configSnapshot?.status)}`);
             expect(applied.bridgeAvailable, 'preload 未暴露 flowCanvas.modelConfig.fetch');
             expect(applied.legacyWorkspaceCount === 0, '旧侧栏生成工作区仍有残留 DOM');
             expect(applied.agentMounted, 'Agent 聊天入口未保留');
@@ -245,15 +247,9 @@ app.on('browser-window-created', (_event, win) => {
             expect(applied.ratioOptions === 2, `比例控件没有跟随远端配置：${applied.ratioOptions}`);
             if (problems.length) return finish(1, `FAIL 客户端应用服务端配置：\n  - ${problems.join('\n  - ')}\nDOM: ${JSON.stringify(applied, null, 2)}`);
 
-            // ── 回滚到旧版本 → 界面点「立即刷新」→ 客户端跟着回退 ──
-            const seedName = seedVersionName;
-            await adminPost(serverUrl, '/admin/apply', { csrf: await adminCsrf(serverUrl, cookie), name: seedName }, cookie);
-            await win.webContents.executeJavaScript(`document.querySelector('#modelConfigSettings [data-config="refresh"]').click();`);
-            await waitFor(win, dom => new RegExp(`r${seedRevision}\\b`).test(dom.settingsSummary),
-                { label: '回滚后客户端刷新到 r0' });
-            const rolledBack = await openVideoParameters(win);
-            expect(/已从服务器获取最新配置/.test(rolledBack.settingsState), `回滚后状态异常：${rolledBack.settingsState}`);
-            expect(rolledBack.ratioOptions === 6, `回滚后比例控件未恢复：${rolledBack.ratioOptions}`);
+            await adminPost(serverUrl, '/admin/apply', {
+                csrf: await adminCsrf(serverUrl, cookie), name: seedVersionName
+            }, cookie);
 
             // ── IPC 拉取的三种结果 ────────────────────────────────
             const bridge = await win.webContents.executeJavaScript(`(async () => {
@@ -276,10 +272,10 @@ app.on('browser-window-created', (_event, win) => {
 
             finish(0, [
                 'PASS 模型 CONFIG 端到端烟测（真实 configserver + 真实 Electron 渲染层）',
-                `  服务端：${serverUrl}/config（版本 ${seedName} 已回滚为现行 r0）`,
+                `  服务端：${serverUrl}/config（版本 ${seedVersionName} 已回滚为现行 r0）`,
                 '  首次拉取：r1 已应用到画布节点（固定 30 秒、2 个比例）',
-                '  回滚后：r0 生效，节点恢复 6 个比例',
-                '  旧侧栏生成 DOM 已移除，Agent 和 CONFIG 设置保留',
+                '  用户设置面板不展示 CONFIG 维护入口，自动更新仍保留',
+                '  旧侧栏生成 DOM 已移除，Agent 入口保留',
                 `  IPC 结果：${JSON.stringify(bridge)}`,
                 ''
             ].join('\n'));
@@ -309,6 +305,8 @@ const serverReady = (async () => {
     const route1 = edited.models.find(entry => entry.id === 'ravenhash-video.sd2.5-route1');
     route1.options.ratio.values = ['16:9', '9:16'];
     route1.options.ratio.default = '16:9';
+    route1.presentation = { ...route1.presentation, label: 'Remote model', description: 'Remote description', routeGroupLabel: 'Remote routes' };
+    route1.pricing = { ...route1.pricing, amount: 7, hosts: ['smoke.test'] };
     await adminPost(serverUrl, '/admin/save', { csrf, content: JSON.stringify(edited), note: '烟测比例选项' }, cookie);
     const published = await fetch(`${serverUrl}/config`).then(response => response.json());
     if (published.revision !== 1) throw new Error(`发布后 revision 应为 1，实际 ${published.revision}`);

@@ -85,13 +85,13 @@ jobs:
           Get-ChildItem release -Filter *.exe -ErrorAction SilentlyContinue |
             Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}} | Format-Table -AutoSize
 
-          $installer = Get-ChildItem release -Filter 'Flow.Canvas.Setup.*.exe' -ErrorAction SilentlyContinue
-          $portable  = Get-ChildItem release -Filter 'Flow.Canvas.*.exe' -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -notlike 'Flow.Canvas.Setup.*' }
+          $installer = Get-ChildItem release -Filter 'Corvas.Setup.*.exe' -ErrorAction SilentlyContinue
+          $portable  = Get-ChildItem release -Filter 'Corvas.*.exe' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike 'Corvas.Setup.*' }
 
           $missing = @()
-          if (-not $installer) { $missing += 'nsis 安装版 (Flow.Canvas.Setup.*.exe)' }
-          if (-not $portable)  { $missing += 'portable 便携版 (Flow.Canvas.*.exe)' }
+          if (-not $installer) { $missing += 'nsis 安装版 (Corvas.Setup.*.exe)' }
+          if (-not $portable)  { $missing += 'portable 便携版 (Corvas.*.exe)' }
           if ($missing.Count -gt 0) {
             Write-Error "缺少预期产物: $($missing -join ', ')"
             exit 1
@@ -100,6 +100,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: flow-canvas-windows-x64
+          name: corvas-windows-x64
           path: release/*.exe
           if-no-files-found: error

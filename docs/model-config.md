@@ -53,11 +53,11 @@ node scripts/sync-model-config.mjs --scaffold # 为表格里新增的行打印�
 与部署见 `configserver/README.md`。地址三态：
 
 - 从未设置过 → 用内置更新源；
-- 设置过自定义地址 → 用记录（设置面板可改，方便灰度/自建）；
+- 应用内部使用默认更新源（服务端运维可切换配置内容）；
 - 显式清空 → 关闭远端更新，只用本地配置（状态卡会写「已关闭（仅用本地配置）」）。
 
 - **刷新周期**：默认 1 小时（`refreshIntervalMs`，可被服务端覆盖，客户端夹在 5 分钟 ~ 24 小时）。
-- **手动刷新**：设置面板「模型能力配置 CONFIG」里的「立即刷新」；「保存并刷新」会先存地址再拉。
+- **自动刷新**：应用启动时检查更新，之后按配置周期静默拉取；用户界面不暴露地址、版本和刷新操作。
 - **到期检查**：每 60 秒醒来判断一次是否到期，窗口重新获得焦点时也检查一次
   （Electron 会降频隐藏窗口的长定时器，用 1 小时的 `setInterval` 会漂移）。
 - **失败处理**：只记录 `lastError / lastErrorAt` 并保留当前配置，UI 明确显示「正在使用本地缓存 /
@@ -149,6 +149,47 @@ node scripts/sync-model-config.mjs --scaffold # 为表格里新增的行打印�
 Schema 用 `additionalProperties: true`，服务端可以先加字段而不被旧客户端拒绝；客户端只校验自己消费
 的部分。
 
+### 4.1 远端展示字段（第一步）
+
+在现有模型条目中增加可选的 `presentation` 与 `pricing`，保持 `schemaVersion: 1`。
+旧客户端会忽略这些新字段；用户需先升级一次包含本能力的客户端，之后修改这些字段无需重新打包。
+
+```json
+{
+  "presentation": {
+    "label": "Seedance 2.5",
+    "description": "固定 30 秒，最多 9 张图片参考",
+    "routeLabel": "线路一",
+    "routeGroup": "seedance25-fixed",
+    "routeGroupLabel": "Seedance 2.5 · 固定 30 秒",
+    "routeModelLabel": "sd2.5",
+    "recommended": true
+  },
+  "pricing": {
+    "status": "known",
+    "hosts": ["art.ravenhash.org"],
+    "amount": 6,
+    "currency": "CNY",
+    "unit": "request",
+    "kind": "sale",
+    "source": "ravenhash configured sale",
+    "updatedAt": "2026-09-06T12:38:30Z"
+  }
+}
+```
+
+- 这是模型条目的新增字段示例，不是完整发布包。服务端仍接收整份 CONFIG。
+- `label` 是显示名称，`description` 是用户可见简介；不修改请求中的模型 ID。简介省略时沿用原先的参数摘要，价格单独拼接，不要在简介中重复写价格。
+- 同一账号下，`routeGroup` 相同的模型显示为一个主卡片；`routeGroupLabel` 是主卡片标题，`routeLabel` 是线路名，`recommended` 控制推荐标记。字段省略时保留本地兜底，空的 `routeGroup` / `routeLabel` 可解除分组。
+- `pricing.hosts` 只填写小写主机名，精确匹配用户 API 地址，不做子串/通配匹配。不匹配时不套用该价格。
+- `currency` 支持 `CNY` / `USD`，`unit` 支持 `request` / `image` / `second`；价格只允许对外 `sale`，不放上游成本。`source` 是价格来源标识，`updatedAt` 是价格更新时间。
+- 明确取消旧展示价，使用 `"pricing": { "status": "unknown", "hosts": ["art.ravenhash.org"] }`，显示“费用未知”；删掉 `pricing` 则恢复本地兜底，而不是清空价格。
+- 图片、视频、文字菜单共用展示读取；Agent/Harness 的生成计划共用报价。按张/按秒价格本阶段仅展示，计划总价不猜算；既有计划保留生成时的价格快照，不重新计价。这里不修改服务器的实际扣费规则。
+- 配置成功刷新时，已打开的模型菜单和 Agent 菜单更新展示，不改用户提示词、节点参数、API 密钥、账号绑定或运行中任务。失败保留当前配置，回滚后恢复上一版展示。
+
+管理面板已增加模型展示表单，支持名称、简介、线路与售价编辑；JSON 高级编辑和既有发布/回滚接口保留，
+两种视图共享同一份配置。表单不会改动未编辑字段。自动注册新模型、动态协议适配尚未实现；这些是后续步骤。
+
 ## 5. 匹配与歧义
 
 `resolveModelConfigEntry(config, { model, endpoint, kind })`：
@@ -197,12 +238,12 @@ GraphRunner 在引用绑定、提示词合并及图片意图编译后，对最�
 
 | 位置 | 行为 |
 | --- | --- |
-| 侧栏设置 → 「模型能力配置 CONFIG」 | 服务器地址、立即刷新、恢复内置默认、当前来源与版本、上次拉取、下次自动刷新、错误原因 |
-| 视频模型 profile（`agent-sidebar.getVideoModelProfile`） | 用 CONFIG 覆盖能力与限制，**保留** `routeLabel/routeGroup/price` 等线路元数据 → 既有的控件隐藏、非法值回落、超额连线断开全部自动跟随 CONFIG |
+| 应用后台（用户不可见） | 自动拉取、缓存与内置默认配置回退 |
+| 视频模型 profile（`agent-sidebar.getVideoModelProfile`） | CONFIG 覆盖能力与限制；可选 `presentation` / `pricing` 接管显示名称、线路与展示售价，未声明的字段保留本地兜底 |
 | 图片模型 profile（`agent-sidebar.getImageModelProfile`） | 用 CONFIG 覆盖 `resolutionTiers/defaultResolutionTier`（例如 mj_imagine 只有 1K/2K） |
 | 画布生成器气泡「开始生成」 | 提交前校验；有 error 时在气泡内报错并中止，`unknown` 类警告走顶栏状态条 |
 
-CONFIG 变化（首次拉取成功 / 手动刷新 / 恢复默认）会更新共享配置和 Agent 模型选择器，画布节点
+CONFIG 变化（首次拉取成功 / 自动刷新 / 回退默认）会更新共享配置和 Agent 模型选择器，画布节点
 重新打开参数弹窗时使用最新 profile，不需要重启应用。生图、生视频只保留画布节点入口；旧侧栏工作区及其
 草稿缓存读写已移除，Agent 对话、API 设置、节点提示词预设和任务恢复继续保留。
 
@@ -210,7 +251,7 @@ CONFIG 变化（首次拉取成功 / 手动刷新 / 恢复默认）会更新共�
 
 **改模型能力（不改客户端代码）**：登录 `https://artconfig.ravenhash.org/admin` → 在编辑器里改
 → 「校验」→「保存并应用」。服务端立刻生成一个带时间戳的新版本（`20260911T230012-r7.json`）并
-把 `current` 指针指过去，客户端在 1 小时内（或用户点「立即刷新」）就能拿到。老版本自动留档；
+把 `current` 指针指过去，客户端在 1 小时内自动拿到。老版本自动留档；
 任意历史版本可一键「应用为现行」回滚。服务端的版本/备份/回滚语义见 `configserver/README.md`。
 
 **新增一条线路（改代码）**：先加到 `shared/model-channels.source.csv`，跑
@@ -233,7 +274,7 @@ npm run test:model-config:smoke   # 真实 configserver + 真实 Electron 渲染
 烟测（`scripts/model-config-smoke.cjs`）不依赖 Playwright：它**以独立进程启动真实的
 `configserver`**，再起真实 Electron 主进程 + 真实 `dist` 产物，隐藏窗口后在渲染进程里断言 DOM。
 链路是完整的「管理面板写入 r1 → 客户端自动拉取并应用到画布视频节点参数 → 管理面板回滚 r0 → 界面点
-『立即刷新』跟着回退」，用来兜住单元测试覆盖不到的「打包后加载顺序 / 挂载点 / preload 桥 /
+自动刷新后配置生效」，用来兜住单元测试覆盖不到的「打包后加载顺序 / preload 桥 /
 CONFIG→既有 profile→控件 / 真机网络路径」这一层。
 
 ## 10. 已知边界

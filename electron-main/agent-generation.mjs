@@ -12,6 +12,7 @@ import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from
 import { getVideoModelProfile } from '../shared/video-model-profiles.mjs';
 import { DEFAULT_MODEL_CONFIG } from '../src/model-config-default.js';
 import { resolveModelConfigEntry, toVideoProfileOverrides, mergeVideoProfile, validateModelRequest } from '../src/model-config-capabilities.js';
+import { getModelPresentation } from '../shared/model-presentation.mjs';
 import adapters from './video-provider-adapters.js';
 import { mediaKind } from './agent-media.cjs';
 
@@ -90,8 +91,10 @@ export class AgentGeneration {
         const resolution = resolveModelConfigEntry(modelConfig, { ...provider, kind });
         const candidates = resolution.ambiguous ? resolution.candidates : [resolution.entry].filter(Boolean);
         const profile = kind === 'video'
-            ? mergeVideoProfile(getVideoModelProfile(provider), toVideoProfileOverrides(modelConfig, resolution.entry)) : null;
-        return { ...resolution, candidates, profile };
+            ? mergeVideoProfile(getVideoModelProfile(provider), toVideoProfileOverrides(modelConfig, resolution.entry, provider))
+            : null;
+        const presentation = profile || getModelPresentation(resolution.entry, provider);
+        return { ...resolution, candidates, profile, presentation };
     }
     _assertRequest(modelConfig, provider, kind, config, prompt, references, body) {
         const counts = {};
@@ -153,8 +156,8 @@ export class AgentGeneration {
     listModels(modelConfig = this.loadModelConfig()) {
         return this.providers().filter(p => inferProviderCapability(p) !== 'text').map(p => {
             const kind = inferProviderCapability(p);
-            const { profile, candidates, matched, ambiguous } = this._capabilities(p, kind, modelConfig);
-            const price = profile?.price?.kind === 'sale' ? profile.price : null;
+            const { profile, presentation, candidates, matched, ambiguous } = this._capabilities(p, kind, modelConfig);
+            const price = presentation?.price?.kind === 'sale' ? presentation.price : null;
             return { id: p.id, model: p.model, kind, name: p.name,
                 ratios: catalogOptions(candidates, 'ratio', profile?.ratios || IMAGE_RATIOS),
                 resolutions: catalogOptions(candidates, 'resolutionTier', profile?.resolutions || (isMidjourney(p) ? ['1K', '2K'] : ['1K', '2K', '4K'])),
@@ -223,7 +226,7 @@ export class AgentGeneration {
             const provider = this.resolveProvider(config, node.nodeType);
             if (Number(config.midjourneyRepeat || 1) > 1)
                 throw error('COUNT_LIMIT', 'Agent 批次请使用生成数量，不使用额外的 Midjourney repeat');
-            const { profile, entry } = this._capabilities(provider, node.nodeType, modelConfig);
+            const { profile, presentation, entry } = this._capabilities(provider, node.nodeType, modelConfig);
             if (profile) {
                 config.duration = Number(config.duration ?? profile.defaultDuration ?? 5);
                 config.resolution ||= profile.defaultResolution;
@@ -252,7 +255,7 @@ export class AgentGeneration {
                 const stat = fs.statSync(reference.filePath);
                 reference.fileFingerprint = `${stat.size}:${stat.mtimeMs}`;
             }
-            const price = profile?.price?.kind === 'sale' ? copy(profile.price) : null;
+            const price = presentation?.price?.kind === 'sale' ? copy(presentation.price) : null;
             for (const prompt of prompts) this._assertRequest(modelConfig, provider, node.nodeType, config, prompt, references);
             for (const [index, prompt] of prompts.entries()) steps.push({ id: `step-${crypto.randomUUID()}`, nodeId: id,
                 title: `${node.title || node.nodeType} ${index + 1}/${prompts.length}`, model: provider.model, kind: node.nodeType,

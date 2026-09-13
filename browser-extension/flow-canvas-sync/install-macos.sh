@@ -32,7 +32,7 @@ EXT_ID="$EXT_ID" RUNNER="$RUNNER" MANIFEST="$MANIFEST" "$NODE_BIN" -e '
 const fs = require("fs");
 const manifest = {
   name: "com.flow.canvas_sync",
-  description: "Flow Canvas browser task sync and download archive host",
+  description: "Corvas browser task sync and download archive host",
   path: process.env.RUNNER,
   type: "stdio",
   allowed_origins: [`chrome-extension://${process.env.EXT_ID}/`]

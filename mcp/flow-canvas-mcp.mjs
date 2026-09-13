@@ -21,7 +21,7 @@ const tools = [
     ...agentTools.AGENT_RUN_TOOLS.filter(tool => !tool.name.endsWith('.confirm')),
     {
         name: 'flow_canvas.health',
-        description: 'Check whether the Flow Canvas local bridge is running and reachable.',
+        description: 'Check whether the Corvas local bridge is running and reachable.',
         inputSchema: {
             type: 'object',
             properties: {}
@@ -29,7 +29,7 @@ const tools = [
     },
     {
         name: 'flow_canvas.config.get',
-        description: 'Read the Flow Canvas MCP configuration and runtime status.',
+        description: 'Read the Corvas MCP configuration and runtime status.',
         inputSchema: {
             type: 'object',
             properties: {}
@@ -37,7 +37,7 @@ const tools = [
     },
     {
         name: 'flow_canvas.config.update',
-        description: 'Update Flow Canvas MCP settings such as enabled state, port, and allowed tools.',
+        description: 'Update Corvas MCP settings such as enabled state, port, and allowed tools.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -52,7 +52,7 @@ const tools = [
     },
     {
         name: 'flow_canvas.context.get_active_group',
-        description: 'Get the active Flow Canvas folder group, planning context, viewport, and item count.',
+        description: 'Get the active Corvas folder group, planning context, viewport, and item count.',
         inputSchema: {
             type: 'object',
             properties: {}
@@ -176,7 +176,7 @@ const tools = [
     },
     {
         name: 'flow_canvas.image.generate',
-        description: 'Generate an image and add it to the Flow Canvas board. Uses OpenAI if OPENAI_API_KEY is set, otherwise local built-in generation.',
+        description: 'Generate an image and add it to the Corvas board. Uses OpenAI if OPENAI_API_KEY is set, otherwise local built-in generation.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -222,7 +222,7 @@ const tools = [
     },
     {
         name: 'flow_canvas.video.generate',
-        description: 'Generate a Seedance-compatible video, save the local file, and add it to the Flow Canvas board. The configured provider must support POST /v1/video/generations and task polling.',
+        description: 'Generate a Seedance-compatible video, save the local file, and add it to the Corvas board. The configured provider must support POST /v1/video/generations and task polling.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -263,7 +263,7 @@ const tools = [
     },
     {
         name: 'flow_canvas.item.list',
-        description: 'List local files currently placed on the active Flow Canvas board.',
+        description: 'List local files currently placed on the active Corvas board.',
         inputSchema: {
             type: 'object',
             properties: {}
@@ -271,7 +271,7 @@ const tools = [
     },
     {
         name: 'flow_canvas.item.get',
-        description: 'Get one Flow Canvas board item by id.',
+        description: 'Get one Corvas board item by id.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -282,7 +282,7 @@ const tools = [
     },
     {
         name: 'flow_canvas.item.add',
-        description: 'Add an existing local file path to the active Flow Canvas board.',
+        description: 'Add an existing local file path to the active Corvas board.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -297,7 +297,7 @@ const tools = [
     },
     {
         name: 'flow_canvas.item.update',
-        description: 'Update a Flow Canvas board item file path, position, or size.',
+        description: 'Update a Corvas board item file path, position, or size.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -313,7 +313,7 @@ const tools = [
     },
     {
         name: 'flow_canvas.item.delete',
-        description: 'Delete a Flow Canvas board item and remove matching planning-row references.',
+        description: 'Delete a Corvas board item and remove matching planning-row references.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -499,7 +499,7 @@ async function api(method, pathname, body) {
         data = { raw: text };
     }
     if (!res.ok || data?.success === false) {
-        throw new McpError(-32000, data?.error || `Flow Canvas API failed: ${res.status}`, {
+        throw new McpError(-32000, data?.error || `Corvas API failed: ${res.status}`, {
             status: res.status,
             code: data?.code || 'FLOW_CANVAS_API_ERROR',
             details: data?.details || null
@@ -538,7 +538,7 @@ async function generateImageWithSources(body = {}) {
 
     const width = sanitizeImageDimension(body.width, 1024);
     const height = sanitizeImageDimension(body.height, 1024);
-    const title = String(body.title || 'Flow Canvas source-aware image').trim();
+    const title = String(body.title || 'Corvas source-aware image').trim();
     const filePath = path.join(targetDir, uniqueImageName('flow_source_builtin', prompt, '.png'));
     const sourceThumbnails = await createSourceThumbnails(sourceReferences);
     const svg = createPromptSvg({ prompt, title, width, height, sourceThumbnails });

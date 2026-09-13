@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Flow Canvas 素材采集与任务同步",
+  "name": "Corvas 素材采集与任务同步",
   "version": "3.0.0",
-  "description": "从网页批量采集素材到 Flow Canvas，并同步视频任务与下载。",
+  "description": "从网页批量采集素材到 Corvas，并同步视频任务与下载。",
   "permissions": [
     "activeTab",
     "downloads",
@@ -41,7 +41,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Flow Canvas"
+    "default_title": "Corvas"
   },
   "side_panel": {
     "default_path": "capture.html"

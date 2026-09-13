@@ -12,6 +12,7 @@
 //     逐条校验后按「所有候选都报的问题 = 错误，部分候选报的问题 = 警告」归并。这样既不会
 //     因为猜错线路而误拦，也不会放过所有线路都禁止的参数。
 import { IMAGE_RESOLUTION_TIERS, inferImageResolutionTier } from './image-node-settings.js';
+import { getModelPresentation } from '../shared/model-presentation.mjs';
 
 export const MODEL_CONFIG_ISSUE_CODES = Object.freeze({
     PROMPT_REQUIRED: 'PROMPT_REQUIRED',
@@ -589,13 +590,13 @@ export function validateModelRequest(options = {}) {
 // 渲染层已有大量基于 video-model-profiles / image model profile 的裁剪逻辑（算力都花在
 // 「按 profile 隐藏控件、回落非法值、断开超额连线」上）。与其另起一套，不如把 CONFIG
 // 翻译成同样的形状，让既有逻辑自动生效。
-export function toVideoProfileOverrides(config, entry) {
+export function toVideoProfileOverrides(config, entry, provider = {}) {
     if (!entry || entry.kind !== 'video') return null;
     const ratioOption = entry.options?.ratio;
     const durationOption = entry.options?.duration;
     const resolutionOption = entry.options?.resolutionTier;
     const overrides = {
-        label: normalizeText(entry.label) || entry.id,
+        ...getModelPresentation(entry, provider),
         capabilitySource: 'config',
         configId: entry.id
     };
@@ -682,20 +683,14 @@ export function toImageProfileOverrides(config, entry) {
     };
 }
 
-// 用 CONFIG 覆盖既有 profile 的能力字段，但保留线路元数据（routeLabel/routeGroup/price 等）：
-// Seedance 线路拆分、价格标签这些还在代码里维护，CONFIG 不接管它们。
+// Omitted metadata retains local defaults; explicit remote values replace them.
 export function mergeVideoProfile(baseProfile, overrides) {
     if (!overrides) return baseProfile;
     if (!baseProfile) return overrides;
     return {
         ...baseProfile,
         ...overrides,
-        referenceLimits: { ...baseProfile.referenceLimits, ...overrides.referenceLimits },
-        label: baseProfile.label || overrides.label,
-        routeLabel: baseProfile.routeLabel,
-        routeGroup: baseProfile.routeGroup,
-        routeModelLabel: baseProfile.routeModelLabel,
-        price: baseProfile.price
+        referenceLimits: { ...baseProfile.referenceLimits, ...overrides.referenceLimits }
     };
 }
 

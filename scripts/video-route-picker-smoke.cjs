@@ -33,6 +33,11 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
                 { id: 'variable', sourceProviderId: 'relay', name: 'RavenHash', model: 'seedance_v2.5' },
                 { id: 'separate', sourceProviderId: 'another-account', name: 'Other API', model: 'sd2.5', routeLabel: '\u7ebf\u8def\u4e8c', routeGroup: 'seedance25-fixed', routeModelLabel: 'sd2.5' }
             ];
+            for (const provider of providers) {
+                if (!provider.routeGroup) continue;
+                provider.routeGroupLabel = 'Seedance 2.5 \u00b7 \u56fa\u5b9a 30 \u79d2';
+                provider.recommended = provider.id === 'r1';
+            }
             fixture.items = new Map([['node', { data }]]);
             fixture._generationComposer = { nodeId: 'node' };
             fixture.options = { getGenerationProviders: () => providers };
@@ -40,8 +45,13 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
                 element.style.cssText = 'position:fixed;left:24px;top:24px;width:300px;z-index:999999';
                 document.body.append(element);
                 active.element = element;
+                active.popover = { element };
             };
-            fixture._closeGenerationComposerPopover = active => active.element?.remove();
+            fixture._closeGenerationComposerPopover = active => {
+                active.popover?.cleanup?.();
+                active.element?.remove();
+                active.popover = null;
+            };
             fixture._applyImageGenerationProviderSelection = (node, provider) => { node.config = { ...provider }; };
             for (const name of ['_syncGenerationComposerModelButton', '_renderGenerationComposerParameters', '_syncGenerationComposerCount', 'refreshOpNode', 'emit']) fixture[name] = () => {};
             window.routeFixture = { fixture, data, providers };

@@ -1,8 +1,8 @@
 @echo off
 chcp 65001 >nul
-title FlowCanvas
+title Corvas
 cd /d "%~dp0"
 echo.
-echo   FlowCanvas - Starting Electron App...
+echo   Corvas - Starting Electron App...
 echo.
 npm run electron:dev

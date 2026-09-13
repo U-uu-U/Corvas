@@ -33,6 +33,8 @@ import { adminPage, loginPage, landingPage, escapeHtml } from './lib/pages.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_PORT = 8087;
+const EDITOR_ASSETS = new Map(['admin-editor.mjs', 'admin-editor-model.mjs']
+    .map(name => [`/admin/assets/${name}`, path.join(HERE, 'lib', name)]));
 
 export function resolveServerConfig(env = process.env) {
     const dataDir = path.resolve(env.CONFIG_DATA_DIR || path.join(HERE, 'data'));
@@ -258,6 +260,14 @@ export async function createConfigServer(options = {}) {
         const pathname = url.pathname.replace(/\/+$/, '') || '/';
         const method = req.method || 'GET';
 
+        if (method === 'GET' && EDITOR_ASSETS.has(pathname)) {
+            if (!requireAdmin(req, res)) return;
+            const body = fs.readFileSync(EDITOR_ASSETS.get(pathname));
+            res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'content-length': body.length,
+                'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+            return res.end(body);
+        }
+
         if (method === 'GET' && pathname === '/config') return handleConfig(req, res);
         if (method === 'GET' && pathname === '/health') {
             return json(res, 200, {
@@ -350,6 +360,8 @@ export async function createConfigServer(options = {}) {
                     current: store.current(),
                     editorText: String(form.content || ''),
                     editing: form.basedOn || '',
+                    draft: form.draft === '1',
+                    note: form.note || '',
                     history: store.history(50),
                     error: `保存失败，配置未通过校验（${result.mode} 模式）：${result.errors.slice(0, 6).join('；')}`,
                     csrf: guard.session.csrf,

@@ -18,7 +18,7 @@ async function render() {
   archiveOtherDownloads.checked = state.settings?.archiveOtherDownloads !== false;
   targetFolder.value = state.settings?.targetFolder || '';
   connectionDot.classList.toggle('connected', state.nativeConnected === true);
-  connectionText.textContent = state.nativeConnected ? '已连接 Flow Canvas 本地服务' : 'Native Host 未连接';
+  connectionText.textContent = state.nativeConnected ? '已连接 Corvas 本地服务' : 'Native Host 未连接';
   document.getElementById('taskCount').textContent = String(Object.keys(state.tasks || {}).length);
   document.getElementById('downloadCount').textContent = String(Object.keys(state.downloads || {}).length);
 }

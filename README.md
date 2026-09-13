@@ -1,10 +1,20 @@
-# Flow Canvas
+# Corvas
 
-Flow Canvas 是一款面向 Windows 和 macOS 的本地素材管理与 AI 创作桌面应用。它把文件夹中的图片、视频和音频组织到无限画布上，并将多 API 模型、图片生成、视频生成、任务恢复和 MCP 自动化集中在同一个工作区中。
+Corvas 是一款面向 Windows 和 macOS 的本地素材管理与 AI 创作桌面应用。它把文件夹中的图片、视频和音频组织到无限画布上，并将多 API 模型、图片生成、视频生成、任务恢复和 MCP 自动化集中在同一个工作区中。
 
-当前稳定版本：`v1.3.0`
+名称由中转站名称 **Corvus** 与 **canvas** 合成，原名 Flow Canvas。
 
-最新测试版本：[`v1.6.0-beta.1`](https://github.com/U-uu-U/flow-canvas/releases/tag/v1.6.0-beta.1)，提供 Windows 安装版 / 便携版和 macOS 通用 DMG。详见[本版更新内容](docs/releases/v1.6.0-beta.1.md)。
+当前稳定版本：`v1.4.3`
+
+最新测试版本：[`v1.6.0-beta.2`](https://github.com/U-uu-U/Corvas/releases/tag/v1.6.0-beta.2)，提供 Windows 安装版 / 便携版和 macOS 通用 DMG。详见[本版更新内容](docs/releases/v1.6.0-beta.2.md)。
+
+## v1.6.0-beta.2 更新内容
+
+- 应用更名为 Corvas，更新界面、GitHub 项目、浏览器扩展和安装包名称，保留原有数据目录与 API 配置兼容。
+- 诊断日志仅保留在「设置 > API」最底部，支持刷新、复制摘要和导出报告。
+- 接入远端模型展示配置，可更新模型名称、线路说明、推荐标记和含币种的售价，画布与 Agent 共用配置。
+- CONFIG 管理后台增加模型编辑表单、草稿、版本发布和回滚，修复布局及部署服务启动问题。
+- 图片、视频和文字请求的上游错误映射为客户端提示，避免直接显示渠道及敏感信息，保留任务恢复语义。
 
 ## v1.3.0 更新内容
 
@@ -23,7 +33,7 @@ Flow Canvas 是一款面向 Windows 和 macOS 的本地素材管理与 AI 创作
 - 图片裁切会创建新的子素材并保留父子连线；生成占位符继承首张参考图的显示尺寸和比例。
 - 多张生成结果改为可轮换堆叠，显示当前序号；删除、复制和拖出时始终以当前首图为准。
 - 新增独立素材库与分类界面，可关联多个本地目录，并在“设置 > 创作”中选择默认素材库地址。
-- 浏览器扩展升级为素材采集与任务同步工具，支持从网页侧边栏批量捕捉可下载图片并归档到 Flow Canvas。
+- 浏览器扩展升级为素材采集与任务同步工具，支持从网页侧边栏批量捕捉可下载图片并归档到 Corvas。
 - 增加可配置快捷键、完整撤销/重做、选中素材快捷工具栏、节点搜索和更稳定的缩放与清晰度加载。
 - API 配置按文字、图片和视频用途隔离；补充 OpenAI 兼容异步图片任务、Midjourney 任务信封和多供应商能力识别。
 
@@ -79,7 +89,7 @@ Flow Canvas 是一款面向 Windows 和 macOS 的本地素材管理与 AI 创作
 
 - 记录任务状态、提示词、模型、参数、参考素材和输出路径。
 - 提示词可直接复制，失败任务可重试，断连任务可重新连接。
-- 视频请求使用唯一 `X-Log-Id`。POST 连接意外关闭时，Flow Canvas 不会盲目重复提交，而是优先恢复轮询，降低重复任务和重复扣费风险。
+- 视频请求使用唯一 `X-Log-Id`。POST 连接意外关闭时，Corvas 不会盲目重复提交，而是优先恢复轮询，降低重复任务和重复扣费风险。
 - 应用重启后保留任务记录；已获得远端任务 ID 的视频可以继续查询和下载。
 - 对不支持恢复协议的平台，可选用仓库内的 Chrome 同步扩展补充下载链路。
 
@@ -88,17 +98,17 @@ Flow Canvas 是一款面向 Windows 和 macOS 的本地素材管理与 AI 创作
 - Codex 等 MCP 客户端可以读取当前文件夹组、画板素材和规划表。
 - 支持创建、读取和更新规划表及表格行。
 - 支持通过 MCP 新增、更新、删除画板元素，并调用已授权的图片或视频模型。
-- 本地桥接只监听 `127.0.0.1`，工具权限由 Flow Canvas 设置中的允许列表控制。
+- 本地桥接只监听 `127.0.0.1`，工具权限由 Corvas 设置中的允许列表控制。
 
 ## 安装
 
 ### 使用安装包
 
-从 [GitHub Releases](https://github.com/U-uu-U/flow-canvas/releases) 下载 `Flow.Canvas.Setup.1.3.0.exe`，按提示完成安装。
+从 [GitHub Releases](https://github.com/U-uu-U/Corvas/releases) 下载所需版本的 Windows 安装版、便携版或 macOS 通用 DMG。
 
-也可以下载便携版 `Flow.Canvas.1.3.0.exe` 直接运行。当前安装包未进行商业代码签名，Windows 首次启动时可能显示 SmartScreen 提示。
+改名后的新安装包使用 `Corvas` 前缀；已发布的历史附件保留 `Flow.Canvas` 文件名。Windows 安装版文件名含 `Setup`，便携版直接运行。当前安装包未进行商业代码签名，Windows 首次启动时可能显示 SmartScreen 提示。
 
-macOS 测试版由 GitHub Actions 分别生成 Apple Silicon (`arm64`) 和 Intel (`x64`) 的 `dmg/zip`。未签名测试包首次运行时，需要在“系统设置 > 隐私与安全性”中确认打开；正式分发建议配置 Apple Developer 签名与公证。
+macOS 由 GitHub Actions 生成兼容 Apple Silicon 和 Intel 的通用 DMG。未签名测试包首次运行时，需要在“系统设置 > 隐私与安全性”中确认打开；正式分发建议配置 Apple Developer 签名与公证。
 
 ### 从源码运行
 
@@ -109,8 +119,8 @@ macOS 测试版由 GitHub Actions 分别生成 Apple Silicon (`arm64`) 和 Intel
 - npm 9 或更高版本
 
 ```powershell
-git clone https://github.com/U-uu-U/flow-canvas.git
-cd flow-canvas
+git clone https://github.com/U-uu-U/Corvas.git
+cd Corvas
 npm ci
 npm run electron:dev
 ```
@@ -137,7 +147,7 @@ npm run dev
 
 ## 快速开始
 
-1. 启动 Flow Canvas，在左侧创建文件夹组并关联本地素材目录。
+1. 启动 Corvas，在左侧创建文件夹组并关联本地素材目录。
 2. 从右下角进入设置模式，添加 API 名称、Base URL 和 API Key。
 3. 点击“拉取模型”，选择模型并设置文本与视觉理解、图片生成或视频生成用途。
 4. 通过画布左侧的加号创建文本、图片生成或视频生成节点，并把提示词和参考素材连接到生成节点。
@@ -150,7 +160,7 @@ RavenHash 入口可从设置页直接打开：
 
 ## API 兼容约定
 
-Flow Canvas 面向 OpenAI 兼容服务设计。模型列表默认请求：
+Corvas 面向 OpenAI 兼容服务设计。模型列表默认请求：
 
 ```text
 GET /v1/models
@@ -163,7 +173,7 @@ POST /v1/video/generations
 GET  /v1/video/generations/{task_id}
 ```
 
-也兼容使用 `/v1/tasks/{task_id}` 查询的视频服务。不同供应商的字段和能力并不完全一致，Flow Canvas 会根据模型配置决定可提交的时长、分辨率、比例及附加参数。
+也兼容使用 `/v1/tasks/{task_id}` 查询的视频服务。不同供应商的字段和能力并不完全一致，Corvas 会根据模型配置决定可提交的时长、分辨率、比例及附加参数。
 
 若要在 POST 响应提前关闭后无插件恢复任务，服务端需要：
 
@@ -173,15 +183,15 @@ GET  /v1/video/generations/{task_id}
 
 ## MCP 接入
 
-先启动 Flow Canvas，再把 stdio 服务加入支持 MCP 的客户端。Windows 配置示例：
+先启动 Corvas，再把 stdio 服务加入支持 MCP 的客户端。Windows 配置示例：
 
 ```json
 {
   "mcpServers": {
-    "flow-canvas": {
+    "corvas": {
       "command": "node",
       "args": [
-        "C:\\path\\to\\flow-canvas\\mcp\\flow-canvas-mcp.mjs"
+        "C:\\path\\to\\Corvas\\mcp\\flow-canvas-mcp.mjs"
       ],
       "env": {
         "FLOW_CANVAS_BRIDGE_URL": "http://127.0.0.1:18765"
@@ -207,7 +217,7 @@ GET  /v1/video/generations/{task_id}
 
 默认本地桥接地址是 `http://127.0.0.1:18765`。可通过 `FLOW_CANVAS_MCP_PORT` 修改端口，或使用 `FLOW_CANVAS_BRIDGE_URL` 指向已经运行的桥接服务。
 
-Harness 修改画板时应固定遵循 `get_snapshot → preview → apply`。每笔事务使用快照中的 `revision` 作为 `baseRevision`，并提供稳定的 `idempotencyKey`；如果返回 `REVISION_CONFLICT`，重新读取快照后再规划，不要覆盖用户刚完成的操作。`apply` 和 `undo` 在 Flow Canvas 内部串行执行，刷新或画板尚未加载完成时会返回可重试的 renderer readiness 错误。
+Harness 修改画板时应固定遵循 `get_snapshot → preview → apply`。每笔事务使用快照中的 `revision` 作为 `baseRevision`，并提供稳定的 `idempotencyKey`；如果返回 `REVISION_CONFLICT`，重新读取快照后再规划，不要覆盖用户刚完成的操作。`apply` 和 `undo` 在 Corvas 内部串行执行，刷新或画板尚未加载完成时会返回可重试的 renderer readiness 错误。
 
 ## 浏览器同步扩展
 
@@ -232,7 +242,7 @@ bash install-macos.sh <扩展ID>
 
 ## 数据与隐私
 
-画板主数据默认保存在：
+改名后继续沿用 `flow-canvas` 数据目录和内部接口标识，无需迁移已有项目与 API 配置。画板主数据默认保存在：
 
 ```text
 %APPDATA%\flow-canvas\data\board.json
@@ -246,7 +256,7 @@ macOS 默认路径：
 
 同目录的 `backups/` 保存自动备份。画板数据包含文件路径、坐标、文件夹组和规划表，不包含原始素材文件本身。
 
-API 配置和任务记录目前保存在 Electron 本地存储中。当前版本尚未接入系统凭据库，因此不要提交 `%APPDATA%\flow-canvas`、浏览器用户数据、包含密钥的截图或本地配置文件。仓库的 `.gitignore` 已排除常见凭据、用户数据、生成媒体和安装包。
+API 配置和任务记录保存在本机，API 配置在系统加密可用时通过 Electron `safeStorage` 加密保存。不要提交 `%APPDATA%\flow-canvas`、浏览器用户数据、包含密钥的截图或本地配置文件。仓库的 `.gitignore` 已排除常见凭据、用户数据、生成媒体和安装包。
 
 ## 项目结构
 

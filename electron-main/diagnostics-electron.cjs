@@ -102,7 +102,7 @@ function installDiagnostics({ getWindow, getTasks, getSecrets }) {
     ipcMain.handle('diagnostics:export', async event => {
         if (!trusted(event)) throw new Error('Invalid sender');
         const choice = await dialog.showSaveDialog(getWindow(), { title: '导出诊断报告',
-            defaultPath: `Flow-Canvas-debug-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
+            defaultPath: `Corvas-debug-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
             filters: [{ name: 'JSON', extensions: ['json'] }] });
         if (choice.canceled || !choice.filePath) return { canceled: true };
         await fs.writeFile(choice.filePath, JSON.stringify(report(), null, 2), 'utf8');

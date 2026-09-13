@@ -71,7 +71,7 @@ export function buildAgentImageCompilationMessages({ source, instruction = '', s
         .filter(Boolean)
         .slice(0, 8);
     const system = [
-        '你是 Flow Canvas 的图片生成执行 Agent。你的任务是把节点上下文编译成一条可以直接提交给图片模型的最终提示词。',
+        '你是 Corvas 的图片生成执行 Agent。你的任务是把节点上下文编译成一条可以直接提交给图片模型的最终提示词。',
         '必须保留用户的明确要求、数量关系、主体身份、构图、文字内容和参考图职责，不得用泛化描述替换具体约束。',
         '参考素材按收到的顺序编号。需要引用素材时使用“第1张参考图”“第2张参考图”等明确称呼。',
         '生成参数是固定执行参数，只用于理解目标能力；不要擅自修改，也不要把 API、模型或内部字段写进画面描述。',
