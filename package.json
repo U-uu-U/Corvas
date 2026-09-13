@@ -1,6 +1,6 @@
 {
-    "name": "flow-canvas",
-    "version": "1.6.0-beta.1",
+    "name": "corvas",
+    "version": "1.6.0-beta.2",
     "description": "本地素材管理、无限画布与 AI 图片/视频创作桌面应用",
     "main": "electron-main/main.js",
     "scripts": {
@@ -41,7 +41,7 @@
     },
     "build": {
         "appId": "org.ravenhash.flowcanvas",
-        "productName": "Flow Canvas",
+        "productName": "Corvas",
         "icon": "electron-main/assets/app-icon.png",
         "asar": true,
         "directories": {
@@ -77,7 +77,7 @@
             "category": "public.app-category.graphics-design",
             "hardenedRuntime": true,
             "gatekeeperAssess": false,
-            "artifactName": "Flow.Canvas.${version}.mac.${arch}.${ext}",
+            "artifactName": "Corvas.${version}.mac.${arch}.${ext}",
             "entitlements": "build/entitlements.mac.plist",
             "entitlementsInherit": "build/entitlements.mac.plist",
             "target": [
@@ -89,20 +89,20 @@
                 }
             ],
             "extendInfo": {
-                "NSDesktopFolderUsageDescription": "Flow Canvas needs access to folders you choose for managing local media.",
-                "NSDocumentsFolderUsageDescription": "Flow Canvas needs access to folders you choose for managing local media.",
-                "NSDownloadsFolderUsageDescription": "Flow Canvas needs access to downloads you choose to import."
+                "NSDesktopFolderUsageDescription": "Corvas needs access to folders you choose for managing local media.",
+                "NSDocumentsFolderUsageDescription": "Corvas needs access to folders you choose for managing local media.",
+                "NSDownloadsFolderUsageDescription": "Corvas needs access to downloads you choose to import."
             }
         },
         "nsis": {
-            "artifactName": "Flow.Canvas.Setup.${version}.${ext}",
+            "artifactName": "Corvas.Setup.${version}.${ext}",
             "oneClick": false,
             "allowToChangeInstallationDirectory": true,
             "createDesktopShortcut": true,
             "createStartMenuShortcut": true
         },
         "portable": {
-            "artifactName": "Flow.Canvas.${version}.${ext}"
+            "artifactName": "Corvas.${version}.${ext}"
         }
     }
 }

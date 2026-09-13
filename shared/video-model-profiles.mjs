@@ -1,9 +1,12 @@
+import { describeModelPresentation } from './model-presentation.mjs';
+
 export const VIDEO_MODEL_PROFILES = [
     {
         matchModel: /^sd2(?:\.5|_5|-5)(?:-route[12]|-haidiyue-face)?$/i,
         label: 'Seedance 2.5',
         routeLabel: '线路二',
         routeGroup: 'seedance25-fixed',
+        routeGroupLabel: 'Seedance 2.5 · 固定 30 秒',
         routeModelLabel: 'sd2.5',
         ratios: ['adaptive', '16:9', '9:16', '1:1', '4:3', '3:4'],
         resolutions: ['720p'],
@@ -137,7 +140,7 @@ export function getVideoModelProfile(provider) {
     try { host = new URL(provider.endpoint).hostname; } catch (_) { /* Unconfigured endpoint. */ }
     const fixedSeedance = profile === VIDEO_MODEL_PROFILES[0];
     if (fixedSeedance) {
-        profile = { ...profile, routeLabel: /-route1$/i.test(model) ? '线路一' : '线路二' };
+        profile = { ...profile, routeLabel: /-route1$/i.test(model) ? '线路一' : '线路二', recommended: /-route1$/i.test(model) };
     }
     if (fixedSeedance && host === 'art.ravenhash.org') {
         return {
@@ -179,9 +182,5 @@ export function describeVideoModelProfile(profile) {
         if (media.length) parts.push(`最多 ${media.join(' / ')}参考`);
         if (!video && !audio) parts.push('不支持音视频参考');
     }
-    const price = profile.price;
-    if (price?.kind === 'sale' && price.source && price.currency === 'CNY' && price.unit === 'request') {
-        parts.push(`¥${price.amount}/次`);
-    }
-    return parts.join('；');
+    return describeModelPresentation(profile, parts.join('；'));
 }

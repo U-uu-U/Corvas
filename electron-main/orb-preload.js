@@ -91,7 +91,7 @@ window.addEventListener('DOMContentLoaded', () => {
         try {
             await ipcRenderer.invoke('window:restoreFromOrb');
         } catch (err) {
-            console.error('[Orb] Failed to restore Flow Canvas:', err);
+            console.error('[Orb] Failed to restore Corvas:', err);
         } finally {
             button.classList.remove('restoring');
             restoring = false;

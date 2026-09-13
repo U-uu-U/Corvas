@@ -126,6 +126,8 @@ function getVideoResultUrl(payload) {
 }
 
 function getVideoPayloadError(payload = {}) {
+    const mapped = require('../shared/public-api-error.cjs').readPublicError(payload);
+    if (mapped) return mapped.message;
     const data = videoPayloadObject(payload, 'data');
     const result = videoPayloadObject(payload, 'result');
     const error = payload?.error ?? data?.error ?? result?.error;

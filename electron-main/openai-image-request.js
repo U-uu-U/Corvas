@@ -455,6 +455,8 @@ function isFailedImageTaskStatus(status) {
 }
 
 function imageTaskErrorMessage(payload = {}) {
+    const mapped = require('../shared/public-api-error.cjs').readPublicError(payload);
+    if (mapped) return mapped.message;
     const error = payload?.error || payload?.result?.error;
     if (typeof error === 'string' && error.trim()) return error.trim();
     return String(
@@ -475,12 +477,14 @@ function imageHttpErrorMessage(statusCode, responseText = '', options = {}) {
     } catch (_) {
         payload = null;
     }
+    const mapped = require('../shared/public-api-error.cjs').readPublicError(payload);
+    if (mapped) return mapped.message;
     const reason = payload ? imageTaskErrorMessage(payload) : '';
     const errorCode = String(payload?.error?.code || payload?.code || '').trim().toLowerCase();
     const errorType = String(payload?.error?.type || payload?.type || '').trim().toLowerCase();
     if (errorCode === 'all_vendors_failed' || (Number(statusCode) === 503 && errorType === 'yamlrunner_error')) {
         if (options.midjourneyModel && options.compatibilityFallbackUsed) {
-            return `Midjourney 上游提交失败（HTTP ${statusCode}）。Flow Canvas 已先后尝试完整参数和仅保留提示词、画幅比例的兼容参数，但 RavenHash/上游 MJ 通道均未创建任务；请检查中转站的 MJ 渠道或账号池状态。`;
+            return `Midjourney 上游提交失败（HTTP ${statusCode}）。Corvas 已先后尝试完整参数和仅保留提示词、画幅比例的兼容参数，但 RavenHash/上游 MJ 通道均未创建任务；请检查中转站的 MJ 渠道或账号池状态。`;
         }
         const retries = Math.max(0, Number(options.attempts || 1) - 1);
         const retryText = retries > 0 ? `，已自动重试 ${retries} 次` : '';

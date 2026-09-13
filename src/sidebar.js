@@ -500,7 +500,7 @@ export class SidebarManager {
         if (this.dom.assetLibraryRouteLabel) {
             this.dom.assetLibraryRouteLabel.textContent = defaultFolder
                 ? `默认入库 · ${this._assetFolderName(defaultFolder)}`
-                : '默认入库 · Flow Canvas';
+                : '默认入库 · Corvas';
             this.dom.assetLibraryRouteLabel.title = defaultFolder || this.assetLibraryManagedFolder || '';
         }
         if (this.assetLibrarySource && !folders.some(folder =>
@@ -512,7 +512,7 @@ export class SidebarManager {
             '<option value="">全部来源</option>',
             ...folders.map(folder => {
                 const label = this._isManagedAssetLibraryFolder(folder)
-                    ? 'Flow Canvas 管理目录'
+                    ? 'Corvas 管理目录'
                     : this._assetFolderName(folder);
                 const isDefault = this._normalizePath(folder)
                     === this._normalizePath(this.storeData.assetLibrary?.defaultFolder);

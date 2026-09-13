@@ -20,7 +20,6 @@ const {
     getGeneratedImageData,
     getGeneratedImageDataList,
     getImageTaskId,
-    imageHttpErrorMessage,
     imageTaskErrorMessage,
     imageTaskRetryDelayMs,
     imageTaskStatus,
@@ -42,6 +41,7 @@ const { GenerationRecoveryStore } = require('./generation-recovery-store.cjs');
 const { imageRequestFailure } = require('./image-request-diagnostics.cjs');
 const { namingPrompt, writeGeneratedMedia } = require('./generated-media-names.cjs');
 const { diagnostic: recordDiagnostic } = require('./diagnostics.cjs');
+const { mapLocalError, publicErrorResult } = require('../shared/public-api-error.cjs');
 const {
     buildMiniMaxH3RequestBody,
     buildSeedance25RequestBody,
@@ -430,7 +430,7 @@ class FlowCanvasBridge {
     stop() {
         this.setBoardToolsReady(false, {
             code: 'BRIDGE_STOPPED',
-            message: 'Flow Canvas bridge stopped'
+            message: 'Corvas bridge stopped'
         });
         if (this.server) {
             this.server.close();
@@ -443,7 +443,7 @@ class FlowCanvasBridge {
         if (this.boardToolsReady) return;
         this._rejectPendingBoardToolRequests(createBridgeError(
             reason.code || 'RENDERER_NOT_READY',
-            reason.message || 'Flow Canvas board renderer is not ready',
+            reason.message || 'Corvas board renderer is not ready',
             reason.details,
             reason.status || 503
         ));
@@ -464,7 +464,7 @@ class FlowCanvasBridge {
         const error = payload.error && typeof payload.error === 'object' ? payload.error : {};
         pending.reject(createBridgeError(
             error.code || 'BOARD_TOOL_FAILED',
-            error.message || `Flow Canvas board tool failed: ${pending.toolName}`,
+            error.message || `Corvas board tool failed: ${pending.toolName}`,
             error.details,
             error.status
         ));
@@ -476,7 +476,7 @@ class FlowCanvasBridge {
         if (!this.boardToolsReady) {
             return Promise.reject(createBridgeError(
                 'RENDERER_NOT_READY',
-                'Flow Canvas board renderer is not ready; open the canvas and wait for it to finish loading',
+                'Corvas board renderer is not ready; open the canvas and wait for it to finish loading',
                 null,
                 503
             ));
@@ -486,7 +486,7 @@ class FlowCanvasBridge {
         if (!window || window.isDestroyed?.() || !window.webContents || window.webContents.isDestroyed?.()) {
             return Promise.reject(createBridgeError(
                 'RENDERER_NOT_READY',
-                'Flow Canvas main window is unavailable',
+                'Corvas main window is unavailable',
                 null,
                 503
             ));
@@ -498,7 +498,7 @@ class FlowCanvasBridge {
                 this.pendingBoardToolRequests.delete(requestId);
                 reject(createBridgeError(
                     'BOARD_TOOL_TIMEOUT',
-                    `Flow Canvas board tool timed out: ${toolName}`,
+                    `Corvas board tool timed out: ${toolName}`,
                     { toolName, timeoutMs: this.boardToolRequestTimeoutMs },
                     504
                 ));
@@ -548,7 +548,7 @@ class FlowCanvasBridge {
         const body = await readJsonBody(req);
         const route = this._matchRoute(req.method, url.pathname);
         if (!route) {
-            this._sendJson(res, 404, { success: false, error: 'Unknown Flow Canvas API route' });
+            this._sendJson(res, 404, { success: false, error: 'Unknown Corvas API route' });
             return;
         }
         if (!this._isToolAllowed(route.toolName)) {
@@ -627,7 +627,7 @@ class FlowCanvasBridge {
     _saveAndNotify(data, event = 'mcp:update', options = {}) {
         if (options.bumpRevision !== false) bumpBoardRevision(data);
         const ok = this.store.save(data);
-        if (!ok) throw new Error('Failed to save Flow Canvas board data');
+        if (!ok) throw new Error('Failed to save Corvas board data');
         this.notifyRenderer?.(event, data);
     }
 
@@ -917,7 +917,10 @@ class FlowCanvasBridge {
                 onDownloaded: result => this._rememberResult(body, result)
             });
             if (!result?.success && (body.provider || body.providerConfig)) {
-                throw Object.assign(new Error(result?.error || 'Image generation API failed'), { code: result?.code });
+                throw Object.assign(new Error(result?.error || 'Image generation API failed'), {
+                    code: result?.code, submissionUnknown: result?.submissionUnknown === true, requestId: result?.requestId,
+                    confirmedFailure: result?.confirmedFailure === true
+                });
             }
         }
         if (!result?.success) {
@@ -1053,7 +1056,10 @@ class FlowCanvasBridge {
             })
         });
         throwIfGenerationCanceled(signal);
-        if (!result?.success) throw Object.assign(new Error(result?.error || '\u89c6\u9891\u751f\u6210 API \u8bf7\u6c42\u5931\u8d25'), { code: result?.code });
+        if (!result?.success) throw Object.assign(new Error(result?.error || '\u89c6\u9891\u751f\u6210 API \u8bf7\u6c42\u5931\u8d25'), {
+            code: result?.code, submissionUnknown: result?.submissionUnknown === true, requestId: result?.requestId,
+            confirmedFailure: result?.confirmedFailure === true
+        });
         this.notifyTaskCompleted?.({
             clientTaskId: body.clientTaskId || null,
             remoteTaskId: result.taskId,
@@ -1992,8 +1998,8 @@ async function pollOpenAiImageTask(generationEndpoint, apiKey, taskId, initialPa
             continue;
         }
         if (!response.ok) {
-            const taskEndpoint = taskEndpoints[taskEndpointIndex];
-            throw new Error(`查询图片任务失败（${describeRemoteEndpoint(taskEndpoint)}）：HTTP ${response.status} ${text.slice(0, 1000)}`);
+            const mapped = mapLocalError(response.status, text, { query: true });
+            throw Object.assign(new Error(mapped.error), mapped);
         }
         payload = parseImageApiResponseText(text, response.headers.get('content-type'));
         if (!payload) {
@@ -2167,6 +2173,7 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
             if (res.ok) break;
 
             responseErrorText = responseText;
+            if (publicErrorResult(responseText)) break;
             if (
                 midjourneyModel
                 && options.noSubmissionRetry !== true
@@ -2189,26 +2196,22 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
         }
         if (!res.ok) {
             const text = responseErrorText || responseText;
+            const mapped = publicErrorResult(text);
+            if (mapped) return mapped;
             if (res.status === 413) {
-                return {
-                    success: false,
-                    error: '参考图片总大小超过 API 网关限制（HTTP 413）。请使用“批量转小”后重试。'
-                };
+                return mapLocalError(res.status, text, { query: false });
             }
-            return {
-                success: false,
-                error: imageHttpErrorMessage(res.status, text, {
-                    nativeMidjourney,
-                    midjourneyModel,
-                    attempts: requestAttempt + 1,
-                    compatibilityFallbackUsed
-                })
-            };
+            return mapLocalError(res.status, text, { query: false });
         }
         const location = res.headers.get('location');
         const json = parseImageApiResponseText(responseText, res.headers.get('content-type'))
             || (location ? { status: 'queued' } : null);
         if (!json) return { success: false, error: 'Image API did not return valid JSON' };
+        const mapped = publicErrorResult(json);
+        if (mapped) {
+            if (mapped.taskId) options.onTaskSubmitted?.({ taskId: mapped.taskId, model });
+            return mapped;
+        }
         let finalPayload = json;
         let image = getGeneratedImageData(finalPayload);
         let taskId = '';
@@ -2292,7 +2295,8 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
             } : null
         };
     } catch (error) {
-        return { success: false, error: error.message, code: error.code };
+        return { success: false, error: error.message, code: error.code,
+            submissionUnknown: error.submissionUnknown === true, requestId: error.requestId };
     }
 }
 
@@ -2583,7 +2587,7 @@ function temporaryUploadProviders(overrides = {}) {
     const selfHosted = privateConfig
         ? [{
             id: 'flow-canvas-storage',
-            name: 'Flow Canvas 自建存储',
+            name: 'Corvas 自建存储',
             endpoint: privateConfig.endpoint,
             fields: [],
             fileField: 'file',
@@ -2664,12 +2668,12 @@ async function uploadTemporaryReferenceBuffer({
                     });
                     return uploadedUrl;
                 }
-                failure = `HTTP ${response.status} ${responseText.slice(0, 300)}`.trim();
+                failure = mapLocalError(response.status, responseText, { query: true }).error;
                 retryable = [408, 425, 429].includes(response.status) || response.status >= 500 || response.ok;
             } catch (error) {
-                failure = error?.name === 'AbortError'
-                    ? `上传超时（${Math.round(timeoutMs / 1000)} 秒）`
-                    : (error.message || String(error));
+                failure = mapLocalError(error?.name === 'AbortError' ? 504 : 503, null, {
+                    query: true, transport: true
+                }).error;
             } finally {
                 clearTimeout(timeout);
             }
@@ -2957,7 +2961,8 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
             continue;
         }
         if (!response.ok) {
-            throw new Error(`\u67e5\u8be2\u89c6\u9891\u4efb\u52a1\u5931\u8d25\uff08${describeRemoteEndpoint(taskUrl)}\uff09\uff1a${response.status} ${text.slice(0, 1000)}`);
+            const mapped = mapLocalError(response.status, text, { query: true });
+            throw Object.assign(new Error(mapped.error), mapped);
         }
         recoveryNotFoundCount = 0;
         let payload;
@@ -2970,8 +2975,10 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
         transientFailures = 0;
         const payloadError = getVideoPayloadError(payload);
         if (payloadError && !getVideoResultUrl(payload)) {
-            throw Object.assign(new Error(formatVideoTaskFailure(payloadError, describeRemoteEndpoint(taskUrl), '查询视频任务失败')),
-                { code: isFailedVideoStatus(getVideoTaskStatus(payload)) ? 'UPSTREAM_TASK_FAILED' : undefined });
+            const mapped = mapLocalError(200, payload, { query: true, terminal: isFailedVideoStatus(getVideoTaskStatus(payload)) });
+            throw Object.assign(new Error(mapped.error), mapped,
+                { code: isFailedVideoStatus(getVideoTaskStatus(payload)) ? 'UPSTREAM_TASK_FAILED' : mapped.code,
+                    confirmedFailure: isFailedVideoStatus(getVideoTaskStatus(payload)) });
         }
         const resolvedTaskId = getVideoTaskId(payload);
         if (resolvedTaskId && resolvedTaskId !== currentTaskId) {
@@ -2987,8 +2994,8 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
             return { payload, url, taskId: currentTaskId };
         }
         if (isFailedVideoStatus(taskStatus)) {
-            const reason = getVideoPayloadError(payload) || '\u670d\u52a1\u7aef\u672a\u63d0\u4f9b\u5931\u8d25\u539f\u56e0';
-            throw Object.assign(new Error(formatVideoTaskFailure(reason)), { code: 'UPSTREAM_TASK_FAILED' });
+            const mapped = mapLocalError(200, payload, { query: true, terminal: true });
+            throw Object.assign(new Error(mapped.error), mapped, { code: 'UPSTREAM_TASK_FAILED', confirmedFailure: true });
         }
         if (isCompletedVideoStatus(taskStatus) && !url && ++emptyCompleted > 12) {
             throw new Error(`视频任务 ${currentTaskId} 已完成，但上游尚未返回产物地址；可稍后再次拉取`);
@@ -3000,19 +3007,6 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
         });
     }
     throw new Error('\u89c6\u9891\u751f\u6210\u8d85\u65f6\uff1a\u7b49\u5f85 60 \u5206\u949f\u540e\u4ecd\u672a\u5b8c\u6210');
-}
-
-function isVideoPromptModerationFailure(reason) {
-    return /提示词.*(?:审核|未通过|违规)|(?:审核|审核不通过|内容安全).*(?:提示词|prompt)|prompt.*(?:moderation|review|violation|safety)/i.test(String(reason || ''));
-}
-
-function formatVideoTaskFailure(reason, endpoint = '', stage = '视频生成任务失败') {
-    const detail = String(reason || '服务端未提供失败原因');
-    const endpointText = endpoint ? `（${endpoint}）` : '';
-    if (isVideoPromptModerationFailure(detail)) {
-        return `${stage}${endpointText}：提示词审核失败，${detail}。任务 ID 已保留，可继续恢复查询；修改提示词后可重新生成。`;
-    }
-    return `${stage}${endpointText}：${detail}`;
 }
 
 function videoExtensionFromUrl(url, contentType = '') {
@@ -3385,6 +3379,8 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             console.warn('[FlowCanvasBridge] Video submit response disconnected; recovering by log ID:', recoveryId);
         }
         if (response && !response.ok) {
+            const mapped = publicErrorResult(text);
+            if (mapped) return mapped;
             const serverTraceId = response.headers.get('x-log-id')
                 || response.headers.get('x-request-id')
                 || response.headers.get('request-id')
@@ -3392,13 +3388,10 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             if (isMiniMaxH3 && isMiniMaxH3UnavailableResponse(response.status, text)) {
                 return {
                     success: false,
-                    error: `MiniMax H3 在当前 API 的模型列表中可见，但没有可用生成渠道（${describeRemoteEndpoint(endpoint)}）。请检查中转站模型映射是否为 minimax-h3 -> MiniMax-H3-c1；Flow Canvas 不会绕过中转站直连其他域名。`
+                    error: `MiniMax H3 在当前 API 的模型列表中可见，但没有可用生成渠道（${describeRemoteEndpoint(endpoint)}）。请检查中转站模型映射是否为 minimax-h3 -> MiniMax-H3-c1；Corvas 不会绕过中转站直连其他域名。`
                 };
             }
-            return {
-                success: false,
-                error: `\u63d0\u4ea4\u89c6\u9891\u751f\u6210\u4efb\u52a1\u5931\u8d25\uff08${describeRemoteEndpoint(endpoint)}\uff09\uff1aHTTP ${response.status} ${text.slice(0, 1000)}\uff1b\u8bf7\u6c42\u8ffd\u8e2a ID ${serverTraceId}`
-            };
+            return mapLocalError(response.status, text, { query: false, requestId: serverTraceId });
         }
 
         if (!initialResponse) {
@@ -3408,13 +3401,19 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 return { success: false, error: '\u63d0\u4ea4\u89c6\u9891\u4efb\u52a1\u540e\uff0c\u670d\u52a1\u5668\u672a\u8fd4\u56de\u6709\u6548 JSON' };
             }
         }
+        const mapped = publicErrorResult(initialResponse);
+        if (mapped) {
+            if (mapped.taskId) options.onTaskSubmitted?.({ taskId: mapped.taskId, model, initialResponse });
+            return mapped;
+        }
         const taskId = getVideoTaskId(initialResponse);
         if (!taskId && !getVideoResultUrl(initialResponse)) {
-            const reason = getVideoPayloadError(initialResponse)
-                || '服务端没有返回任务 ID 或视频地址';
+            const mapped = mapLocalError(200, initialResponse, { query: true, terminal: false });
+            const reason = mapped.error || '服务端没有返回任务 ID 或视频地址';
             return {
                 success: false,
-                error: formatVideoTaskFailure(reason, describeRemoteEndpoint(endpoint), '提交视频生成任务失败')
+                error: reason, code: mapped.code, requestId: mapped.requestId,
+                submissionUnknown: mapped.submissionUnknown, confirmedFailure: mapped.confirmedFailure
             };
         }
         if (taskId) {
@@ -3458,14 +3457,15 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             height: Number(options.height) || undefined
         };
     } catch (error) {
-        return { success: false, error: error.message || String(error), code: error.code };
+        return { success: false, error: error.message || String(error), code: error.code,
+            submissionUnknown: error.submissionUnknown === true, requestId: error.requestId };
     }
 }
 
 async function generateBuiltinPlaceholder(prompt, targetDir, options = {}) {
     const width = sanitizeImageDimension(options.width, 1024);
     const height = sanitizeImageDimension(options.height, 1024);
-    const title = String(options.title || 'Flow Canvas 内置生图').trim();
+    const title = String(options.title || 'Corvas 内置生图').trim();
     const sourceThumbnails = await createSourceThumbnails(options.sourceReferences || []);
     const svg = createPromptSvg({ prompt, title, width, height, sourceThumbnails });
     const filePath = path.join(targetDir, uniqueImageName('flow_builtin', prompt, '.png'));
@@ -3604,7 +3604,7 @@ function sanitizeBoardToolTimeout(value) {
 }
 
 function createBridgeError(code, message, details = null, status = null) {
-    const error = new Error(String(message || 'Flow Canvas bridge request failed'));
+    const error = new Error(String(message || 'Corvas bridge request failed'));
     error.code = String(code || 'BRIDGE_ERROR');
     error.details = details == null ? null : clone(details);
     error.status = status != null && Number.isInteger(Number(status)) ? Number(status) : bridgeErrorStatus(error.code);
@@ -3624,7 +3624,7 @@ function serializeBridgeError(error) {
     const code = String(error?.code || 'BRIDGE_ERROR');
     return {
         code,
-        message: String(error?.message || 'Flow Canvas bridge request failed'),
+        message: String(error?.message || 'Corvas bridge request failed'),
         details: error?.details == null ? null : clone(error.details),
         status: Number.isInteger(Number(error?.status)) ? Number(error.status) : bridgeErrorStatus(code)
     };

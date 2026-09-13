@@ -1,6 +1,7 @@
 'use strict';
 
 const { createHash } = require('node:crypto');
+const { mapLocalError, readPublicError } = require('../shared/public-api-error.cjs');
 
 function endpointFor(provider, anthropic) {
     const fallback = anthropic
@@ -246,6 +247,8 @@ function parseJson(text) {
 }
 
 function providerError(payload) {
+    const mapped = readPublicError(payload);
+    if (mapped) return Object.assign(new Error(mapped.message), mapped);
     const detail = typeof payload?.error === 'string' ? payload.error : payload?.error?.message;
     return new Error(`Provider error: ${typeof detail === 'string' ? detail : 'request failed'}`);
 }
@@ -357,6 +360,7 @@ function accumulator(anthropic, names, onDelta, signal) {
 }
 
 function unsupportedTools(status, text) {
+    if (readPublicError(text)?.code === 'RH_TOOLS_UNSUPPORTED') return true;
     if (![400, 404, 405, 422, 501].includes(status)) return false;
     let payload;
     try { payload = JSON.parse(text); } catch { payload = null; }
@@ -435,7 +439,8 @@ async function callAgentProvider({ provider, messages, tools = [], signal, onDel
                     unavailable = true;
                     continue;
                 }
-                const error = new Error(`HTTP ${response.status}: ${errorText}`);
+                const mapped = mapLocalError(response.status, errorText, { query: true });
+                const error = Object.assign(new Error(`HTTP ${response.status}: ${mapped.error}`), mapped);
                 error.status = response.status;
                 throw error;
             }
@@ -464,6 +469,11 @@ async function callAgentProvider({ provider, messages, tools = [], signal, onDel
         const safe = new Error(message.slice(0, 1200));
         safe.name = error?.name || 'Error';
         if (typeof error?.status === 'number') safe.status = error.status;
+        if (typeof error?.code === 'string' && error.code.startsWith('RH_')) {
+            safe.code = error.code;
+            safe.requestId = error.requestId;
+            safe.submissionUnknown = error.submissionUnknown === true;
+        }
         throw safe;
     } finally {
         clearTimeout(timer);

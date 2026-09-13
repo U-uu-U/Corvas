@@ -36,6 +36,7 @@ import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from
 import { requestRecoveryTaskId } from './generation-recovery-dialog.js';
 import { showStatusNotification } from './status-notification.js';
 import { getVideoModelProfile, describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
+import { getModelPresentation, describeModelPresentation } from '../shared/model-presentation.mjs';
 import { modelConfigStore } from './model-config.js';
 import {
     mergeImageProfile,
@@ -1144,12 +1145,12 @@ export class AgentSidebar {
             const name = document.createElement('strong');
             name.textContent = provider.model || provider.name || '未命名模型';
             const meta = document.createElement('small');
-            const videoProfile = kind === 'video' ? this._getVideoModelProfile(provider) : null;
-            if (videoProfile?.label && videoProfile.label !== '未收录模型') name.textContent = videoProfile.label;
-            if (videoProfile?.routeLabel) name.textContent = `${videoProfile.routeLabel} · ${provider.model}`;
+            const profile = this._getProviderPresentation(provider, kind);
+            if (profile?.label && profile.label !== '未收录模型') name.textContent = profile.label;
+            if (profile?.routeLabel) name.textContent = `${profile.routeLabel} · ${name.textContent}`;
             meta.textContent = kind === 'video'
-                ? describeVideoModelProfile(videoProfile) || provider.name || '未命名 API'
-                : (provider.name || '未命名 API');
+                ? describeVideoModelProfile(profile) || provider.name || '未命名 API'
+                : describeModelPresentation(profile, provider.name || '未命名 API');
             if (kind === 'video') meta.className = 'generation-composer-model-description';
             copy.append(name, meta);
             const check = document.createElement('span');
@@ -1375,7 +1376,7 @@ export class AgentSidebar {
             : '当前为“自动”模式。可以直接完成分析并返回可应用的规划结果，但不要声称已经执行用户尚未触发的操作。';
         const skillInstructions = this._activeAgentSkills().map(skill => `${skill.name}：${skill.instruction}`);
         return [
-            '你是 Flow Canvas 的 AI Agent。回答要直接、可执行，并以当前画板数据为准。',
+            '你是 Corvas 的 AI Agent。回答要直接、可执行，并以当前画板数据为准。',
             '你可以读取当前项目的规划表、文件夹组和用户选中的素材。不要声称看不到已经出现在上下文中的内容。',
             '当用户要求补全规划表时，最后输出一个 JSON 数组；每项可使用 stage、title、role、content、assets、output、status、notes 字段。',
             executionInstruction,
@@ -1669,7 +1670,7 @@ export class AgentSidebar {
             });
         }
         if (refreshed.source?.excludedAttachmentKeys?.length) {
-            const reason = '当前后台版本不支持排除节点附件，请完全退出并重新启动 Flow Canvas 后再生成。';
+            const reason = '当前后台版本不支持排除节点附件，请完全退出并重新启动 Corvas 后再生成。';
             this._appendAgentError(reason);
             return { ok: false, reason };
         }
@@ -1686,7 +1687,7 @@ export class AgentSidebar {
             return { ok: false, reason };
         }
         if (!window.flowCanvas?.ai?.generateText) {
-            const reason = '本地文字 AI 接口不可用，请完全退出并重新启动 Flow Canvas。';
+            const reason = '本地文字 AI 接口不可用，请完全退出并重新启动 Corvas。';
             this._appendAgentError(reason);
             return { ok: false, reason };
         }
@@ -1827,7 +1828,7 @@ export class AgentSidebar {
             return;
         }
         if (!window.flowCanvas?.ai?.generateText) {
-            this._appendAgentError('本地文字 AI 接口不可用，请完全退出并重新启动 Flow Canvas。');
+            this._appendAgentError('本地文字 AI 接口不可用，请完全退出并重新启动 Corvas。');
             return;
         }
         const conversationFiles = this._captureAgentConversationFiles(pendingAttachments, 'input');
@@ -2032,7 +2033,7 @@ export class AgentSidebar {
         folders.forEach(folder => {
             const option = document.createElement('option');
             option.value = folder;
-            option.textContent = folder === managedFolder ? `Flow Canvas 管理目录 - ${folder}` : folder;
+            option.textContent = folder === managedFolder ? `Corvas 管理目录 - ${folder}` : folder;
             select.appendChild(option);
         });
         const selectedFolder = folders.includes(defaultFolder) ? defaultFolder : folders[0];
@@ -2593,7 +2594,7 @@ export class AgentSidebar {
         if (!base) return null;
         const config = modelConfigStore.getConfig();
         const { entry } = resolveModelConfigEntry(config, { ...provider, kind: 'video' });
-        return mergeVideoProfile(base, toVideoProfileOverrides(config, entry));
+        return mergeVideoProfile(base, toVideoProfileOverrides(config, entry, provider));
     }
 
     _loadGenerationTasks() {
@@ -3255,7 +3256,7 @@ export class AgentSidebar {
             ...(remoteTaskId !== task.taskId ? { filePath: null, filePaths: [] } : {}),
             params: { syncStage: 'recovering', recoveryStartedAt: Date.now() } });
         try {
-            if (!window.flowCanvas?.mcp?.recoverGeneration) throw new Error('请重启 Flow Canvas 以启用新版任务恢复接口');
+            if (!window.flowCanvas?.mcp?.recoverGeneration) throw new Error('请重启 Corvas 以启用新版任务恢复接口');
             if (await this.options.flushBoard?.() === false) throw new Error('画板保存冲突，未开始恢复');
             const result = await window.flowCanvas.mcp.recoverGeneration({
                 clientTaskId: task.id, taskId: remoteTaskId, kind: task.kind,
@@ -3547,7 +3548,7 @@ export class AgentSidebar {
         addToCanvas = true
     } = {}) {
         if (!window.flowCanvas?.mcp?.compressImageReferences) {
-            throw new Error('批量转小接口不可用，请完全退出并重新启动 Flow Canvas');
+            throw new Error('批量转小接口不可用，请完全退出并重新启动 Corvas');
         }
         const result = await window.flowCanvas.mcp.compressImageReferences({
             sourceReferences: references,
@@ -3942,6 +3943,12 @@ export class AgentSidebar {
         };
     }
 
+    _getProviderPresentation(provider, kind) {
+        if (kind === 'video') return this._getVideoModelProfile(provider);
+        const { entry } = resolveModelConfigEntry(modelConfigStore.getConfig(), { ...provider, kind });
+        return getModelPresentation(entry, provider);
+    }
+
     getGenerationProviderOptions(kind) {
         return this._providerVariants()
             .filter(provider => kind === 'video'
@@ -3949,17 +3956,22 @@ export class AgentSidebar {
                 : kind === 'text'
                     ? this._isTextProvider(provider)
                     : this._isImageProvider(provider))
-            .map(provider => ({
-                id: provider.id,
-                sourceProviderId: provider.sourceProviderId || provider.id,
-                name: provider.name || '未命名 API',
-                routeLabel: kind === 'video' ? this._getVideoModelProfile(provider)?.routeLabel || '' : '',
-                routeGroup: kind === 'video' ? this._getVideoModelProfile(provider)?.routeGroup || '' : '',
-                routeModelLabel: kind === 'video' ? this._getVideoModelProfile(provider)?.routeModelLabel || '' : '',
-                modelLabel: kind === 'video' ? this._getVideoModelProfile(provider)?.label || '' : '',
-                description: kind === 'video' ? describeVideoModelProfile(this._getVideoModelProfile(provider)) : '',
-                model: provider.model || ''
-            }));
+            .map(provider => {
+                const profile = this._getProviderPresentation(provider, kind);
+                return {
+                    id: provider.id,
+                    sourceProviderId: provider.sourceProviderId || provider.id,
+                    name: provider.name || '未命名 API',
+                    routeLabel: profile?.routeLabel || '',
+                    routeGroup: profile?.routeGroup || '',
+                    routeGroupLabel: profile?.routeGroupLabel || '',
+                    routeModelLabel: profile?.routeModelLabel || '',
+                    recommended: profile?.recommended === true,
+                    modelLabel: profile?.label || '',
+                    description: kind === 'video' ? describeVideoModelProfile(profile) : describeModelPresentation(profile),
+                    model: provider.model || ''
+                };
+            });
     }
 
     getImageProviderConfig(binding = null) {

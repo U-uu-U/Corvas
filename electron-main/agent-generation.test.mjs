@@ -82,6 +82,43 @@ async function setup(t, { items = [op('image')], connections = [], providers, mo
 }
 
 describe('AgentGeneration planning', () => {
+    test('remote sale prices reach Agent plans without changing approved snapshots or submitted parameters', async t => {
+        const p = { ...provider('videos', 'video', 'sd2.5-route1'), endpoint: 'https://art.ravenhash.org/v1' };
+        const h = await setup(t, { providers: [p], items: [op('video', 'video', { count: 2 })] });
+        const entry = h.capabilities.current.models.find(entry => entry.id === 'ravenhash-video.sd2.5-route1');
+        entry.presentation = { label: 'Remote label', description: 'Remote description' };
+        entry.pricing.amount = 7;
+        const run = h.plan(['video']);
+        assert.equal(h.generation.listModels()[0].price.amount, 7);
+        assert.equal(run.plan.estimatedCost, 14);
+        assert.equal(run.plan.currency, 'CNY');
+        const approved = copy(run.plan);
+        entry.pricing.amount = 8;
+        assert.equal(h.generation.listModels()[0].price.amount, 8);
+        assert.deepEqual(run.plan, approved);
+        await h.execute(run.steps[0], run);
+        assert.equal(h.requests.length, 1);
+        assert.equal(h.requests[0].body.providerConfig.model, 'sd2.5-route1');
+        assert.equal(h.requests[0].body.duration, 30);
+        for (const key of ['presentation', 'pricing', 'price', 'routeLabel']) assert.equal(h.requests[0].body[key], undefined);
+    });
+
+    test('image display prices do not enter video defaults or request serialization', async t => {
+        const h = await setup(t, { providers: [provider('images', 'image', 'mj_imagine')] });
+        const entry = h.capabilities.current.models.find(entry => entry.id === 'midjourney.mj-imagine');
+        entry.pricing = { status: 'known', hosts: ['example.invalid'], amount: 1, currency: 'USD',
+            unit: 'request', kind: 'sale', source: 'test', updatedAt: '2026-09-13T00:00:00Z' };
+        entry.presentation = { label: 'Remote MJ' };
+        const run = h.plan();
+        assert.equal(run.plan.estimatedCost, 1);
+        assert.equal(run.plan.currency, 'USD');
+        assert.equal(run.steps[0].config.duration, undefined);
+        assert.equal(run.steps[0].config.resolutionTier, '1K');
+        await h.execute(run.steps[0], run);
+        assert.equal(h.requests[0].body.providerConfig.model, 'mj_imagine');
+        assert.equal(h.requests[0].body.pricing, undefined);
+    });
+
     test('excluded files and URL-only upstream generators are pruned before topology and never submitted', async t => {
         const h = await setup(t);
         const kept = await h.file('kept.png');

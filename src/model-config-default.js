@@ -721,6 +721,26 @@ export const DEFAULT_MODEL_CONFIG = {
         },
         {
             "id": "ravenhash-video.sd2.5-route1",
+            "presentation": {
+                "label": "Seedance 2.5",
+                "routeLabel": "线路一",
+                "routeGroup": "seedance25-fixed",
+                "routeGroupLabel": "Seedance 2.5 · 固定 30 秒",
+                "routeModelLabel": "sd2.5",
+                "recommended": true
+            },
+            "pricing": {
+                "status": "known",
+                "hosts": [
+                    "art.ravenhash.org"
+                ],
+                "amount": 6,
+                "currency": "CNY",
+                "unit": "request",
+                "kind": "sale",
+                "source": "ravenhash configured sale",
+                "updatedAt": "2026-09-06T12:38:30Z"
+            },
             "label": "sd2.5-route1",
             "kind": "video",
             "channel": "RavenHash视频",
@@ -817,6 +837,26 @@ export const DEFAULT_MODEL_CONFIG = {
         },
         {
             "id": "ravenhash-video.sd2.5",
+            "presentation": {
+                "label": "Seedance 2.5",
+                "routeLabel": "线路二",
+                "routeGroup": "seedance25-fixed",
+                "routeGroupLabel": "Seedance 2.5 · 固定 30 秒",
+                "routeModelLabel": "sd2.5",
+                "recommended": false
+            },
+            "pricing": {
+                "status": "known",
+                "hosts": [
+                    "art.ravenhash.org"
+                ],
+                "amount": 6,
+                "currency": "CNY",
+                "unit": "request",
+                "kind": "sale",
+                "source": "ravenhash configured sale",
+                "updatedAt": "2026-09-06T12:38:30Z"
+            },
             "label": "sd2.5",
             "kind": "video",
             "channel": "RavenHash视频",
@@ -825,6 +865,7 @@ export const DEFAULT_MODEL_CONFIG = {
             "match": {
                 "model": [
                     "^sd2[._-]?5$",
+                    "^sd2[._-]?5-route2$",
                     "^sd2[._-]?5-haidiyue-face$"
                 ]
             },
@@ -905,6 +946,21 @@ export const DEFAULT_MODEL_CONFIG = {
         },
         {
             "id": "ravenhash-video.seedance-v2.5",
+            "presentation": {
+                "label": "HM-Seedance 2.5"
+            },
+            "pricing": {
+                "status": "known",
+                "hosts": [
+                    "art.ravenhash.org"
+                ],
+                "amount": 5,
+                "currency": "CNY",
+                "unit": "request",
+                "kind": "sale",
+                "source": "ravenhash configured sale",
+                "updatedAt": "2026-09-12T11:30:00Z"
+            },
             "label": "seedance_v2.5",
             "kind": "video",
             "channel": "RavenHash视频",
@@ -996,6 +1052,21 @@ export const DEFAULT_MODEL_CONFIG = {
         },
         {
             "id": "ravenhash-video.hm-seedance-933",
+            "presentation": {
+                "label": "HM-Seedance V2.0 933"
+            },
+            "pricing": {
+                "status": "known",
+                "hosts": [
+                    "art.ravenhash.org"
+                ],
+                "amount": 6.5,
+                "currency": "CNY",
+                "unit": "request",
+                "kind": "sale",
+                "source": "ravenhash configured sale",
+                "updatedAt": "2026-09-12T11:30:00Z"
+            },
             "label": "HM-Seedance V2.0 933",
             "kind": "video",
             "channel": "RavenHash视频",
@@ -1089,6 +1160,21 @@ export const DEFAULT_MODEL_CONFIG = {
         },
         {
             "id": "ravenhash-video.hm-seedance-101010",
+            "presentation": {
+                "label": "HM-Seedance V2.5 101010"
+            },
+            "pricing": {
+                "status": "known",
+                "hosts": [
+                    "art.ravenhash.org"
+                ],
+                "amount": 7,
+                "currency": "CNY",
+                "unit": "request",
+                "kind": "sale",
+                "source": "ravenhash configured sale",
+                "updatedAt": "2026-09-12T11:30:00Z"
+            },
             "label": "HM-Seedance V2.5 101010",
             "kind": "video",
             "channel": "RavenHash视频",
@@ -1182,6 +1268,21 @@ export const DEFAULT_MODEL_CONFIG = {
         },
         {
             "id": "ravenhash-video.hm-seedance-301010",
+            "presentation": {
+                "label": "HM-Seedance V2.5 301010"
+            },
+            "pricing": {
+                "status": "known",
+                "hosts": [
+                    "art.ravenhash.org"
+                ],
+                "amount": 10,
+                "currency": "CNY",
+                "unit": "request",
+                "kind": "sale",
+                "source": "ravenhash configured sale",
+                "updatedAt": "2026-09-12T11:30:00Z"
+            },
             "label": "HM-Seedance V2.5 301010",
             "kind": "video",
             "channel": "RavenHash视频",
@@ -1275,6 +1376,9 @@ export const DEFAULT_MODEL_CONFIG = {
         },
         {
             "id": "ravenhash-video.seedance-2.0",
+            "presentation": {
+                "label": "Seedance 2.0"
+            },
             "label": "seedance-2.0",
             "kind": "video",
             "channel": "RavenHash视频",
@@ -1385,6 +1489,9 @@ export const DEFAULT_MODEL_CONFIG = {
         },
         {
             "id": "ravenhash-video.minimax-h3",
+            "presentation": {
+                "label": "MiniMax H3"
+            },
             "label": "minimax-h3（兼容线路）",
             "kind": "video",
             "channel": "RavenHash视频",
@@ -1502,6 +1609,9 @@ export const DEFAULT_MODEL_CONFIG = {
         },
         {
             "id": "minimax-video.minimax-h3-seconds",
+            "presentation": {
+                "label": "MiniMax H3"
+            },
             "label": "minimax-h3（按秒线路）",
             "kind": "video",
             "channel": "MiniMax视频",
@@ -1630,6 +1740,9 @@ export const DEFAULT_MODEL_CONFIG = {
         },
         {
             "id": "minimax-video.minimax-h3-c1",
+            "presentation": {
+                "label": "MiniMax H3"
+            },
             "label": "MiniMax-H3-c1",
             "kind": "video",
             "channel": "MiniMax视频",

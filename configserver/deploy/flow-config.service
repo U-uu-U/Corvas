@@ -20,7 +20,7 @@ Environment=CONFIG_PORT=__PORT__
 Environment=CONFIG_DATA_DIR=__DATA_DIR__
 Environment=CONFIG_PUBLIC_ORIGIN=https://__DOMAIN__
 
-ExecStart=/usr/bin/env node __APP_DIR__/server.mjs
+ExecStart=__APP_DIR__/runtime/node __APP_DIR__/server.mjs
 
 # 只允许写自己的数据目录，其余一律只读；CONFIG_DATA_DIR 之外无处可写。
 NoNewPrivileges=yes
@@ -33,7 +33,8 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
+# V8 needs executable memory for its JIT compiler.
+MemoryDenyWriteExecute=no
 
 Restart=always
 RestartSec=3

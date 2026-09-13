@@ -159,12 +159,57 @@
                 "params": { "$ref": "#/definitions/stringList" }
             }
         },
+        "presentation": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "label": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "\\S" },
+                "description": { "type": "string", "maxLength": 500 },
+                "routeLabel": { "type": "string", "maxLength": 80 },
+                "routeGroup": { "type": "string", "maxLength": 100 },
+                "routeGroupLabel": { "type": "string", "maxLength": 100 },
+                "routeModelLabel": { "type": "string", "maxLength": 100 },
+                "recommended": { "type": "boolean" }
+            }
+        },
+        "priceHosts": {
+            "type": "array", "minItems": 1, "uniqueItems": true,
+            "items": { "type": "string", "maxLength": 253, "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$" }
+        },
+        "pricing": {
+            "oneOf": [
+                {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["status", "hosts"],
+                    "properties": {
+                        "status": { "const": "unknown" },
+                        "hosts": { "$ref": "#/definitions/priceHosts" }
+                    }
+                },
+                {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["status", "hosts", "amount", "currency", "unit", "kind", "source", "updatedAt"],
+                    "properties": {
+                        "status": { "const": "known" },
+                        "hosts": { "$ref": "#/definitions/priceHosts" },
+                        "amount": { "type": "number", "minimum": 0, "maximum": 1000000 },
+                        "currency": { "enum": ["CNY", "USD"] },
+                        "unit": { "enum": ["request", "image", "second"] },
+                        "kind": { "const": "sale" },
+                        "source": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
+                        "updatedAt": { "type": "string", "format": "date-time" }
+                    }
+                }
+            ]
+        },
         "model": {
             "type": "object",
             "required": ["id", "kind", "match"],
             "properties": {
                 "id": { "type": "string", "minLength": 1 },
                 "label": { "type": "string" },
+                "presentation": { "$ref": "#/definitions/presentation" },
+                "pricing": { "$ref": "#/definitions/pricing" },
                 "kind": { "enum": ["image", "video", "text"] },
                 "channel": { "type": "string" },
                 "route": { "type": "string" },
