@@ -8,7 +8,7 @@ import {
     extractDeterministicSignals,
     validateEditPlan
 } from './image-intent-pipeline.js';
-import { isMidjourneyImageModel } from './provider-capabilities.js';
+import { isMidjourneyImageModel, canUseTextProvider } from './provider-capabilities.js';
 import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from './generation-request-params.js';
 import { inferClosestAspectRatio } from './image-node-settings.js';
 import { restoreReferenceCitations, referenceCitationGuide, withoutReferenceCitationGuide, bindReferenceCitations } from './reference-citations.js';
@@ -158,7 +158,7 @@ function startImageIntentPipeline({ prompt, config, ctx, references, imageProvid
     let plannerPromise;
     let cacheHit = false;
 
-    if (!plannerProvider?.apiKey || !plannerProvider?.model) {
+    if (!plannerProvider?.apiKey || !canUseTextProvider(plannerProvider)) {
         plannerPromise = Promise.resolve({
             success: false,
             code: 'PLANNER_PROVIDER_UNAVAILABLE',

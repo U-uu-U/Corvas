@@ -33,6 +33,19 @@ function trackedNodeContext(t, kind, model, generate) {
     return { calls, tasks, updates, failures, ctx };
 }
 
+test('reference image generation skips a mismatched planner but still sends the image request', async t => {
+    const h = trackedNodeContext(t, 'image', 'gpt-image-2', async () => ({ filePath: 'C:/output/fixture.png' }));
+    window.flowCanvas.ai = { planImageEdit: async () => assert.fail('Image API must not be used for planning') };
+    h.ctx.getTextProvider = () => ({ capability: 'image', model: 'gpt-image-2', apiKey: 'fixture' });
+    h.ctx.getImageIntentPipelineMode = () => 'compiled';
+    h.ctx.prepareImageReferences = references => ({ references });
+    const result = await helpers.NODE_TYPES.image.execute({ source: 'local-res://' + encodeURIComponent('C:/reference.png') },
+        { prompt: 'Keep the reference', count: 1 }, h.ctx);
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0].providerConfig.model, 'gpt-image-2');
+    assert.equal(result._resultFilePath, 'C:/output/fixture.png');
+});
+
 test('video node preserves portrait rejection identity and terminal state in its task record', async t => {
     const h = trackedNodeContext(t, 'video', 'sd2.5-route1', async () => ({ success: false,
         error: '参考图触发肖像保护限制', code: 'RH_PORTRAIT_SELF_REQUIRED', confirmedFailure: true, retryable: false }));

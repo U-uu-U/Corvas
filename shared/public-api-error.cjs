@@ -1,4 +1,5 @@
 const CATALOG = Object.freeze({
+    RH_MODEL_ENDPOINT_MISMATCH: [400, '当前模型不支持这类调用。请检查节点或 Agent 选择的模型；文字分析需要文字或视觉理解模型，不能使用图片生成模型。'],
     RH_REFERENCE_COPYRIGHT: [400, '参考素材触发版权保护，审核未通过。请更换为有权使用且符合模型要求的素材后重新提交。'],
     RH_COPYRIGHT_REJECTED: [400, '本次生成触发版权保护，审核未通过。请检查提示词与参考素材，调整后重新提交。'],
     RH_PROMPT_REJECTED: [400, '提示词审核未通过，请修改提示词后重新提交。'],
@@ -108,6 +109,7 @@ function classify(status, value, { query = false, terminal = false, transport = 
     const text = errorText(value);
     // An uncertain POST must never turn into an invitation to automatically resubmit.
     if (!query && !terminal && (transport || status === 408 || status >= 500)) return 'RH_SUBMISSION_UNKNOWN';
+    if (/not supported on (?:the )?chat completions endpoint|(?:does not support|unsupported).{0,30}chat[ _-]?completions|chat[ _-]?completions.{0,30}(?:not supported|unsupported)/i.test(text)) return 'RH_MODEL_ENDPOINT_MISMATCH';
     if (/(?:只|仅)支持生成包含(?:您|你)自己(?:的|肖像|人脸)|仅支持(?:本人|自己)(?:的)?肖像|only\s+(?:supports?\s+)?(?:generat\w+\s+)?videos?\s+(?:of|featuring|containing)\s+(?:you\b|yourself\b)|only.{0,60}(?:your own likeness|your own face)/i.test(text)) return 'RH_PORTRAIT_SELF_REQUIRED';
     if (/肖像保护|人脸.{0,16}(?:保护|限制|不支持|禁止)|(?:portrait|likeness)\s+protection|(?:real(?:istic)?[ -]?(?:people|person|face)|human[ -]?faces?).{0,40}(?:not supported|not allowed|prohibited|restricted)/i.test(text)) return 'RH_PORTRAIT_RESTRICTED';
     const rejected = /未通过|不通过|不予通过|未能通过|违规|违反|拒绝|不允许|禁止|(?:审核|审查|检测|检查|校验).{0,8}失败|reject(?:ed|ion)?|violat(?:ion|es?|ed)|not[_ -]?(?:allowed|supported|pass)|fail(?:ed|ure)?|block(?:ed)?|prohibit(?:ed)?/i;

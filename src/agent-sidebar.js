@@ -18,7 +18,8 @@ import {
 } from './image-node-settings.js';
 import {
     inferProviderCapability,
-    providerHasCapability
+    providerHasCapability,
+    canUseTextProvider
 } from './provider-capabilities.js';
 import {
     getImageGenerationPreferences as readImageGenerationPreferences,
@@ -3833,7 +3834,7 @@ export class AgentSidebar {
     }
 
     _isTextProvider(provider) {
-        return providerHasCapability(provider, 'text');
+        return providerHasCapability(provider, 'text') && canUseTextProvider(provider);
     }
 
     _isAnthropicProvider(provider) {
@@ -3938,7 +3939,8 @@ export class AgentSidebar {
     }
 
     _getTextProvider() {
-        return this._findProvider(this.globalConfig.textProviderId);
+        const provider = this._findProvider(this.globalConfig.textProviderId);
+        return this._isTextProvider(provider) ? provider : null;
     }
 
     _getVideoProvider() {
@@ -4025,7 +4027,7 @@ export class AgentSidebar {
 
     getTextProviderConfig(binding = null) {
         const provider = this._getBoundProvider(binding, this._getTextProvider());
-        return provider ? { ...provider } : null;
+        return this._isTextProvider(provider) ? { ...provider } : null;
     }
 
     getImageIntentPipelineMode() {

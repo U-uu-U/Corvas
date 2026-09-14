@@ -736,6 +736,15 @@ async function fetchModelList(config = {}) {
 }
 
 
+async function checkTextProvider(provider, purpose) {
+    const { textProviderError } = await import('../src/provider-capabilities.js');
+    const error = textProviderError(provider);
+    if (error) require('./diagnostics.cjs').diagnostic('warn', 'provider.text_mismatch', {
+        purpose, model: provider?.model, capability: provider?.capability
+    });
+    return error;
+}
+
 function buildClassificationEndpoint(provider = {}) {
     const providerType = String(provider.type || 'openai').toLowerCase();
     const fallback = providerType === 'anthropic'
@@ -885,6 +894,8 @@ async function generateTextWithProvider(request = {}) {
     if (!provider?.endpoint || !provider?.apiKey || !provider?.model) {
         return { success: false, error: '文字 API 配置不完整' };
     }
+    const providerError = await checkTextProvider(provider, 'text');
+    if (providerError) return providerError;
     if (providerType === 'google') {
         return { success: false, error: '当前文字节点暂不支持 Google 原生格式，请使用 OpenAI 兼容端点' };
     }
@@ -1006,6 +1017,8 @@ async function describeImagesWithProvider(request = {}) {
     if (!provider?.endpoint || !provider?.apiKey || !provider?.model) {
         return { success: false, error: '文本与视觉 API 配置不完整' };
     }
+    const providerError = await checkTextProvider(provider, 'describe-images');
+    if (providerError) return providerError;
     if (providerType === 'google') {
         return { success: false, error: '画面提取暂不支持 Google 原生格式，请使用 OpenAI 兼容端点' };
     }
@@ -1161,6 +1174,8 @@ async function planImageEditWithProvider(request = {}) {
     if (!provider?.endpoint || !provider?.apiKey || !provider?.model) {
         return { success: false, code: 'PLANNER_PROVIDER_INVALID', error: '文字与视觉 API 配置不完整' };
     }
+    const providerError = await checkTextProvider(provider, 'image-planner');
+    if (providerError) return providerError;
     if (providerType === 'google') {
         return { success: false, code: 'PLANNER_PROVIDER_UNSUPPORTED', error: 'Planner 暂不支持 Google 原生格式' };
     }
@@ -1326,6 +1341,8 @@ function parseClassificationJson(text) {
 async function classifyAssetWithProvider(filePath, provider = {}) {
     if (!filePath || !fs.existsSync(filePath)) return { success: false, error: '素材文件不存在' };
     if (!provider?.apiKey || !provider?.model) return { success: false, error: '没有可用的分类 API 配置' };
+    const providerError = await checkTextProvider(provider, 'asset-classification');
+    if (providerError) return providerError;
     if (!/\.(?:jpe?g|png|webp|gif|bmp|tiff?)$/i.test(filePath)) {
         return { success: false, unsupported: true, error: '当前仅支持自动分类图片素材' };
     }

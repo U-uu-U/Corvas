@@ -53,6 +53,7 @@ test('public portrait failures retain task identity and terminal state through r
 });
 
 for (const [status, raw, code] of [
+    [400, 'This model is not supported on the Chat Completions endpoint', 'RH_MODEL_ENDPOINT_MISMATCH'],
     [400, 'invalid_parameter duration', 'RH_INVALID_REQUEST'],
     [401, 'invalid key', 'RH_AUTH_FAILED'], [402, 'insufficient_quota', 'RH_QUOTA_EXHAUSTED'],
     [403, 'access denied', 'RH_PERMISSION_DENIED'], [413, 'too large', 'RH_MEDIA_TOO_LARGE'],

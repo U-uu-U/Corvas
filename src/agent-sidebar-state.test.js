@@ -2,6 +2,32 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentSidebar } from './agent-sidebar.js';
 
+test('correct image configuration cannot leak through a stale text-node binding', () => {
+    const image = { id: 'image-api', capability: 'image', endpoint: 'https://ai.ravenhash.org/v1', apiKey: 'fixture',
+        model: 'gpt-image-2', models: ['gpt-image-2', 'gpt-image-2.5-sunburst'] };
+    const text = { id: 'text-api', capability: 'text', model: 'gpt-5.5', apiKey: 'fixture' };
+    const sidebar = Object.assign(Object.create(AgentSidebar.prototype), {
+        providers: [image, text], globalConfig: { textProviderId: text.id, imageProviderId: image.id }
+    });
+    const before = structuredClone(sidebar.providers);
+    for (const binding of [
+        { providerId: image.id, model: image.model },
+        { providerId: image.id + '::model:gpt-image-2.5-sunburst', sourceProviderId: image.id, model: 'gpt-image-2.5-sunburst' },
+        { providerId: text.id, model: image.model }
+    ]) assert.equal(sidebar.getTextProviderConfig(binding), null);
+    assert.equal(sidebar.getTextProviderConfig().id, text.id);
+    assert.equal(sidebar.getImageProviderConfig({ providerId: image.id }).model, image.model);
+    sidebar.globalConfig.textProviderId = image.id;
+    assert.equal(sidebar._getTextProvider(), null);
+    sidebar._ensureProviderRoles();
+    assert.equal(sidebar.globalConfig.textProviderId, text.id);
+    assert.deepEqual(sidebar.providers, before);
+    sidebar.providers = [image];
+    sidebar._ensureProviderRoles();
+    assert.equal(sidebar.globalConfig.textProviderId, null);
+    assert.equal(sidebar.getImageProviderConfig().model, image.model);
+});
+
 for (const [code, label] of [['RH_REFERENCE_COPYRIGHT', '参考素材版权限制'], ['RH_CONTENT_REJECTED', '内容审核未通过']]) {
     test(`task history retains ${code} as a failure rather than a disconnect`, () => {
         const sidebar = Object.assign(Object.create(AgentSidebar.prototype), {

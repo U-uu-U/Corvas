@@ -7,7 +7,7 @@ import { bindReferenceCitations, withoutReferenceCitationGuide } from '../src/re
 import { getGeneratorResultEntries } from '../src/generator-result-stack.js';
 import { applyGeneratorStackResult } from '../shared/generation-result-state.mjs';
 import { resolveImageDimensions, resolveGenerationDisplaySize, inferClosestAspectRatio } from '../src/image-node-settings.js';
-import { inferProviderCapability, isMidjourneyImageModel } from '../src/provider-capabilities.js';
+import { inferProviderCapability, isMidjourneyImageModel, canUseTextProvider } from '../src/provider-capabilities.js';
 import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from '../src/generation-request-params.js';
 import { getVideoModelProfile } from '../shared/video-model-profiles.mjs';
 import { DEFAULT_MODEL_CONFIG } from '../src/model-config-default.js';
@@ -145,7 +145,7 @@ export class AgentGeneration {
     resolveProvider(binding = {}, kind = 'text') {
         const config = this.loadConfig();
         const id = binding.providerId || binding.id || binding.sourceProviderId || config.globalConfig?.[`${kind}ProviderId`];
-        const list = this.providers().filter(p => inferProviderCapability(p) === kind);
+        const list = this.providers().filter(p => inferProviderCapability(p) === kind && (kind !== 'text' || canUseTextProvider(p)));
         let provider = list.find(p => p.id === id && (!binding.model || p.model === binding.model))
             || list.find(p => p.sourceProviderId === (binding.sourceProviderId || id) && (!binding.model || p.model === binding.model));
         if (!provider && binding.model && !id) provider = list.find(p => p.model === binding.model);
