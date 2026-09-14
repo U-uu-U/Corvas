@@ -3,6 +3,7 @@
 // ============================================================
 
 import Konva from 'konva';
+import { installMediaViewportCulling } from './canvas-media-culling.js';
 import { GraphView } from './graph-view.js';
 import { collectUpstreamMediaAttachments, collectUpstreamPromptContext } from './agent-attachments.js';
 import { NODE_TYPES } from './node-types.js';
@@ -626,23 +627,28 @@ export class CanvasManager {
         this.resourceSaverMode = !!this.storeData.resourceSaver;
         this._RESOURCE_HOVER_DELAY_MS = 450;
 
+        let viewportScaleX = this.stage.scaleX();
+        let viewportScaleY = this.stage.scaleY();
         this.stage.on('xChange yChange scaleXChange scaleYChange', () => {
             if (!this._rafPending) {
                 this._rafPending = true;
                 requestAnimationFrame(() => {
                     this._rafPending = false;
-                    this._syncHoveredMediaItemAtPointer();
+                    const scaleChanged = viewportScaleX !== this.stage.scaleX() || viewportScaleY !== this.stage.scaleY();
+                    viewportScaleX = this.stage.scaleX();
+                    viewportScaleY = this.stage.scaleY();
+                    if (!this._activeCanvasPanStop) this._syncHoveredMediaItemAtPointer();
                     this._scheduleSelectionToolbarSync();
                     this._positionImageCropOverlay();
                     this.syncGifs();
                     this.syncBackground();
-                    this._syncViewportFixedControls();
-                    this.syncPlanInlineEditors();
-                    this._syncPersistentTextEditors();
+                    if (scaleChanged) this._syncViewportFixedControls();
+                    this.syncPlanInlineEditors({ syncGraph: false });
+                    this.graphView?._syncPending();
+                    this._textNodeEditors.forEach((_, nodeId) => this._positionPersistentTextEditor(nodeId));
                     this._positionOpPromptEditor();
                     this._positionMediaTitleEditor();
                     this._positionGenerationComposer();
-                    this._syncCanvasViewDock();
                     this._scheduleMinimapDraw();
                     this.graphView?.scheduleVisiblePortsRefresh();
                     this._scheduleCullCheck(this._CULL_IDLE_MS);
@@ -2723,11 +2729,7 @@ export class CanvasManager {
             fill: '#25272c',
             stroke: 'rgba(255, 255, 255, 0.12)',
             strokeWidth: 1,
-            cornerRadius: 7,
-            shadowColor: 'rgba(0, 0, 0, 0.35)',
-            shadowBlur: 14,
-            shadowOffsetY: 5,
-            shadowOpacity: 0.5
+            cornerRadius: 7
         }));
 
         const sweepWidth = Math.max(72, Math.round(width * 0.34));
@@ -2971,9 +2973,6 @@ export class CanvasManager {
         let x1, y1, x2, y2;
         let selectionDirection = 'left-to-right';
         let isSelecting = false;
-        let isPanning = false;
-        let lastPanX = 0, lastPanY = 0;
-        let panMoved = false;
 
         const setCanvasDragEnabled = (enabled) => {
             this.stage.draggable(enabled);
@@ -2981,33 +2980,6 @@ export class CanvasManager {
                 item.group.draggable(enabled);
                 item.group.find?.('.planRowHandle').forEach(handle => handle.draggable(enabled));
             });
-        };
-
-        const detachPanningEndListeners = () => {
-            document.removeEventListener('mouseup', finishPanning, true);
-            document.removeEventListener('pointerup', finishPanning, true);
-            document.removeEventListener('pointercancel', finishPanning, true);
-            window.removeEventListener('blur', finishPanning);
-        };
-
-        const finishPanning = () => {
-            if (!isPanning) return;
-            isPanning = false;
-            // 右键按下即开始平移，松手后 contextmenu 才触发。移动过就算平移，
-            // 不弹菜单；原地点一下（位移为 0）才认作右键点击。
-            this._suppressStageMenu = panMoved;
-            document.body.style.cursor = 'default';
-            setCanvasDragEnabled(true);
-            detachPanningEndListeners();
-            this.emit('change');
-        };
-
-        const attachPanningEndListeners = () => {
-            detachPanningEndListeners();
-            document.addEventListener('mouseup', finishPanning, true);
-            document.addEventListener('pointerup', finishPanning, true);
-            document.addEventListener('pointercancel', finishPanning, true);
-            window.addEventListener('blur', finishPanning);
         };
 
         const detachSelectionEndListeners = () => {
@@ -3080,19 +3052,7 @@ export class CanvasManager {
                 }
             }
             if (e.evt.button === 1 || e.evt.button === 2) {
-                // Middle or Right click: 只平移画布，不拖动图片
-                e.evt.preventDefault();
-                isPanning = true;
-                panMoved = false;
-
-                // ── 关键：临时禁用 stage 和所有图片的 draggable ──
-                setCanvasDragEnabled(false);
-
-                const pos = this.stage.getPointerPosition();
-                lastPanX = pos.x;
-                lastPanY = pos.y;
-                document.body.style.cursor = 'grabbing';
-                attachPanningEndListeners();
+                this._startCanvasPanFromClientPoint(e.evt);
                 return;
             }
             const transformerTarget = e.target === this.imageTransformer
@@ -3226,6 +3186,7 @@ export class CanvasManager {
         });
 
         this.stage.on('mousemove', (e) => {
+            if (this._activeCanvasPanStop) return;
             const hoveredItem = this._findMediaReferenceItemFromNode(e.target);
             this._setHoveredMediaItem(
                 this._isInteractiveMediaProduct(hoveredItem?.data) ? hoveredItem.data.id : null
@@ -3234,24 +3195,6 @@ export class CanvasManager {
                 this.graphView._syncPending();
                 return;
             }
-            if (isPanning) {
-                e.evt.preventDefault();
-                const pos = this.stage.getPointerPosition();
-                const dx = pos.x - lastPanX;
-                const dy = pos.y - lastPanY;
-                lastPanX = pos.x;
-                lastPanY = pos.y;
-                if (dx || dy) panMoved = true;
-
-                this.stage.position({
-                    x: this.stage.x() + dx,
-                    y: this.stage.y() + dy
-                });
-                this.stage.batchDraw();
-                // syncGifs 已由 rAF 批处理统一调用
-                return;
-            }
-
             if (this._activePlanReferencePick && !this._planReferencePickTargetId) {
                 this._updatePlanReferencePickPreview(null, e.evt);
             }
@@ -3277,8 +3220,8 @@ export class CanvasManager {
             if (this.graphView?.pending) {
                 return;
             }
-            if (isPanning) {
-                finishPanning();
+            if (this._activeCanvasPanStop) {
+                this._activeCanvasPanStop(e.evt);
                 return;
             }
 
@@ -4226,6 +4169,7 @@ export class CanvasManager {
 
     // ── 清空画布上所有卡片（用于切换文件夹组） ──
     clearAll(options = {}) {
+        this._activeCanvasPanStop?.(null, { commit: false });
         // 生成面板必须在清空之前关闭：它捕获的是打开时刻的 data 对象，
         // 而调用方（撤销/重做、切换文件夹组）会用快照深拷贝替换 storeData.items，
         // renderInitialItems 再以新对象重建 this.items。面板若继续存活，用户
@@ -4638,10 +4582,7 @@ export class CanvasManager {
             ? getThemeColor('accent', '#d5d7db')
             : getThemeColor('canvas-node-border', 'rgba(255,255,255,0.14)'));
         node.strokeWidth(this.selectedItems.has(data.id) ? 2.5 : 1);
-        node.shadowColor?.(getThemeColor('canvas-control-shadow', 'rgba(0,0,0,0.32)'));
-        node.shadowBlur?.(10);
-        node.shadowOffsetY?.(3);
-        node.shadowOpacity?.(0.42);
+        node.shadowEnabled?.(false);
         node.perfectDrawEnabled?.(false);
     }
 
@@ -4660,10 +4601,6 @@ export class CanvasManager {
             stroke: getThemeColor('canvas-node-border', 'rgba(255,255,255,0.14)'),
             strokeWidth: 1,
             cornerRadius: 8,
-            shadowColor: 'rgba(0,0,0,0.32)',
-            shadowBlur: 10,
-            shadowOffsetY: 3,
-            shadowOpacity: 0.42,
             perfectDrawEnabled: false
         }));
 
@@ -4790,6 +4727,7 @@ export class CanvasManager {
     }
 
     _setHoveredMediaItem(itemId = null) {
+        if (this._activeCanvasPanStop) return;
         const nextId = itemId && this.items.has(itemId) ? itemId : null;
         if (this._hoveredMediaItemId === nextId) return;
 
@@ -4970,6 +4908,7 @@ export class CanvasManager {
             name: 'nodeGroup',
             filePath: data.filePath
         });
+        installMediaViewportCulling(group, data);
 
         // 默认占位块（在图片未加载完成前或非图片文件时显示）
         group.add(this._createFallbackGroup(fileType, placeholderSize.width, placeholderSize.height, data.filePath));
@@ -5904,11 +5843,7 @@ export class CanvasManager {
             fill: getThemeColor('canvas-node-bg', '#202123'),
             stroke,
             strokeWidth: status === STATUS.ERROR && !isRecovering ? 1.5 : 1,
-            cornerRadius: 8,
-            shadowColor: getThemeColor('canvas-control-shadow', 'rgba(0, 0, 0, 0.36)'),
-            shadowBlur: 14,
-            shadowOffsetY: 5,
-            shadowOpacity: results[0] ? 0 : 0.5
+            cornerRadius: 8
         });
         group.add(background);
 
@@ -6645,11 +6580,7 @@ export class CanvasManager {
             fill: getThemeColor('canvas-node-bg', '#202123'),
             stroke: status === 'error' ? OP_STATUS_COLORS.error : getThemeColor('canvas-node-border', 'rgba(255,255,255,0.13)'),
             strokeWidth: status === 'error' ? 1.5 : 1,
-            cornerRadius: 8,
-            shadowColor: getThemeColor('canvas-control-shadow', 'rgba(0,0,0,0.32)'),
-            shadowBlur: 12,
-            shadowOffsetY: 4,
-            shadowOpacity: 0.45
+            cornerRadius: 8
         }));
 
         const promptField = data.nodeType === 'text' ? 'text' : 'prompt';
@@ -12808,9 +12739,9 @@ export class CanvasManager {
         editor.style.height = `${metrics.height}px`;
     }
 
-    syncPlanInlineEditors() {
+    syncPlanInlineEditors({ syncGraph = true } = {}) {
         this.planInlineEditors?.forEach((_, planId) => this._positionPlanInlineEditor(planId));
-        this.graphView?.sync();
+        if (syncGraph) this.graphView?.sync();
     }
 
     focusPlanInlineEditor(planId) {
@@ -12888,68 +12819,97 @@ export class CanvasManager {
         }
         event.preventDefault();
         event.stopPropagation();
-        let last = this._getStagePointerFromClient(event.clientX, event.clientY);
+        const origin = this.stage.position();
+        const startX = event.clientX;
+        const startY = event.clientY;
+        let lastX = startX;
+        let lastY = startY;
+        let moved = false;
+        let panFrame = 0;
+        let pendingPosition = null;
         const passthroughElement = options.passthroughElement || null;
         const pointerCaptureElement = options.pointerCaptureElement || null;
         const pointerId = options.pointerId;
-        const previousPointerEvents = passthroughElement?.style?.pointerEvents;
         if (pointerCaptureElement && pointerId != null && pointerCaptureElement.setPointerCapture) {
             try { pointerCaptureElement.setPointerCapture(pointerId); } catch (_) { }
         }
         if (passthroughElement) passthroughElement.classList.add('is-canvas-panning');
+        const previousCursor = document.body.style.cursor;
         document.body.style.cursor = 'grabbing';
+        const dragStates = [[this.stage, this.stage.draggable()]];
         this.stage.draggable(false);
         this._forEachNode(item => {
+            dragStates.push([item.group, item.group.draggable()]);
             item.group.draggable(false);
-            item.group.find?.('.planRowHandle').forEach(handle => handle.draggable(false));
-        });
-        let lastMoveStamp = null;
-
-        const move = (moveEvent) => {
-            moveEvent.preventDefault();
-            const stamp = `${moveEvent.timeStamp}:${moveEvent.clientX}:${moveEvent.clientY}`;
-            if (stamp === lastMoveStamp) return;
-            lastMoveStamp = stamp;
-            const next = this._getStagePointerFromClient(moveEvent.clientX, moveEvent.clientY);
-            this.stage.position({
-                x: this.stage.x() + next.x - last.x,
-                y: this.stage.y() + next.y - last.y
+            item.group.find?.('.planRowHandle').forEach(handle => {
+                dragStates.push([handle, handle.draggable()]);
+                handle.draggable(false);
             });
-            last = next;
+            clearTimeout(item.hoverTimer);
+            item.hoverTimer = null;
+        });
+        // Panning needs no hit testing. Keep the rendered media and their load tokens intact.
+        const listeningStates = this.stage.getLayers().map(layer => [layer, layer.listening()]);
+        listeningStates.forEach(([layer]) => layer.listening(false));
+        const flush = () => {
+            if (panFrame) cancelAnimationFrame(panFrame);
+            panFrame = 0;
+            if (!pendingPosition) return;
+            this.stage.position(pendingPosition);
+            pendingPosition = null;
             this.stage.batchDraw();
-            this.syncPlanInlineEditors();
-            this.syncGifs();
         };
 
-        const stop = (stopEvent = null) => {
+        const move = (moveEvent) => {
             if (this._activeCanvasPanStop !== stop) return;
+            moveEvent.preventDefault();
+            moveEvent.stopPropagation();
+            if (!Number.isFinite(moveEvent.clientX) || !Number.isFinite(moveEvent.clientY)) return;
+            if (lastX === moveEvent.clientX && lastY === moveEvent.clientY) return;
+            lastX = moveEvent.clientX;
+            lastY = moveEvent.clientY;
+            moved = true;
+            pendingPosition = { x: origin.x + lastX - startX, y: origin.y + lastY - startY };
+            if (!panFrame) panFrame = requestAnimationFrame(flush);
+        };
+
+        const stop = (stopEvent = null, { commit = true } = {}) => {
+            if (this._activeCanvasPanStop !== stop) return;
+            if (stopEvent?.type === 'mouseup' || stopEvent?.type === 'pointerup') {
+                move(stopEvent);
+                this.stage.setPointersPositions(stopEvent);
+            }
             stopEvent?.preventDefault?.();
             stopEvent?.stopPropagation?.();
+            flush();
             this._activeCanvasPanStop = null;
-            document.body.style.cursor = 'default';
+            this._suppressStageMenu = moved;
+            document.body.style.cursor = previousCursor || 'default';
             if (passthroughElement) {
-                passthroughElement.style.pointerEvents = previousPointerEvents || '';
                 passthroughElement.classList.remove('is-canvas-panning');
             }
             if (pointerCaptureElement && pointerId != null && pointerCaptureElement.releasePointerCapture) {
                 try { pointerCaptureElement.releasePointerCapture(pointerId); } catch (_) { }
             }
-            this.stage.draggable(true);
-            this._forEachNode(item => {
-                item.group.draggable(true);
-                item.group.find?.('.planRowHandle').forEach(handle => handle.draggable(true));
+            dragStates.forEach(([node, draggable]) => node.draggable(draggable));
+            listeningStates.forEach(([layer, listening]) => {
+                layer.listening(listening);
+                layer.drawHit();
             });
             document.removeEventListener('mousemove', move, true);
             document.removeEventListener('pointermove', move, true);
             document.removeEventListener('mouseup', stop, true);
             document.removeEventListener('pointerup', stop, true);
             document.removeEventListener('pointercancel', stop, true);
-            pointerCaptureElement?.removeEventListener?.('pointermove', move, true);
-            pointerCaptureElement?.removeEventListener?.('pointerup', stop, true);
-            pointerCaptureElement?.removeEventListener?.('pointercancel', stop, true);
             pointerCaptureElement?.removeEventListener?.('lostpointercapture', stop, true);
             window.removeEventListener('blur', stop);
-            this.emit('change');
+            if (commit) {
+                this._syncHoveredMediaItemAtPointer();
+                const hovered = this.items.get(this._hoveredMediaItemId);
+                if (hovered && !hovered.hoverFull) this._scheduleResourceSaverPromote(hovered);
+                this._scheduleCullCheck(0);
+                if (moved) this.emit('change');
+            }
         };
 
         this._activeCanvasPanStop = stop;
@@ -12958,9 +12918,6 @@ export class CanvasManager {
         document.addEventListener('mouseup', stop, true);
         document.addEventListener('pointerup', stop, true);
         document.addEventListener('pointercancel', stop, true);
-        pointerCaptureElement?.addEventListener?.('pointermove', move, true);
-        pointerCaptureElement?.addEventListener?.('pointerup', stop, true);
-        pointerCaptureElement?.addEventListener?.('pointercancel', stop, true);
         pointerCaptureElement?.addEventListener?.('lostpointercapture', stop, true);
         window.addEventListener('blur', stop);
     }
@@ -14231,11 +14188,11 @@ export class CanvasManager {
     }
 
     _scheduleResourceSaverPromote(item) {
-        if (!this.resourceSaverMode || item.isResizing || !item.group.getLayer()) return;
+        if (this._activeCanvasPanStop || !this.resourceSaverMode || item.isResizing || !item.group.getLayer()) return;
         clearTimeout(item.hoverTimer);
         item.hoverTimer = setTimeout(() => {
             item.hoverTimer = null;
-            if (!this.resourceSaverMode || item.isResizing || !item.group.getLayer() || item.hoverFull) return;
+            if (this._activeCanvasPanStop || !this.resourceSaverMode || item.isResizing || !item.group.getLayer() || item.hoverFull) return;
             item.hoverFull = true;
             if (item.loaded || item.loading || item.loadQueued) {
                 this._prepareQualityReload(item, false);
@@ -14248,7 +14205,7 @@ export class CanvasManager {
     _demoteResourceSaverItem(item) {
         clearTimeout(item.hoverTimer);
         item.hoverTimer = null;
-        if (!this.resourceSaverMode || item.isResizing || !item.hoverFull || !item.group.getLayer()) return;
+        if (this._activeCanvasPanStop || !this.resourceSaverMode || item.isResizing || !item.hoverFull || !item.group.getLayer()) return;
         if (item.autoPlayVideo || (item.videoElement && !item.videoElement.paused)) return;
 
         item.hoverFull = false;
@@ -14286,6 +14243,7 @@ export class CanvasManager {
     }
 
     _drainContentLoadQueue() {
+        if (this._activeCanvasPanStop) return;
         while (this._activeContentLoads < this._MAX_CONTENT_LOADS && this._contentLoadQueue.length > 0) {
             const item = this._contentLoadQueue.shift();
             if (!item || item.loaded || item.loading || !item.group.getLayer()) {
