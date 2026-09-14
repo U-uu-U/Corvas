@@ -13,5 +13,20 @@ export function isGenerationRecoveryActive(task) {
 }
 
 export function canRecoverGenerationTask(task) {
-    return ['image', 'video'].includes(task?.kind) && Boolean(task.taskId || task.filePath);
+    return ['image', 'video'].includes(task?.kind)
+        && Boolean(task.filePath || (task.taskId && !isGenerationFailureConfirmed(task)));
+}
+
+export function isGenerationFailureConfirmed(task) {
+    return task?.confirmedFailure === true || task?.errorCode === 'UPSTREAM_TASK_FAILED';
+}
+
+export function generationFailureError(result, fallbackMessage = '请求失败') {
+    const error = new Error(result?.error || fallbackMessage);
+    for (const key of ['code', 'requestId', 'taskId', 'retryable']) {
+        if (result?.[key] !== undefined) error[key] = result[key];
+    }
+    error.confirmedFailure = result?.confirmedFailure === true || result?.code === 'UPSTREAM_TASK_FAILED';
+    if (result?.submissionUnknown === true) error.submissionUnknown = true;
+    return error;
 }

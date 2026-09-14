@@ -12,6 +12,7 @@ import { isMidjourneyImageModel } from './provider-capabilities.js';
 import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from './generation-request-params.js';
 import { inferClosestAspectRatio } from './image-node-settings.js';
 import { restoreReferenceCitations, referenceCitationGuide, withoutReferenceCitationGuide, bindReferenceCitations } from './reference-citations.js';
+import { generationFailureError } from './generation-progress.js';
 
 // ============================================================
 // Flow Canvas — Node Type Definitions (节点类型注册表)
@@ -47,19 +48,6 @@ function throwIfGenerationCanceled(ctx, result = null) {
     error.name = 'AbortError';
     error.code = 'GENERATION_CANCELED';
     throw error;
-}
-
-/**
- * 把主进程返回的失败结果转成 Error，并保留其结构化语义。
- *
- * `submissionUnknown` 表示「服务端可能已受理、结果无法确认」，渲染层据此把任务
- * 归为 disconnected 而不是 failed，从而不引导用户直接重新提交（可能重复计费）。
- * 直接用 new Error(result.error) 会丢掉这个标记，只靠错误文案里的关键词去猜。
- */
-function generationFailureError(result, fallbackMessage = '生图未返回图片') {
-    const error = new Error(result?.error || fallbackMessage);
-    if (result?.submissionUnknown === true) error.submissionUnknown = true;
-    return error;
 }
 
 /** local-res:// URL → 文件路径。上游媒体端口传的都是这个协议。 */
@@ -598,7 +586,7 @@ NODE_TYPES['image'] = {
                 ? filePaths.map(filePath => 'local-res://' + encodeURIComponent(filePath))
                 : [result?.url].filter(Boolean);
             if (!imageUrls.length) {
-                const failure = generationFailureError(result);
+                const failure = generationFailureError(result, '生图未返回图片');
                 if (clientTaskId) ctx?.recordGenerationError?.(clientTaskId, failure);
                 intent?.finish({
                     ...imageProviderSummary(provider),
@@ -839,7 +827,7 @@ NODE_TYPES['video'] = {
                     addToCanvas: false
                 });
                 throwIfGenerationCanceled(ctx, result);
-                if (result?.success === false) throw new Error(result.error || '视频生成请求失败');
+                if (result?.success === false) throw generationFailureError(result, '视频生成请求失败');
             } catch (error) {
                 if (clientTaskId) ctx?.recordGenerationError?.(clientTaskId, error);
                 throw error;

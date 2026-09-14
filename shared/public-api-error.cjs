@@ -1,4 +1,6 @@
 const CATALOG = Object.freeze({
+    RH_PORTRAIT_SELF_REQUIRED: [400, '参考图触发肖像保护限制：当前模型仅支持生成包含本人肖像的视频。请更换符合要求的参考图，或移除参考图改用纯文字生成。'],
+    RH_PORTRAIT_RESTRICTED: [400, '参考图未通过人脸或肖像保护检查。请更换符合当前模型要求的参考图，或移除参考图改用纯文字生成。'],
     RH_INVALID_REQUEST: [400, '\u8bf7\u6c42\u53c2\u6570\u4e0d\u53d7\u652f\u6301\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u3001\u65f6\u957f\u3001\u5c3a\u5bf8\u548c\u7d20\u6750\u6570\u91cf\u3002'],
     RH_AUTH_FAILED: [401, '\u63a5\u53e3\u8ba4\u8bc1\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5 API \u914d\u7f6e\u6216\u8054\u7cfb\u7ba1\u7406\u5458\u3002'],
     RH_PERMISSION_DENIED: [403, '\u5f53\u524d\u8bf7\u6c42\u65e0\u8bbf\u95ee\u6743\u9650\uff0c\u8bf7\u68c0\u67e5\u8d26\u6237\u548c\u6a21\u578b\u6743\u9650\u3002'],
@@ -33,8 +35,10 @@ function failureNode(value, depth = 0) {
     const error = value.error || value.Error;
     const hasError = typeof error === 'string' ? Boolean(error.trim()) : error === true
         || (error && typeof error === 'object' && !Array.isArray(error) && Boolean(error.message || error.msg || error.code || error.type));
+    const hasFailureReason = ['failReason', 'fail_reason', 'failure_reason', 'error_message', 'errorMessage']
+        .some(key => typeof value[key] === 'string' && value[key].trim());
     if (FAILED.has(state) || value.success === false || value.ok === false || value.type === 'error'
-        || value.type === 'response.failed' || hasError
+        || value.type === 'response.failed' || hasError || hasFailureReason
         || (code != null && !['0', '1', '200', '201', '202', '10000', 'ok', 'success'].includes(String(code).toLowerCase())
             && (value.message || value.msg || value.description || value.status_msg))) return value;
     for (const key of WRAPPERS) {
@@ -68,23 +72,32 @@ function isTerminalFailure(value) {
 }
 
 // Only classify error fields. Never inspect prompts, model output or media content.
-function errorText(value) {
+function errorText(value, depth = 0) {
+    if (depth > 8) return '';
     const node = failureNode(value) || value;
     if (typeof node === 'string') return node.slice(0, 16384);
     if (!node || typeof node !== 'object') return '';
-    return ['error', 'Error', 'code', 'type', 'message', 'msg', 'description', 'failReason', 'status_msg']
+    const direct = ['error', 'Error', 'code', 'type', 'message', 'msg', 'description',
+        'failReason', 'fail_reason', 'failure_reason', 'error_message', 'errorMessage', 'status_msg']
         .filter(key => own(node, key)).map(key => {
             const field = node[key];
             if (typeof field === 'string' || typeof field === 'number') return String(field);
-            if (field && typeof field === 'object') return ['code', 'type', 'message', 'msg'].map(k => String(field[k] || '')).join(' ');
+            if (field && typeof field === 'object') return errorText(field, depth + 1);
             return '';
-        }).join(' ').slice(0, 16384);
+        }).join(' ');
+    const nested = WRAPPERS.map(key => {
+        const failed = failureNode(node[key]);
+        return failed ? errorText(failed, depth + 1) : '';
+    }).join(' ');
+    return `${direct} ${nested}`.slice(0, 16384);
 }
 
 function classify(status, value, { query = false, terminal = false, transport = false } = {}) {
     const text = errorText(value);
     // An uncertain POST must never turn into an invitation to automatically resubmit.
     if (!query && !terminal && (transport || status === 408 || status >= 500)) return 'RH_SUBMISSION_UNKNOWN';
+    if (/(?:只|仅)支持生成包含(?:您|你)自己(?:的|肖像|人脸)|仅支持(?:本人|自己)(?:的)?肖像|only\s+(?:supports?\s+)?(?:generat\w+\s+)?videos?\s+(?:of|featuring|containing)\s+(?:you\b|yourself\b)|only.{0,60}(?:your own likeness|your own face)/i.test(text)) return 'RH_PORTRAIT_SELF_REQUIRED';
+    if (/肖像保护|人脸.{0,16}(?:保护|限制|不支持|禁止)|(?:portrait|likeness)\s+protection|(?:real(?:istic)?[ -]?(?:people|person|face)|human[ -]?faces?).{0,40}(?:not supported|not allowed|prohibited|restricted)/i.test(text)) return 'RH_PORTRAIT_RESTRICTED';
     if (/content[_ -]?(policy|filter)|safety|moderation|nsfw|\u5185\u5bb9\u5ba1\u6838|\u8fdd\u89c4/i.test(text)) return 'RH_CONTENT_REJECTED';
     if (/insufficient[_ -]?(quota|balance|credit)|quota[_ -]?exceeded|\u4f59\u989d\u4e0d\u8db3|\u989d\u5ea6\u4e0d\u8db3/i.test(text) || status === 402) return 'RH_QUOTA_EXHAUSTED';
     if (/invalid[_ -]?(api[_ -]?key|token)|authentication|unauthorized|\u8ba4\u8bc1.*\u5931\u8d25|\u65e0\u6548.*(?:key|token)/i.test(text)) return 'RH_AUTH_FAILED';
@@ -104,8 +117,9 @@ function classify(status, value, { query = false, terminal = false, transport = 
 
 function publicFailure(status, payload, options = {}) {
     const value = parsePayload(payload) || payload;
-    const terminal = options.terminal === true;
-    const code = Object.hasOwn(CATALOG, options.code || '') ? options.code : classify(status, value, options);
+    const explicitFailure = options.terminal === true || (status < 400 && isTerminalFailure(value));
+    const code = Object.hasOwn(CATALOG, options.code || '') ? options.code : classify(status, value, { ...options, terminal: explicitFailure });
+    const terminal = explicitFailure || code.startsWith('RH_PORTRAIT_');
     const requestId = /^rh_[a-f0-9]{32}$/.test(options.requestId || '') ? options.requestId : null;
     const unknown = code === 'RH_SUBMISSION_UNKNOWN';
     const error = { type: 'ravenhash_error', code, message: CATALOG[code][1],
@@ -115,7 +129,7 @@ function publicFailure(status, payload, options = {}) {
     const body = { error };
     const taskId = safeTaskId(options.taskId) || (terminal ? findTaskId(value) : safeTaskId(value?.task_id));
     if (taskId) Object.assign(body, { id: taskId, task_id: taskId });
-    if (terminal && taskId) body.status = 'failed';
+    if (terminal) body.status = 'failed';
     return { status: terminal && taskId ? 200 : status >= 400 && status <= 599 ? status : CATALOG[code][0], body };
 }
 
@@ -126,17 +140,18 @@ function readPublicError(payload) {
     const error = node?.error;
     if (error?.type !== 'ravenhash_error' || !Object.hasOwn(CATALOG, error.code)) return null;
     const requestId = /^rh_[a-f0-9]{32}$/.test(error.request_id || '') ? error.request_id : null;
+    const confirmedFailure = isTerminalFailure(value) || error.code.startsWith('RH_PORTRAIT_');
     return { code: error.code, requestId, submissionUnknown: error.code === 'RH_SUBMISSION_UNKNOWN',
-        retryable: error.retryable === true,
+        taskId: findTaskId(value), confirmedFailure,
+        retryable: !confirmedFailure && error.retryable === true,
         message: CATALOG[error.code][1] + (requestId ? `\n\u6392\u67e5\u7f16\u53f7\uff1a${requestId}` : '') };
 }
 
 function publicErrorResult(payload) {
     const error = readPublicError(payload);
-    const value = parsePayload(payload);
     return error ? { success: false, error: error.message, code: error.code, requestId: error.requestId,
         submissionUnknown: error.submissionUnknown, retryable: error.retryable,
-        taskId: safeTaskId(value?.task_id), confirmedFailure: isTerminalFailure(value) } : null;
+        taskId: error.taskId, confirmedFailure: error.confirmedFailure } : null;
 }
 
 function mapLocalError(status, payload, options = {}) {
@@ -145,8 +160,8 @@ function mapLocalError(status, payload, options = {}) {
     const statusSuffix = statusCode >= 400 && statusCode <= 599 ? `（HTTP ${statusCode}）` : '';
     if (mapped) return {
         success: false, error: mapped.message + statusSuffix, code: mapped.code, requestId: mapped.requestId,
-        submissionUnknown: mapped.submissionUnknown, retryable: mapped.retryable,
-        taskId: mapped.taskId, confirmedFailure: mapped.confirmedFailure
+        submissionUnknown: mapped.submissionUnknown, retryable: options.terminal ? false : mapped.retryable,
+        taskId: mapped.taskId || safeTaskId(options.taskId), confirmedFailure: mapped.confirmedFailure || options.terminal === true
     };
     const result = publicFailure(statusCode, payload, options);
     return {

@@ -2,6 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentSidebar } from './agent-sidebar.js';
 
+test('portrait task failures are not treated as disconnections or primary recovery actions', () => {
+    const task = { id: 'portrait', kind: 'video', status: 'running', taskId: 'remote', prompt: 'portrait', params: { nodeId: 'node' } };
+    const sidebar = Object.assign(Object.create(AgentSidebar.prototype), {
+        generationTasks: [task], options: {}, taskHistoryFilter: 'all', taskHistoryList: { innerHTML: '' },
+        _saveGenerationTasks() {}
+    });
+    const error = sidebar._generationFailureError({ error: '参考图触发肖像保护限制，非网络断连',
+        code: 'RH_PORTRAIT_SELF_REQUIRED', confirmedFailure: true, retryable: false });
+    sidebar.recordGenerationError(task.id, error);
+    const failed = sidebar.generationTasks[0];
+    assert.equal(failed.status, 'failed');
+    assert.equal(failed.errorCode, 'RH_PORTRAIT_SELF_REQUIRED');
+    assert.equal(failed.params.syncStage, 'portrait_rejected');
+    assert.equal(sidebar.getGenerationRecoveryTaskForNode('node'), null);
+    const html = sidebar.taskHistoryList.innerHTML;
+    assert.match(html, /肖像保护限制/);
+    assert.doesNotMatch(html, /data-retry-task=/);
+    assert.ok(html.indexOf('data-recover-task=') < html.indexOf('</details>'), 'Manual recovery stays inside collapsed advanced controls');
+});
+
 test('node prompt presets remain independent by project and media kind without workspace DOM', t => {
     const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
     const values = new Map();

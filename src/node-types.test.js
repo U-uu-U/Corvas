@@ -33,6 +33,15 @@ function trackedNodeContext(t, kind, model, generate) {
     return { calls, tasks, updates, failures, ctx };
 }
 
+test('video node preserves portrait rejection identity and terminal state in its task record', async t => {
+    const h = trackedNodeContext(t, 'video', 'sd2.5-route1', async () => ({ success: false,
+        error: '参考图触发肖像保护限制', code: 'RH_PORTRAIT_SELF_REQUIRED', confirmedFailure: true, retryable: false }));
+    await assert.rejects(helpers.NODE_TYPES.video.execute({}, { prompt: 'portrait test', duration: 30, resolution: '720p', count: 1 }, h.ctx),
+        error => error.code === 'RH_PORTRAIT_SELF_REQUIRED' && error.confirmedFailure === true && error.retryable === false);
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.failures[0].error.confirmedFailure, true);
+});
+
 test('image execute: a failed batch retains all late successful images in partialOutput', async t => {
     const failure = Object.assign(new Error('Image request failed'), { code: 'UPSTREAM_TASK_FAILED' });
     const filePaths = ['C:/output/late-a.png', 'C:/output/late-b.png'];

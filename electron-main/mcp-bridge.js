@@ -234,7 +234,7 @@ class FlowCanvasBridge {
         this.boardToolRequestTimeoutMs = sanitizeBoardToolTimeout(boardToolRequestTimeoutMs);
     }
 
-    async _runCancelableGeneration(clientTaskId, action) {
+    async _runCancelableGeneration(clientTaskId, action, recordId = clientTaskId) {
         const id = String(clientTaskId || '').trim();
         const controller = new AbortController();
         const canceledUntil = id ? Number(this.canceledGenerationRequests.get(id)) || 0 : 0;
@@ -252,6 +252,15 @@ class FlowCanvasBridge {
             return result;
         } catch (error) {
             recordDiagnostic('error', 'generation.failed', { clientTaskId: id, canceled: controller.signal.aborted, error });
+            if (error.confirmedFailure === true && !controller.signal.aborted
+                && this.activeGenerationRequests.get(id) === controller && this.recoveryStore.get(recordId)) {
+                try {
+                    this.recoveryStore.update(recordId, { state: 'failed', confirmedFailure: true,
+                        errorCode: error.code, error: error.message });
+                } catch (checkpointError) {
+                    recordDiagnostic('error', 'generation.failure_checkpoint_failed', { clientTaskId: recordId, error: checkpointError });
+                }
+            }
             throw error;
         } finally {
             if (id && this.activeGenerationRequests.get(id) === controller) {
@@ -298,6 +307,7 @@ class FlowCanvasBridge {
             providerId: body.providerConfig?.sourceProviderId || body.providerConfig?.id || null,
             endpoint: body.providerConfig?.endpoint || '', model: body.providerConfig?.model || body.model || '',
             prompt: body.prompt || '', taskId: null, result: null, location: null,
+            confirmedFailure: false, errorCode: null, error: null,
             promptDraftConfig: body.promptDraftConfig, referenceBindings: body.referenceBindings, userPrompt: body.userPrompt,
             params, sourcePaths: (body.sourceReferences || []).map(reference => reference.filePath).filter(Boolean),
             targetDir: body.targetDir || null, state: 'submitting', createdAt: new Date().toISOString()
@@ -324,7 +334,7 @@ class FlowCanvasBridge {
                 endpoint: body.providerConfig?.endpoint, model: body.providerConfig?.model,
                 providerId: body.providerConfig?.sourceProviderId || body.providerConfig?.id });
         }
-        this.recoveryStore.update(body.clientTaskId, { result, state: 'downloaded',
+        this.recoveryStore.update(body.clientTaskId, { result, state: 'downloaded', confirmedFailure: false, errorCode: null, error: null,
             ...(result.targetDir ? { targetDir: result.targetDir } : {}),
             ...(result.taskId ? { taskId: result.taskId } : {}) });
     }
@@ -368,7 +378,7 @@ class FlowCanvasBridge {
                     nodeId: request.nodeId, endpoint: config.endpoint, model: config.model, prompt: request.prompt,
                     promptDraftConfig: request.promptDraftConfig, referenceBindings: request.referenceBindings, userPrompt: request.userPrompt,
                     providerId: existing?.providerId || config.sourceProviderId || config.id,
-                    result: null, location: request.location || null, state: 'recovering' });
+                    result: null, location: request.location || null, state: 'recovering', confirmedFailure: false, errorCode: null, error: null });
                 result = await (kind === 'video' ? this._resumeVideoFromRenderer(request, signal)
                     : this._resumeImageFromRenderer(request, signal));
                 this._rememberResult(request, result);
@@ -381,7 +391,7 @@ class FlowCanvasBridge {
                 projectId: request.projectId, filePath: result.filePath, filePaths: result.filePaths,
                 recovered: true, nodeId: attached.nodeId });
             return { ...result, ...attached, taskId: result.taskId || taskId, recovered: true };
-        });
+        }, clientTaskId);
         this.recoveryRequests.set(key, work);
         try { return await work; }
         finally { if (this.recoveryRequests.get(key) === work) this.recoveryRequests.delete(key); }
@@ -2296,7 +2306,8 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
         };
     } catch (error) {
         return { success: false, error: error.message, code: error.code,
-            submissionUnknown: error.submissionUnknown === true, requestId: error.requestId };
+            submissionUnknown: error.submissionUnknown === true, requestId: error.requestId,
+            confirmedFailure: error.confirmedFailure === true, retryable: error.retryable, taskId: error.taskId };
     }
 }
 
@@ -2951,6 +2962,8 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
             }
             throw error;
         }
+        const queryFailure = !response.ok ? mapLocalError(response.status, text, { query: true, taskId: currentTaskId }) : null;
+        if (queryFailure?.confirmedFailure) throw Object.assign(new Error(queryFailure.error), queryFailure);
         if ([400, 404].includes(response.status) && isRecoveringSubmission && recoveryNotFoundCount < 24) {
             recoveryNotFoundCount += 1;
             taskUrlIndex = 0;
@@ -2975,10 +2988,9 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
         transientFailures = 0;
         const payloadError = getVideoPayloadError(payload);
         if (payloadError && !getVideoResultUrl(payload)) {
-            const mapped = mapLocalError(200, payload, { query: true, terminal: isFailedVideoStatus(getVideoTaskStatus(payload)) });
+            const mapped = mapLocalError(200, payload, { query: true, terminal: isFailedVideoStatus(getVideoTaskStatus(payload)), taskId: currentTaskId });
             throw Object.assign(new Error(mapped.error), mapped,
-                { code: isFailedVideoStatus(getVideoTaskStatus(payload)) ? 'UPSTREAM_TASK_FAILED' : mapped.code,
-                    confirmedFailure: isFailedVideoStatus(getVideoTaskStatus(payload)) });
+                { code: mapped.code === 'RH_TASK_FAILED' ? 'UPSTREAM_TASK_FAILED' : mapped.code });
         }
         const resolvedTaskId = getVideoTaskId(payload);
         if (resolvedTaskId && resolvedTaskId !== currentTaskId) {
@@ -2994,8 +3006,8 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
             return { payload, url, taskId: currentTaskId };
         }
         if (isFailedVideoStatus(taskStatus)) {
-            const mapped = mapLocalError(200, payload, { query: true, terminal: true });
-            throw Object.assign(new Error(mapped.error), mapped, { code: 'UPSTREAM_TASK_FAILED', confirmedFailure: true });
+            const mapped = mapLocalError(200, payload, { query: true, terminal: true, taskId: currentTaskId });
+            throw Object.assign(new Error(mapped.error), mapped, { code: mapped.code === 'RH_TASK_FAILED' ? 'UPSTREAM_TASK_FAILED' : mapped.code });
         }
         if (isCompletedVideoStatus(taskStatus) && !url && ++emptyCompleted > 12) {
             throw new Error(`视频任务 ${currentTaskId} 已完成，但上游尚未返回产物地址；可稍后再次拉取`);
@@ -3407,6 +3419,10 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             return mapped;
         }
         const taskId = getVideoTaskId(initialResponse);
+        if (getVideoPayloadError(initialResponse) && !getVideoResultUrl(initialResponse)) {
+            if (taskId) options.onTaskSubmitted?.({ taskId, model, initialResponse });
+            return mapLocalError(200, initialResponse, { query: false, taskId });
+        }
         if (!taskId && !getVideoResultUrl(initialResponse)) {
             const mapped = mapLocalError(200, initialResponse, { query: true, terminal: false });
             const reason = mapped.error || '服务端没有返回任务 ID 或视频地址';
@@ -3458,7 +3474,8 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         };
     } catch (error) {
         return { success: false, error: error.message || String(error), code: error.code,
-            submissionUnknown: error.submissionUnknown === true, requestId: error.requestId };
+            submissionUnknown: error.submissionUnknown === true, requestId: error.requestId,
+            confirmedFailure: error.confirmedFailure === true, retryable: error.retryable, taskId: error.taskId };
     }
 }
 

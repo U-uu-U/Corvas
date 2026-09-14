@@ -33,7 +33,7 @@ import {
     getGeneratorPlaceholderSize,
     getGeneratorSplitPositions
 } from './generator-placeholder-layout.js';
-import { formatGenerationElapsed, isGenerationRecoveryActive, canRecoverGenerationTask } from './generation-progress.js';
+import { formatGenerationElapsed, isGenerationRecoveryActive, canRecoverGenerationTask, isGenerationFailureConfirmed } from './generation-progress.js';
 import {
     clearGeneratorResults,
     ensureGeneratorResultEntries,
@@ -5742,8 +5742,9 @@ export class CanvasManager {
         const isRecovering = isGenerationRecoveryActive(recoveryTask);
         const results = ensureGeneratorResultEntries(data);
         const resultCount = results.length;
-        const isRecoverable = ['disconnected', 'failed', 'canceled'].includes(recoveryTask?.status)
-            || (recoveryTask?.status === 'success' && !resultCount && canRecoverGenerationTask(recoveryTask));
+        const isRecoverable = (!isGenerationFailureConfirmed(recoveryTask) || Boolean(recoveryTask?.filePath))
+            && (['disconnected', 'failed', 'canceled'].includes(recoveryTask?.status)
+                || (recoveryTask?.status === 'success' && !resultCount && canRecoverGenerationTask(recoveryTask)));
         const isBusy = recoveryTask ? recoveryTask.status === 'running'
             : status === STATUS.QUEUED || status === STATUS.RUNNING;
         const stroke = isRecoverable

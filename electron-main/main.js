@@ -2462,6 +2462,10 @@ ipcMain.handle('mcp:image:generate', async (_, body) => {
             // 而渲染层需要它来区分「结果未知」与「确定失败」——前者绝不能
             // 引导用户直接重新提交（可能重复计费）。
             submissionUnknown: err?.submissionUnknown === true,
+            code: err?.code,
+            confirmedFailure: err?.confirmedFailure === true,
+            retryable: err?.retryable,
+            requestId: err?.requestId,
             error: err.message
         };
     }
@@ -2502,6 +2506,11 @@ ipcMain.handle('mcp:video:generate', async (_, body) => {
         return {
             success: false,
             canceled: err?.code === 'GENERATION_CANCELED' || err?.name === 'AbortError',
+            submissionUnknown: err?.submissionUnknown === true,
+            code: err?.code,
+            confirmedFailure: err?.confirmedFailure === true,
+            retryable: err?.retryable,
+            requestId: err?.requestId,
             error: err.message
         };
     }
@@ -3268,6 +3277,8 @@ ipcMain.handle('mcp:generation:recover', async (event, body) => {
         return { success: true, ...await flowCanvasBridge.recoverGenerationFromRenderer(body || {}) };
     } catch (error) {
         return { success: false, error: error.message, code: error.code,
+            confirmedFailure: error.confirmedFailure === true, submissionUnknown: error.submissionUnknown === true,
+            retryable: error.retryable, requestId: error.requestId,
             canceled: error.code === 'GENERATION_CANCELED' || error.name === 'AbortError' };
     }
 });
