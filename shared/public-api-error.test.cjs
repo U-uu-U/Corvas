@@ -66,7 +66,7 @@ for (const [status, raw, code] of [
     assert.equal(result.body.error.message, CATALOG[code][1]);
     assert.equal(result.body.error.request_id, requestId);
     assert.equal(JSON.stringify(result).includes('supplier-secret'), false);
-    assert.equal(Object.keys(result.body).join(','), 'error');
+    assert.equal(Object.keys(result.body).join(','), code === 'RH_CONTENT_REJECTED' ? 'error,status' : 'error');
 });
 
 test('POST transport and 5xx retain unknown outcome without resubmission', () => {
@@ -117,4 +117,71 @@ test('client validates catalogue and reconstructs rather than displays echoed me
     value.error.code = '__proto__';
     assert.equal(readPublicError(value), null);
     assert.equal(publicErrorResult('not-json'), null);
+});
+
+const reviewCases = [
+    ['素材图片包含版权内容，审核未通过', 'RH_REFERENCE_COPYRIGHT'],
+    ['内容审核未通过，请修改后重试', 'RH_CONTENT_REJECTED'],
+    ['提示词审核不通过', 'RH_PROMPT_REJECTED'],
+    ['参考视频未通过内容安全检查', 'RH_REFERENCE_REJECTED'],
+    ['生成结果未通过内容审核', 'RH_OUTPUT_REJECTED'],
+    ['Reference image rejected: copyrighted content', 'RH_REFERENCE_COPYRIGHT'],
+    ['Copyright policy violation', 'RH_COPYRIGHT_REJECTED'],
+    ['prompt_moderation_failed', 'RH_PROMPT_REJECTED'],
+    ['Output video blocked by content filter', 'RH_OUTPUT_REJECTED']
+];
+
+for (const [reason, code] of reviewCases) test(`review reason preserves its category: ${code} / ${reason}`, () => {
+    const envelopes = [
+        { error: { message: reason, supplier: privateDetail } },
+        { data: { status: 'failed', failure_reason: reason } },
+        { status: 'failed', result: { reason } },
+        { success: false, result: { error: { detail: reason } } },
+        { base_resp: { status_code: 104, status_msg: reason } }
+    ];
+    for (const payload of envelopes) {
+        for (const status of [200, 400, 403, 500]) {
+            const result = mapLocalError(status, payload, { query: true, taskId: 'review-task' });
+            assert.equal(result.code, code);
+            assert.equal(result.confirmedFailure, true);
+            assert.equal(result.retryable, false);
+            assert.equal(result.submissionUnknown, false);
+            assert.equal(result.taskId, 'review-task');
+            assert.doesNotMatch(result.error, /supplier-secret|Bearer|sk-private|服务暂时不可用|未能完成/);
+        }
+    }
+});
+
+test('review service failures, pending review and creative output are not content rejections', () => {
+    for (const reason of ['审核服务暂时不可用', '审核接口超时', 'Moderation service failed', 'copyright service unavailable']) {
+        const result = mapLocalError(503, { error: { message: reason } }, { query: true });
+        assert.equal(result.confirmedFailure, false);
+        assert.equal(result.retryable, true);
+    }
+    for (const payload of [
+        { status: 'pending', message: '内容审核中' },
+        { status: 'processing', description: 'Copyright review pending' },
+        { status: 'completed', prompt: '素材图片包含版权内容，审核未通过', output: { content: '内容审核未通过' } },
+        { choices: [{ message: { content: '生成结果未通过内容审核' } }] }
+    ]) assert.equal(failureNode(payload), null);
+    const unknown = mapLocalError(200, { status: 'failed', reason: privateDetail }, { query: true });
+    assert.equal(unknown.code, 'RH_TASK_FAILED');
+    assert.equal(unknown.confirmedFailure, true);
+    assert.doesNotMatch(unknown.error, /supplier-secret|Bearer/);
+    assert.equal(mapLocalError(502, { error: { message: reviewCases[0][0] } }).submissionUnknown, true);
+});
+
+test('public review errors cannot lose terminal state or echo a substituted sensitive message', () => {
+    for (const [reason, code] of reviewCases) {
+        const value = publicFailure(200, { error: reason }, { query: true, taskId: 'review-task' }).body;
+        value.error.message = privateDetail;
+        value.error.retryable = true;
+        for (const result of [publicErrorResult(value), mapLocalError(200, value, { query: true })]) {
+            assert.equal(result.code, code);
+            assert.equal(result.confirmedFailure, true);
+            assert.equal(result.retryable, false);
+            assert.equal(result.taskId, 'review-task');
+            assert.equal(result.error, CATALOG[code][1]);
+        }
+    }
 });

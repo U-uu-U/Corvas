@@ -34,7 +34,7 @@ import { reconcileApiConfig } from './api-config-recovery.js';
 import { CANCELED_IMAGE_REFERENCES } from './node-types.js';
 import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from './generation-request-params.js';
 import { requestRecoveryTaskId } from './generation-recovery-dialog.js';
-import { canRecoverGenerationTask, generationFailureError, isGenerationFailureConfirmed } from './generation-progress.js';
+import { canRecoverGenerationTask, generationFailureError, isGenerationFailureConfirmed, getGenerationRejectionInfo } from './generation-progress.js';
 import { showStatusNotification } from './status-notification.js';
 import { getVideoModelProfile, describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
 import { getModelPresentation, describeModelPresentation } from '../shared/model-presentation.mjs';
@@ -2876,6 +2876,7 @@ export class AgentSidebar {
         const current = this.generationTasks.find(task => task.id === taskId);
         if (current?.status === 'canceled') return current;
         const message = error?.message || String(error || '请求失败');
+        const rejection = getGenerationRejectionInfo(error?.code);
         const promptModerationFailed = current?.kind === 'video'
             && Boolean(current?.taskId)
             && this._isVideoPromptModerationFailure(message);
@@ -2884,8 +2885,8 @@ export class AgentSidebar {
             error: message,
             errorCode: error?.code || null,
             confirmedFailure: error?.confirmedFailure === true || error?.code === 'UPSTREAM_TASK_FAILED',
-            ...(error?.code?.startsWith('RH_PORTRAIT_') ? {
-                params: { syncStage: 'portrait_rejected' }
+            ...(rejection ? {
+                params: { syncStage: rejection.stage }
             } : promptModerationFailed ? {
                 params: { syncStage: 'prompt_moderation_failed' }
             } : {})
@@ -3108,7 +3109,8 @@ export class AgentSidebar {
             const promptModerationFailed = task.kind === 'video'
                 && task.params?.syncStage === 'prompt_moderation_failed'
                 && Boolean(task.taskId);
-            if (status === 'failed' && task.params?.syncStage === 'portrait_rejected') syncStageLabel = '肖像保护限制';
+            const rejection = getGenerationRejectionInfo(task.errorCode);
+            if (status === 'failed' && rejection) syncStageLabel = rejection.label;
             const canRetry = !confirmedFailure && !task.taskId && !task.filePath && (status === 'failed' || status === 'disconnected');
             const retryLabel = '重新提交';
             const errorCopy = status === 'disconnected'
@@ -3237,7 +3239,8 @@ export class AgentSidebar {
                     task.confirmedFailure = true;
                     task.errorCode = record.errorCode;
                     task.error = record.error || task.error;
-                    if (record.errorCode?.startsWith('RH_PORTRAIT_')) task.params = { ...task.params, syncStage: 'portrait_rejected' };
+                    const rejection = getGenerationRejectionInfo(record.errorCode);
+                    if (rejection) task.params = { ...task.params, syncStage: rejection.stage };
                 }
                 task.params = { ...task.params, nodeId: task.params?.nodeId || record.nodeId,
                     targetDir: record.targetDir || task.params?.targetDir };
@@ -3281,10 +3284,11 @@ export class AgentSidebar {
             });
             if (result?.success === false) {
                 const error = this._generationFailureError(result);
+                const rejection = getGenerationRejectionInfo(error.code);
                 this._updateGenerationTask(taskId, {
                     status: result.canceled ? 'canceled' : error.confirmedFailure ? 'failed' : 'disconnected',
                     error: error.message, errorCode: error.code || null, confirmedFailure: error.confirmedFailure,
-                    ...(error.code?.startsWith('RH_PORTRAIT_') ? { params: { syncStage: 'portrait_rejected' } } : {})
+                    ...(rejection ? { params: { syncStage: rejection.stage } } : {})
                 });
                 return;
             }

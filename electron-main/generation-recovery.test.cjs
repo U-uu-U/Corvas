@@ -23,6 +23,27 @@ test('portrait failures stop polling immediately for both HTTP and business-erro
     }
 });
 
+for (const kind of ['image', 'video']) test(`${kind} polling surfaces copyright and content rejection without another query`, async () => {
+    const poll = Bridge[kind === 'image' ? 'pollOpenAiImageTask' : 'pollOpenAiVideoTask'];
+    for (const [reason, code] of [['素材图片包含版权内容，审核未通过', 'RH_REFERENCE_COPYRIGHT'],
+        ['内容审核未通过，请修改后重试', 'RH_CONTENT_REJECTED']]) {
+        for (const status of [200, 400, 500]) {
+            let calls = 0;
+            await assert.rejects(poll('https://api.test/v1/images/generations', 'test-key', 'review-task', { status: 'pending' }, {
+                wait: async () => assert.fail('known rejection must not keep polling'),
+                fetchTask: async (_url, init) => {
+                    assert.equal(init.method, 'GET');
+                    calls++;
+                    return { response: { ok: status === 200, status, headers: new Headers() },
+                        text: JSON.stringify({ result: { error: { reason: reason + ' supplier-secret.internal' } } }) };
+                }
+            }), error => error.code === code && error.confirmedFailure === true && error.retryable === false
+                && error.taskId === 'review-task' && !error.message.includes('supplier-secret'));
+            assert.equal(calls, 1);
+        }
+    }
+});
+
 test('terminal rejection during recovery is persisted under the original task ID', async t => {
     const { bridge, body, directory } = setup(t);
     const failure = mapLocalError(200, { error: portraitReason }, { query: true, taskId: 'remote' });

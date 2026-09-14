@@ -2,6 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentSidebar } from './agent-sidebar.js';
 
+for (const [code, label] of [['RH_REFERENCE_COPYRIGHT', '参考素材版权限制'], ['RH_CONTENT_REJECTED', '内容审核未通过']]) {
+    test(`task history retains ${code} as a failure rather than a disconnect`, () => {
+        const sidebar = Object.assign(Object.create(AgentSidebar.prototype), {
+            generationTasks: [{ id: 'review', kind: 'video', status: 'running', taskId: 'remote', params: { nodeId: 'node' } }],
+            options: {}, taskHistoryFilter: 'all', taskHistoryList: { innerHTML: '' }, _saveGenerationTasks() {}
+        });
+        sidebar.recordGenerationError('review', sidebar._generationFailureError({ code, error: label, confirmedFailure: true }));
+        const failed = sidebar.generationTasks[0];
+        assert.equal(failed.status, 'failed');
+        assert.equal(failed.errorCode, code);
+        assert.equal(failed.confirmedFailure, true);
+        assert.equal(sidebar.getGenerationRecoveryTaskForNode('node'), null);
+        assert.ok(sidebar.taskHistoryList.innerHTML.includes(label));
+        assert.doesNotMatch(sidebar.taskHistoryList.innerHTML, /data-retry-task/);
+    });
+}
+
 test('portrait task failures are not treated as disconnections or primary recovery actions', () => {
     const task = { id: 'portrait', kind: 'video', status: 'running', taskId: 'remote', prompt: 'portrait', params: { nodeId: 'node' } };
     const sidebar = Object.assign(Object.create(AgentSidebar.prototype), {

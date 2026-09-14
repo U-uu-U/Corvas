@@ -1,4 +1,9 @@
 const CATALOG = Object.freeze({
+    RH_REFERENCE_COPYRIGHT: [400, '参考素材触发版权保护，审核未通过。请更换为有权使用且符合模型要求的素材后重新提交。'],
+    RH_COPYRIGHT_REJECTED: [400, '本次生成触发版权保护，审核未通过。请检查提示词与参考素材，调整后重新提交。'],
+    RH_PROMPT_REJECTED: [400, '提示词审核未通过，请修改提示词后重新提交。'],
+    RH_REFERENCE_REJECTED: [400, '参考素材审核未通过，请更换或调整参考素材后重新提交。'],
+    RH_OUTPUT_REJECTED: [400, '生成结果未通过内容审核，未返回可用产物。请调整提示词或参考素材后重新提交。'],
     RH_PORTRAIT_SELF_REQUIRED: [400, '参考图触发肖像保护限制：当前模型仅支持生成包含本人肖像的视频。请更换符合要求的参考图，或移除参考图改用纯文字生成。'],
     RH_PORTRAIT_RESTRICTED: [400, '参考图未通过人脸或肖像保护检查。请更换符合当前模型要求的参考图，或移除参考图改用纯文字生成。'],
     RH_INVALID_REQUEST: [400, '\u8bf7\u6c42\u53c2\u6570\u4e0d\u53d7\u652f\u6301\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u3001\u65f6\u957f\u3001\u5c3a\u5bf8\u548c\u7d20\u6750\u6570\u91cf\u3002'],
@@ -7,7 +12,7 @@ const CATALOG = Object.freeze({
     RH_QUOTA_EXHAUSTED: [402, '\u53ef\u7528\u989d\u5ea6\u4e0d\u8db3\uff0c\u8bf7\u68c0\u67e5\u8d26\u6237\u989d\u5ea6\u6216\u8054\u7cfb\u7ba1\u7406\u5458\u3002'],
     RH_RATE_LIMITED: [429, '\u8bf7\u6c42\u8fc7\u4e8e\u9891\u7e41\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002'],
     RH_MODEL_UNAVAILABLE: [503, '\u5f53\u524d\u6a21\u578b\u6682\u4e0d\u53ef\u7528\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u6216\u9009\u62e9\u5176\u4ed6\u6a21\u578b\u3002'],
-    RH_CONTENT_REJECTED: [400, '\u63d0\u793a\u8bcd\u6216\u53c2\u8003\u7d20\u6750\u672a\u901a\u8fc7\u5185\u5bb9\u68c0\u67e5\uff0c\u8bf7\u8c03\u6574\u540e\u518d\u8bd5\u3002'],
+    RH_CONTENT_REJECTED: [400, '内容审核未通过，请检查提示词和参考素材，修改后重新提交。'],
     RH_MEDIA_TOO_LARGE: [413, '\u7d20\u6750\u8d85\u8fc7\u63a5\u53e3\u5927\u5c0f\u9650\u5236\uff0c\u8bf7\u538b\u7f29\u7d20\u6750\u540e\u518d\u8bd5\u3002'],
     RH_MEDIA_UNREADABLE: [400, '\u53c2\u8003\u7d20\u6750\u65e0\u6cd5\u8bfb\u53d6\uff0c\u8bf7\u91cd\u65b0\u4e0a\u4f20\u6216\u66f4\u6362\u7d20\u6750\u3002'],
     RH_TASK_NOT_FOUND: [404, '\u6682\u672a\u627e\u5230\u4efb\u52a1\uff0c\u8bf7\u6838\u5bf9\u4efb\u52a1 ID \u548c\u539f API \u8d26\u6237\uff0c\u7a0d\u540e\u91cd\u65b0\u67e5\u8be2\u3002'],
@@ -20,6 +25,10 @@ const CATALOG = Object.freeze({
 });
 const WRAPPERS = ['data', 'result', 'output', 'task', 'response', 'Response', 'base_resp'];
 const FAILED = new Set(['failed', 'failure', 'error', 'rejected', 'cancelled', 'canceled', 'expired']);
+const REASON_FIELDS = ['failReason', 'fail_reason', 'failure_reason', 'error_message', 'errorMessage', 'status_msg'];
+const CONTENT_REJECTION_CODES = new Set(['RH_PORTRAIT_SELF_REQUIRED', 'RH_PORTRAIT_RESTRICTED',
+    'RH_REFERENCE_COPYRIGHT', 'RH_COPYRIGHT_REJECTED', 'RH_PROMPT_REJECTED',
+    'RH_REFERENCE_REJECTED', 'RH_OUTPUT_REJECTED', 'RH_CONTENT_REJECTED']);
 const own = (value, key) => value && Object.hasOwn(value, key);
 
 function parsePayload(value) {
@@ -34,8 +43,8 @@ function failureNode(value, depth = 0) {
     const code = value.code ?? value.status_code;
     const error = value.error || value.Error;
     const hasError = typeof error === 'string' ? Boolean(error.trim()) : error === true
-        || (error && typeof error === 'object' && !Array.isArray(error) && Boolean(error.message || error.msg || error.code || error.type));
-    const hasFailureReason = ['failReason', 'fail_reason', 'failure_reason', 'error_message', 'errorMessage']
+        || (error && typeof error === 'object' && !Array.isArray(error) && Boolean(error.message || error.msg || error.code || error.type || error.reason || error.detail));
+    const hasFailureReason = REASON_FIELDS.filter(key => key !== 'status_msg')
         .some(key => typeof value[key] === 'string' && value[key].trim());
     if (FAILED.has(state) || value.success === false || value.ok === false || value.type === 'error'
         || value.type === 'response.failed' || hasError || hasFailureReason
@@ -74,11 +83,11 @@ function isTerminalFailure(value) {
 // Only classify error fields. Never inspect prompts, model output or media content.
 function errorText(value, depth = 0) {
     if (depth > 8) return '';
+    if (Array.isArray(value)) return value.map(entry => errorText(entry, depth + 1)).join(' ').slice(0, 16384);
     const node = failureNode(value) || value;
     if (typeof node === 'string') return node.slice(0, 16384);
     if (!node || typeof node !== 'object') return '';
-    const direct = ['error', 'Error', 'code', 'type', 'message', 'msg', 'description',
-        'failReason', 'fail_reason', 'failure_reason', 'error_message', 'errorMessage', 'status_msg']
+    const direct = ['error', 'Error', 'code', 'type', 'message', 'msg', 'description', 'reason', 'detail', ...REASON_FIELDS]
         .filter(key => own(node, key)).map(key => {
             const field = node[key];
             if (typeof field === 'string' || typeof field === 'number') return String(field);
@@ -86,8 +95,11 @@ function errorText(value, depth = 0) {
             return '';
         }).join(' ');
     const nested = WRAPPERS.map(key => {
-        const failed = failureNode(node[key]);
-        return failed ? errorText(failed, depth + 1) : '';
+        const nestedValue = node[key];
+        const failed = failureNode(nestedValue);
+        return failed ? errorText(failed, depth + 1)
+            : isTerminalFailure(node) && nestedValue && typeof nestedValue === 'object'
+                ? errorText(nestedValue, depth + 1) : '';
     }).join(' ');
     return `${direct} ${nested}`.slice(0, 16384);
 }
@@ -98,7 +110,22 @@ function classify(status, value, { query = false, terminal = false, transport = 
     if (!query && !terminal && (transport || status === 408 || status >= 500)) return 'RH_SUBMISSION_UNKNOWN';
     if (/(?:只|仅)支持生成包含(?:您|你)自己(?:的|肖像|人脸)|仅支持(?:本人|自己)(?:的)?肖像|only\s+(?:supports?\s+)?(?:generat\w+\s+)?videos?\s+(?:of|featuring|containing)\s+(?:you\b|yourself\b)|only.{0,60}(?:your own likeness|your own face)/i.test(text)) return 'RH_PORTRAIT_SELF_REQUIRED';
     if (/肖像保护|人脸.{0,16}(?:保护|限制|不支持|禁止)|(?:portrait|likeness)\s+protection|(?:real(?:istic)?[ -]?(?:people|person|face)|human[ -]?faces?).{0,40}(?:not supported|not allowed|prohibited|restricted)/i.test(text)) return 'RH_PORTRAIT_RESTRICTED';
-    if (/content[_ -]?(policy|filter)|safety|moderation|nsfw|\u5185\u5bb9\u5ba1\u6838|\u8fdd\u89c4/i.test(text)) return 'RH_CONTENT_REJECTED';
+    const rejected = /未通过|不通过|不予通过|未能通过|违规|违反|拒绝|不允许|禁止|(?:审核|审查|检测|检查|校验).{0,8}失败|reject(?:ed|ion)?|violat(?:ion|es?|ed)|not[_ -]?(?:allowed|supported|pass)|fail(?:ed|ure)?|block(?:ed)?|prohibit(?:ed)?/i;
+    const references = /参考(?:图|素材|图片|视频|音频)|素材|(?:input|reference|uploaded)[_ -]?(?:image|video|audio|media)|image_urls|输入(?:图|素材)/i;
+    const copyright = /版权|著作权|侵权|copyright|intellectual[_ -]?property/i;
+    const reviewUnavailable = /(?:审核|审查|版权|moderation|copyright|safety).{0,30}(?:服务|service|server|接口).{0,20}(?:不可用|超时|异常|失败|unavailable|timeout|timed out|failed)/i.test(text);
+    if (!reviewUnavailable && copyright.test(text) && (rejected.test(text) || /保护|包含|含有|protected|copyrighted/i.test(text))) {
+        return references.test(text) ? 'RH_REFERENCE_COPYRIGHT' : 'RH_COPYRIGHT_REJECTED';
+    }
+    const moderation = /审核|审查|内容安全|安全检查|content[_ .-]?(?:policy|filter|moderation|review)|safety[_ .-]?(?:check|filter)|moderation|nsfw/i;
+    const contentRejected = !reviewUnavailable && ((moderation.test(text) && rejected.test(text))
+        || /content_policy_violation|content_filter(?:ed)?\b|nsfw|违规/i.test(text));
+    if (contentRejected) {
+        if (/生成(?:的)?(?:结果|内容|视频|图片)|产物|(?:generated|output)[_ -]?(?:image|video|content|media|result)|结果审核/i.test(text)) return 'RH_OUTPUT_REJECTED';
+        if (references.test(text)) return 'RH_REFERENCE_REJECTED';
+        if (/提示词|\bprompt\b|prompt[_ .-]/i.test(text)) return 'RH_PROMPT_REJECTED';
+        return 'RH_CONTENT_REJECTED';
+    }
     if (/insufficient[_ -]?(quota|balance|credit)|quota[_ -]?exceeded|\u4f59\u989d\u4e0d\u8db3|\u989d\u5ea6\u4e0d\u8db3/i.test(text) || status === 402) return 'RH_QUOTA_EXHAUSTED';
     if (/invalid[_ -]?(api[_ -]?key|token)|authentication|unauthorized|\u8ba4\u8bc1.*\u5931\u8d25|\u65e0\u6548.*(?:key|token)/i.test(text)) return 'RH_AUTH_FAILED';
     if (/\b(tools?|tool_choice|function[_ -]?calling)\b.*(unsupported|not supported|unknown|not allowed)/i.test(text)) return 'RH_TOOLS_UNSUPPORTED';
@@ -119,7 +146,7 @@ function publicFailure(status, payload, options = {}) {
     const value = parsePayload(payload) || payload;
     const explicitFailure = options.terminal === true || (status < 400 && isTerminalFailure(value));
     const code = Object.hasOwn(CATALOG, options.code || '') ? options.code : classify(status, value, { ...options, terminal: explicitFailure });
-    const terminal = explicitFailure || code.startsWith('RH_PORTRAIT_');
+    const terminal = explicitFailure || CONTENT_REJECTION_CODES.has(code);
     const requestId = /^rh_[a-f0-9]{32}$/.test(options.requestId || '') ? options.requestId : null;
     const unknown = code === 'RH_SUBMISSION_UNKNOWN';
     const error = { type: 'ravenhash_error', code, message: CATALOG[code][1],
@@ -140,7 +167,7 @@ function readPublicError(payload) {
     const error = node?.error;
     if (error?.type !== 'ravenhash_error' || !Object.hasOwn(CATALOG, error.code)) return null;
     const requestId = /^rh_[a-f0-9]{32}$/.test(error.request_id || '') ? error.request_id : null;
-    const confirmedFailure = isTerminalFailure(value) || error.code.startsWith('RH_PORTRAIT_');
+    const confirmedFailure = isTerminalFailure(value) || CONTENT_REJECTION_CODES.has(error.code);
     return { code: error.code, requestId, submissionUnknown: error.code === 'RH_SUBMISSION_UNKNOWN',
         taskId: findTaskId(value), confirmedFailure,
         retryable: !confirmedFailure && error.retryable === true,
@@ -177,4 +204,4 @@ function mapLocalError(status, payload, options = {}) {
 }
 
 module.exports = { CATALOG, parsePayload, failureNode, isTerminalFailure, safeTaskId, findTaskId,
-    publicFailure, readPublicError, publicErrorResult, mapLocalError };
+    publicFailure, readPublicError, publicErrorResult, mapLocalError, errorText };

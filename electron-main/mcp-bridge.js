@@ -41,7 +41,7 @@ const { GenerationRecoveryStore } = require('./generation-recovery-store.cjs');
 const { imageRequestFailure } = require('./image-request-diagnostics.cjs');
 const { namingPrompt, writeGeneratedMedia } = require('./generated-media-names.cjs');
 const { diagnostic: recordDiagnostic } = require('./diagnostics.cjs');
-const { mapLocalError, publicErrorResult } = require('../shared/public-api-error.cjs');
+const { mapLocalError, publicErrorResult, failureNode } = require('../shared/public-api-error.cjs');
 const {
     buildMiniMaxH3RequestBody,
     buildSeedance25RequestBody,
@@ -1951,9 +1951,10 @@ async function pollOpenAiImageTask(generationEndpoint, apiKey, taskId, initialPa
         if (currentImage) return { image: currentImage, payload, taskId };
 
         const status = imageTaskStatus(payload);
-        if (isFailedImageTaskStatus(status)) {
-            const reason = imageTaskErrorMessage(payload) || '服务器未提供失败原因';
-            throw Object.assign(new Error(`图片生成任务失败：${reason}`), { code: 'UPSTREAM_TASK_FAILED' });
+        if (isFailedImageTaskStatus(status) || failureNode(payload)) {
+            const mapped = mapLocalError(200, payload, { query: true, terminal: isFailedImageTaskStatus(status), taskId });
+            throw Object.assign(new Error(mapped.error), mapped,
+                { code: mapped.code === 'RH_TASK_FAILED' ? 'UPSTREAM_TASK_FAILED' : mapped.code });
         }
         if (isCompletedImageTaskStatus(status)) {
             if (++emptyCompleted > 12) throw new Error(`图片任务 ${taskId} 已完成，但上游尚未返回产物地址；可稍后再次拉取`);
@@ -2001,6 +2002,8 @@ async function pollOpenAiImageTask(generationEndpoint, apiKey, taskId, initialPa
             throw error;
         }
 
+        const queryFailure = !response.ok ? mapLocalError(response.status, text, { query: true, taskId }) : null;
+        if (queryFailure?.confirmedFailure) throw Object.assign(new Error(queryFailure.error), queryFailure);
         if ([408, 425, 429, 500, 502, 503, 504, 404].includes(response.status) && ++transientFailures <= 24) {
             retryDelay = Math.min(30000, 2000 * transientFailures);
             if (response.status === 404) taskEndpointIndex = (taskEndpointIndex + 1) % taskEndpoints.length;
@@ -2225,6 +2228,11 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
         let finalPayload = json;
         let image = getGeneratedImageData(finalPayload);
         let taskId = '';
+        if (!image && failureNode(json)) {
+            taskId = getImageTaskId(json, res.status, location);
+            if (taskId) options.onTaskSubmitted?.({ taskId, model, location });
+            return mapLocalError(200, json, { query: false, taskId });
+        }
         if (isImageTaskPayload(json, res.status, location)) {
             taskId = getImageTaskId(json, res.status, location);
             options.onTaskSubmitted?.({
