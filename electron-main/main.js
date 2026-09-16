@@ -2,7 +2,7 @@
 // Corvas — Electron Main Process
 // ============================================================
 
-const { app, BrowserWindow, ipcMain, shell, clipboard, nativeImage, dialog, protocol, net, Menu, screen, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, clipboard, nativeImage, dialog, protocol, net, Menu, screen, safeStorage, session } = require('electron');
 const path = require('path');
 require('./app-identity.cjs').configureAppIdentity(app);
 const util = require('util');
@@ -18,6 +18,7 @@ const { ApiConfigStore } = require('./api-config-store');
 const { fetchModelConfig } = require('./model-config-service.cjs');
 const { DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
 const { mapLocalError } = require('../shared/public-api-error.cjs');
+const { HunyuanAccounts } = require('./hunyuan-accounts.cjs');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -45,6 +46,7 @@ let flowCanvasBridge = null;
 let browserSyncService = null;
 let apiConfigStore = null;
 let agentServices = null;
+let hunyuanAccounts = null;
 let mediaPreviewWasFullScreen = null;
 // 文件移动会让 chokidar 先后报告旧路径 unlink、新路径 add。
 // 这两条事件由 moveFilesToFolder 的结果统一处理，不能再让 renderer 当成真实删除/新增。
@@ -303,6 +305,7 @@ function createWindow() {
     }
 
     mainWindow.on('closed', () => {
+        hunyuanAccounts?.closeAll();
         flowCanvasBridge?.setBoardToolsReady(false, {
             code: 'RENDERER_NOT_READY',
             message: 'Corvas main window was closed'
@@ -1454,6 +1457,19 @@ for (const action of ['list', 'save', 'remove', 'test']) {
         if (!isCurrentMainWindowSender(event)) throw new Error('MCP 请求来源无效');
         if (!agentServices) throw new Error('Agent 服务尚未初始化');
         return agentServices.mcpClient[action](request || {});
+    });
+}
+
+for (const action of ['list', 'save', 'remove', 'open']) {
+    ipcMain.handle(`hunyuan:${action}`, (event, request) => {
+        if (!isCurrentMainWindowSender(event) || event.senderFrame !== mainWindow.webContents.mainFrame) {
+            throw new Error('混元账号请求来源无效');
+        }
+        hunyuanAccounts ||= new HunyuanAccounts({ dataDir: path.join(app.getPath('userData'), 'data'),
+            BrowserWindow, session, onChange: data => {
+                if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hunyuan:changed', data);
+            } });
+        return hunyuanAccounts[action](request || {});
     });
 }
 

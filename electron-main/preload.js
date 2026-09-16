@@ -53,6 +53,18 @@ contextBridge.exposeInMainWorld('flowCanvas', {
         test: request => ipcRenderer.invoke('mcp-client:test', request),
     },
 
+    hunyuan: {
+        list: () => ipcRenderer.invoke('hunyuan:list'),
+        save: account => ipcRenderer.invoke('hunyuan:save', account),
+        remove: request => ipcRenderer.invoke('hunyuan:remove', request),
+        open: request => ipcRenderer.invoke('hunyuan:open', request),
+        onChanged: callback => {
+            const listener = (_, data) => callback(data);
+            ipcRenderer.on('hunyuan:changed', listener);
+            return () => ipcRenderer.removeListener('hunyuan:changed', listener);
+        }
+    },
+
     agent: {
         start: request => ipcRenderer.invoke('agent:start', request),
         get: request => ipcRenderer.invoke('agent:get', request),

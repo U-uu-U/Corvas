@@ -1,0 +1,222 @@
+.hunyuan-cube {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.corvas-app-launcher {
+    position: fixed;
+    z-index: 13005;
+    width: 174px;
+    padding: 6px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--panel-bg);
+    color: var(--text-primary);
+}
+
+.corvas-app-launcher[hidden],
+.hunyuan-accounts-panel[hidden],
+.hunyuan-account-form[hidden],
+.hunyuan-panel-status[hidden] {
+    display: none;
+}
+
+.corvas-app-launcher-label {
+    display: block;
+    padding: 5px 8px 7px;
+    color: var(--text-secondary);
+    font-size: 10px;
+}
+
+.corvas-app-launcher button {
+    display: flex;
+    width: 100%;
+    height: 38px;
+    align-items: center;
+    gap: 10px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.corvas-app-launcher button:hover,
+.corvas-app-launcher button:focus-visible {
+    background: var(--hover-bg);
+    outline: 1px solid var(--border-color);
+}
+
+body.hunyuan-mode.agent-open .agent-sidebar-wrapper {
+    width: 370px;
+    max-width: calc(100vw - 24px);
+}
+
+body.hunyuan-mode .agent-sidebar {
+    display: none;
+}
+
+body.hunyuan-mode.agent-open .agent-toggle-btn {
+    right: min(386px, calc(100vw - 76px));
+}
+
+.hunyuan-accounts-panel {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    overflow: hidden;
+    border-left: 1px solid var(--border-color);
+    background: var(--panel-bg);
+    color: var(--text-primary);
+}
+
+body.platform-win32 .hunyuan-accounts-panel {
+    padding-top: var(--titlebar-h);
+}
+
+.hunyuan-panel-head,
+.hunyuan-panel-head > div,
+.hunyuan-account-toolbar,
+.hunyuan-account-toolbar > button {
+    display: flex;
+    align-items: center;
+}
+
+.hunyuan-panel-head {
+    flex-shrink: 0;
+    justify-content: space-between;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.hunyuan-panel-head > div { gap: 10px; }
+.hunyuan-panel-head h2 { font-size: 14px; font-weight: 600; }
+
+.hunyuan-accounts-panel button {
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.hunyuan-panel-head > button,
+.hunyuan-account-actions button {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    place-items: center;
+}
+
+.hunyuan-accounts-panel button:hover:not(:disabled),
+.hunyuan-accounts-panel button:focus-visible {
+    border-color: var(--border-color);
+    background: var(--hover-bg);
+    color: var(--text-primary);
+}
+
+.hunyuan-accounts-panel button:disabled { opacity: 0.45; cursor: default; }
+.hunyuan-accounts-panel button:focus-visible { outline: 1px solid var(--text-secondary); }
+
+.hunyuan-panel-intro { padding: 22px 20px 18px; }
+.hunyuan-panel-intro strong { font-size: 13px; font-weight: 500; }
+.hunyuan-panel-intro p { margin-top: 8px; color: var(--text-secondary); font-size: 11px; line-height: 1.7; }
+
+.hunyuan-account-toolbar { justify-content: space-between; padding: 0 20px 12px; font-size: 11px; }
+.hunyuan-account-toolbar small { margin-left: 5px; color: var(--text-secondary); }
+.hunyuan-account-toolbar > button { gap: 4px; padding: 5px 7px; }
+.hunyuan-account-toolbar .flow-icon { width: 14px; height: 14px; flex-basis: 14px; }
+
+.hunyuan-account-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 16px 12px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+.hunyuan-account-list::-webkit-scrollbar { width: 5px; }
+.hunyuan-account-list::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--scrollbar-thumb); }
+
+.hunyuan-account {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px 10px;
+    margin-bottom: 8px;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+.hunyuan-account-avatar {
+    display: grid;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    border-radius: 8px;
+    background: var(--hover-bg);
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+.hunyuan-account-copy { min-width: 0; }
+.hunyuan-account-copy strong { display: block; overflow: hidden; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.hunyuan-account-state { display: block; margin-top: 5px; font-size: 10px; color: var(--text-secondary); }
+.hunyuan-account-state.open { color: #82a996; }
+.hunyuan-account-state.error { color: #cd8787; }
+.hunyuan-account .hunyuan-account-open { padding: 6px 9px; border-color: var(--border-color); color: var(--text-primary); }
+.hunyuan-account-actions { display: flex; grid-column: 2 / -1; justify-content: flex-end; gap: 2px; }
+.hunyuan-account-actions .flow-icon { width: 14px; height: 14px; }
+.hunyuan-account-remove { grid-column: 1 / -1; padding-top: 10px; border-top: 1px solid var(--border-color); text-align: right; }
+.hunyuan-account-remove p { margin-bottom: 10px; color: var(--text-secondary); font-size: 11px; line-height: 1.6; text-align: left; }
+.hunyuan-account-remove button { padding: 6px 8px; }
+.hunyuan-account-remove [data-action="confirm-remove"] { color: #cd8787; }
+
+.hunyuan-account-form { margin: 0 20px 12px; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; }
+.hunyuan-account-form label { display: block; margin-bottom: 8px; font-size: 11px; color: var(--text-secondary); }
+.hunyuan-account-form input {
+    width: 100%;
+    min-width: 0;
+    height: 34px;
+    padding: 0 9px;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    outline: none;
+    background: var(--bg-color);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 12px;
+}
+.hunyuan-account-form input:focus { border-color: var(--text-secondary); }
+.hunyuan-account-form > div { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+.hunyuan-account-form button { padding: 5px 12px; }
+.hunyuan-account-form .primary { background: var(--text-primary); color: var(--panel-bg); }
+.hunyuan-panel-status { margin: 0 20px 12px; color: var(--text-secondary); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.hunyuan-panel-status.is-error { color: #cd8787; }
+.hunyuan-accounts-empty { display: grid; justify-items: center; padding: 46px 8px; text-align: center; }
+.hunyuan-accounts-empty > svg { width: 32px; height: 32px; margin-bottom: 18px; color: var(--text-secondary); }
+.hunyuan-accounts-empty strong { font-size: 12px; font-weight: 500; }
+.hunyuan-accounts-empty p { margin-top: 10px; font-size: 11px; line-height: 1.7; color: var(--text-secondary); }
+.hunyuan-panel-footer { display: flex; flex-shrink: 0; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 20px 92px; font-size: 10px; color: var(--text-secondary); }
+.hunyuan-panel-footer button { padding: 5px; }
+
+@media (max-width: 900px) {
+    body.hunyuan-mode.agent-open .agent-sidebar-wrapper {
+        position: fixed;
+        top: var(--titlebar-h);
+        bottom: 0;
+        right: 0;
+        height: auto;
+    }
+    body.platform-win32 .hunyuan-accounts-panel { padding-top: 0; }
+}
