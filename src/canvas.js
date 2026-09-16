@@ -7,6 +7,7 @@ import { installMediaViewportCulling } from './canvas-media-culling.js';
 import { GraphView } from './graph-view.js';
 import { collectUpstreamMediaAttachments, collectUpstreamPromptContext } from './agent-attachments.js';
 import { NODE_TYPES } from './node-types.js';
+import { formatClientGenerationError } from './generation-progress.js';
 import { nodeIconSvg } from './node-icons.js';
 import { GraphRunner, STATUS } from './graph-runner.js';
 import { generationNodeSignature } from '../shared/generation-node-state.mjs';
@@ -14097,7 +14098,7 @@ export class CanvasManager {
     }
 
     _showCanvasStatus(text, timeoutMs = 1800, kind = 'info') {
-        showStatusNotification(text, { kind, duration: timeoutMs });
+        showStatusNotification(formatClientGenerationError(text), { kind, duration: timeoutMs });
     }
 
     _capturePlanInlineFocus(planId) {

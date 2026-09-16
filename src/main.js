@@ -6,6 +6,7 @@ import './light-theme.css';
 import { initTheme } from './theme.js';
 import { initCanvasUiScaleSettings } from './canvas-ui-scale.js';
 import { showStatusNotification } from './status-notification.js';
+import { formatClientGenerationError } from './generation-progress.js';
 import { getGeneratorResultEntries } from './generator-result-stack.js';
 import { initModelConfigUi } from './model-config-ui.js';
 import { SidebarManager } from './sidebar.js';
@@ -633,7 +634,7 @@ function initOptionalModule(name, factory) {
 }
 
 function showStartupError(err, area = 'startup') {
-    showStatusNotification(`Corvas ${area} error: ${err?.message || err}`, {
+    showStatusNotification(formatClientGenerationError(`Corvas ${area} error: ${err?.message || err}`), {
         kind: 'error', onDismiss: () => document.body.classList.remove('app-startup-error')
     });
     document.body.classList.add('app-startup-error');

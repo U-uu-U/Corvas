@@ -17,6 +17,8 @@ test('diagnostics redact credentials, URL queries and media but retain correlati
         filePath: '/Users/private/image.png', cycle }, ['custom-secret']);
     const text = JSON.stringify(data);
     for (const secret of ['private prompt', 'abcdef', 'sk-secret', 'user:pass', 'hidden', 'custom-secret', '/Users/private']) assert.equal(text.includes(secret), false);
+    assert.equal(text.includes('host.test'), false);
+    assert.match(text, /URL 已隐藏/);
     assert.equal(data.taskId, 'task-123');
     assert.match(text, /Circular/);
 });

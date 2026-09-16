@@ -35,7 +35,8 @@ import { reconcileApiConfig } from './api-config-recovery.js';
 import { CANCELED_IMAGE_REFERENCES } from './node-types.js';
 import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from './generation-request-params.js';
 import { requestRecoveryTaskId } from './generation-recovery-dialog.js';
-import { canRecoverGenerationTask, generationFailureError, isGenerationFailureConfirmed, getGenerationRejectionInfo } from './generation-progress.js';
+import { canRecoverGenerationTask, generationFailureError, formatClientGenerationError,
+    isGenerationFailureConfirmed, getGenerationRejectionInfo } from './generation-progress.js';
 import { showStatusNotification } from './status-notification.js';
 import { getVideoModelProfile, describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
 import { getModelPresentation, describeModelPresentation } from '../shared/model-presentation.mjs';
@@ -1007,7 +1008,7 @@ export class AgentSidebar {
     }
 
     _appendAgentError(message) {
-        return this._appendAgentMessageElement('error', message);
+        return this._appendAgentMessageElement('error', formatClientGenerationError(message));
     }
 
     _appendAgentTyping() {
@@ -2876,7 +2877,7 @@ export class AgentSidebar {
         if (this.recoveringGenerationTasks?.has(taskId)) return this.generationTasks.find(task => task.id === taskId);
         const current = this.generationTasks.find(task => task.id === taskId);
         if (current?.status === 'canceled') return current;
-        const message = error?.message || String(error || '请求失败');
+        const message = formatClientGenerationError(error?.message || String(error || '请求失败'));
         const rejection = getGenerationRejectionInfo(error?.code);
         const promptModerationFailed = current?.kind === 'video'
             && Boolean(current?.taskId)
@@ -3115,8 +3116,8 @@ export class AgentSidebar {
             const canRetry = !confirmedFailure && !task.taskId && !task.filePath && (status === 'failed' || status === 'disconnected');
             const retryLabel = '重新提交';
             const errorCopy = status === 'disconnected'
-                ? task.error || '与生成服务断开，任务 ID 和参数已保留。'
-                : task.error || (recovering ? task.params?.recoveryError : null);
+                ? formatClientGenerationError(task.error || '与生成服务断开，任务 ID 和参数已保留。')
+                : formatClientGenerationError(task.error || (recovering ? task.params?.recoveryError : null));
             const outputPaths = status === 'success' ? this._generationTaskOutputPaths(task) : [];
             const canLocate = this._canLocateGenerationTask(task);
             const recoveryControls = `<div class="agent-task-recovery">
@@ -3239,7 +3240,7 @@ export class AgentSidebar {
                     task.status = 'failed';
                     task.confirmedFailure = true;
                     task.errorCode = record.errorCode;
-                    task.error = record.error || task.error;
+                    task.error = formatClientGenerationError(record.error || task.error);
                     const rejection = getGenerationRejectionInfo(record.errorCode);
                     if (rejection) task.params = { ...task.params, syncStage: rejection.stage };
                 }
