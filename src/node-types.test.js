@@ -8,6 +8,15 @@ test.before(async () => {
     helpers = await import('./node-types.js');
 });
 
+test('文本节点合并多条上游情节，并可交给文字 AI 整理成故事', async () => {
+    const merged = await helpers.NODE_TYPES.text.execute(
+        { context: ['开端：主角收到一封信。', '发展：主角沿线索进入旧车站。', '结局：主角找到了失踪的朋友。'] },
+        { text: '', separator: '\n\n', useAi: false },
+        {}
+    );
+    assert.equal(merged.text, '开端：主角收到一封信。\n\n发展：主角沿线索进入旧车站。\n\n结局：主角找到了失踪的朋友。');
+});
+
 function trackedNodeContext(t, kind, model, generate) {
     const previousWindow = global.window;
     const calls = [], tasks = [], updates = [], failures = [];

@@ -397,7 +397,7 @@ function packGenerationResults(portName, results) {
 // 多条上游文本按 separator 拼接，不需要单独的合并节点。
 NODE_TYPES['text'] = {
     type: 'text',
-    title: '文本 / Prompt',
+    title: '文本生成 / 合并',
     icon: 'pencil-line',
     color: '#6366f1',
     width: 320,
@@ -410,7 +410,7 @@ NODE_TYPES['text'] = {
     config: [
         { key: 'useAi', label: '使用文字 AI 生成', type: 'checkbox', default: false },
         { key: 'text', label: '文本内容', type: 'textarea', default: '' },
-        { key: 'separator', label: '上游拼接分隔符', type: 'text', default: '\n' },
+        { key: 'separator', label: '情节合并分隔符', type: 'text', default: '\n' },
         { key: 'splitBy', label: '拆分为多条（分隔符，留空不拆）', type: 'text', default: '' }
     ],
     async execute(inputs, config, ctx) {

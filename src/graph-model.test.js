@@ -93,6 +93,14 @@ test('canConnect: 合法连线通过', () => {
     assert.deepStrictEqual(G.canConnect(from, 'text', to, 'source', []), { ok: true });
 });
 
+test('canConnect: 多个文本节点可以同时接入文本生成合并节点', () => {
+    const second = op('plot-b', 'text');
+    const story = op('story', 'text');
+    const existing = [conn('plot-a', 'text', 'story', 'context')];
+    const result = G.canConnect(second, 'text', story, 'context', existing);
+    assert.deepStrictEqual(result, { ok: true });
+});
+
 test('canConnect: 类型不匹配被拒', () => {
     const from = media('m1', 'a.mp4');
     const to = op('g1', 'image');
