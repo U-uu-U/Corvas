@@ -2,6 +2,69 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentSidebar } from './agent-sidebar.js';
 
+test('correct image configuration cannot leak through a stale text-node binding', () => {
+    const image = { id: 'image-api', capability: 'image', endpoint: 'https://ai.ravenhash.org/v1', apiKey: 'fixture',
+        model: 'gpt-image-2', models: ['gpt-image-2', 'gpt-image-2.5-sunburst'] };
+    const text = { id: 'text-api', capability: 'text', model: 'gpt-5.5', apiKey: 'fixture' };
+    const sidebar = Object.assign(Object.create(AgentSidebar.prototype), {
+        providers: [image, text], globalConfig: { textProviderId: text.id, imageProviderId: image.id }
+    });
+    const before = structuredClone(sidebar.providers);
+    for (const binding of [
+        { providerId: image.id, model: image.model },
+        { providerId: image.id + '::model:gpt-image-2.5-sunburst', sourceProviderId: image.id, model: 'gpt-image-2.5-sunburst' },
+        { providerId: text.id, model: image.model }
+    ]) assert.equal(sidebar.getTextProviderConfig(binding), null);
+    assert.equal(sidebar.getTextProviderConfig().id, text.id);
+    assert.equal(sidebar.getImageProviderConfig({ providerId: image.id }).model, image.model);
+    sidebar.globalConfig.textProviderId = image.id;
+    assert.equal(sidebar._getTextProvider(), null);
+    sidebar._ensureProviderRoles();
+    assert.equal(sidebar.globalConfig.textProviderId, text.id);
+    assert.deepEqual(sidebar.providers, before);
+    sidebar.providers = [image];
+    sidebar._ensureProviderRoles();
+    assert.equal(sidebar.globalConfig.textProviderId, null);
+    assert.equal(sidebar.getImageProviderConfig().model, image.model);
+});
+
+for (const [code, label] of [['RH_REFERENCE_COPYRIGHT', '参考素材版权限制'], ['RH_CONTENT_REJECTED', '内容审核未通过']]) {
+    test(`task history retains ${code} as a failure rather than a disconnect`, () => {
+        const sidebar = Object.assign(Object.create(AgentSidebar.prototype), {
+            generationTasks: [{ id: 'review', kind: 'video', status: 'running', taskId: 'remote', params: { nodeId: 'node' } }],
+            options: {}, taskHistoryFilter: 'all', taskHistoryList: { innerHTML: '' }, _saveGenerationTasks() {}
+        });
+        sidebar.recordGenerationError('review', sidebar._generationFailureError({ code, error: label, confirmedFailure: true }));
+        const failed = sidebar.generationTasks[0];
+        assert.equal(failed.status, 'failed');
+        assert.equal(failed.errorCode, code);
+        assert.equal(failed.confirmedFailure, true);
+        assert.equal(sidebar.getGenerationRecoveryTaskForNode('node'), null);
+        assert.ok(sidebar.taskHistoryList.innerHTML.includes(label));
+        assert.doesNotMatch(sidebar.taskHistoryList.innerHTML, /data-retry-task/);
+    });
+}
+
+test('portrait task failures are not treated as disconnections or primary recovery actions', () => {
+    const task = { id: 'portrait', kind: 'video', status: 'running', taskId: 'remote', prompt: 'portrait', params: { nodeId: 'node' } };
+    const sidebar = Object.assign(Object.create(AgentSidebar.prototype), {
+        generationTasks: [task], options: {}, taskHistoryFilter: 'all', taskHistoryList: { innerHTML: '' },
+        _saveGenerationTasks() {}
+    });
+    const error = sidebar._generationFailureError({ error: '参考图触发肖像保护限制，非网络断连',
+        code: 'RH_PORTRAIT_SELF_REQUIRED', confirmedFailure: true, retryable: false });
+    sidebar.recordGenerationError(task.id, error);
+    const failed = sidebar.generationTasks[0];
+    assert.equal(failed.status, 'failed');
+    assert.equal(failed.errorCode, 'RH_PORTRAIT_SELF_REQUIRED');
+    assert.equal(failed.params.syncStage, 'portrait_rejected');
+    assert.equal(sidebar.getGenerationRecoveryTaskForNode('node'), null);
+    const html = sidebar.taskHistoryList.innerHTML;
+    assert.match(html, /肖像保护限制/);
+    assert.doesNotMatch(html, /data-retry-task=/);
+    assert.ok(html.indexOf('data-recover-task=') < html.indexOf('</details>'), 'Manual recovery stays inside collapsed advanced controls');
+});
+
 test('node prompt presets remain independent by project and media kind without workspace DOM', t => {
     const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
     const values = new Map();

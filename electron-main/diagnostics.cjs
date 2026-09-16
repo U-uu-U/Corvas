@@ -11,9 +11,7 @@ function sanitize(value, secrets = [], seen = new WeakSet(), depth = 0) {
         return text.replace(/(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '[AUTH REDACTED]')
             .replace(/\bsk-[A-Za-z0-9_-]+/g, '[KEY REDACTED]')
             .replace(/((?:api[_-]?key|token|password|secret|authorization)\s*[=:]\s*["']?)[^\s,"';&}]+/gi, '$1[REDACTED]')
-            .replace(/https?:\/\/[^\s<>"')]+/gi, raw => {
-                try { const url = new URL(raw); return `${url.origin}${url.pathname}`; } catch { return '[URL]'; }
-            })
+            .replace(/https?:\/\/[^\s<>"'（）），。；：、]+/gi, '[URL 已隐藏]')
             .replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/gi, '[MEDIA REDACTED]')
             .slice(0, 6000);
     }

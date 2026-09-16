@@ -1,3 +1,5 @@
+import { formatClientGenerationError } from './generation-progress.js';
+
 const TERMINAL = new Set(['completed', 'partial_failed', 'failed', 'interrupted', 'canceled']);
 const STATUS_LABELS = {
     planning: '正在规划', awaiting_confirmation: '待确认', running: '执行中',
@@ -350,9 +352,9 @@ export function createRuntimeCard({ onAction, onLocate }) {
             await onAction(current.id, action, instruction);
             if (action === 'revise') { feedback.hidden = true; input.value = ''; }
         } catch (failure) {
-            localError = String(failure?.message || failure);
+            localError = formatClientGenerationError(failure?.message || failure);
         }
-        error.textContent = localError || String(current.error?.message || current.error || '');
+        error.textContent = localError || formatClientGenerationError(current.error?.message || current.error || '');
         error.hidden = !error.textContent;
     };
     feedback.addEventListener('submit', event => {
@@ -427,7 +429,7 @@ export function createRuntimeCard({ onAction, onLocate }) {
             output.hidden = !output.textContent;
             review.textContent = run.review ? `审阅：${run.review}` : '';
             review.hidden = !review.textContent;
-            error.textContent = localError || String(run.error?.message || run.error || '');
+            error.textContent = localError || formatClientGenerationError(run.error?.message || run.error || '');
             error.hidden = !error.textContent;
             submit.disabled = busy;
             if (!runtimeActions(run).includes('revise')) feedback.hidden = true;

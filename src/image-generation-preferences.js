@@ -44,7 +44,9 @@ export const IMAGE_NODE_PROMPT_KEYS = Object.freeze([
     'referenceCitationIds',
     'referenceCitationLabels',
     'referenceCitationOffsets',
-    'referenceCitationOccurrences'
+    'referenceCitationOccurrences',
+    'referenceCitationAnnotations',
+    'referenceMaterialNotes'
 ]);
 
 export const IMAGE_GENERATION_PREFERENCES_VERSION = 1;

@@ -1,6 +1,6 @@
 {
     "name": "corvas",
-    "version": "1.6.0-beta.2",
+    "version": "1.6.0-beta.3",
     "description": "本地素材管理、无限画布与 AI 图片/视频创作桌面应用",
     "main": "electron-main/main.js",
     "scripts": {
@@ -51,7 +51,7 @@
             "dist/**/*",
             "electron-main/**/*",
             "shared/**/*",
-            "src/{package.json,board-transaction.js,graph-model.js,node-types.js,generator-result-stack.js,generation-request-params.js,image-node-settings.js,image-intent-pipeline.js,provider-capabilities.js,reference-citations.js,model-config.js,model-config-default.js,model-config-capabilities.js}",
+            "src/{package.json,board-transaction.js,graph-model.js,node-types.js,generator-result-stack.js,generation-request-params.js,generation-progress.js,image-node-settings.js,image-intent-pipeline.js,provider-capabilities.js,reference-citations.js,model-config.js,model-config-default.js,model-config-capabilities.js}",
             "mcp/**/*",
             "package.json",
             "!**/*.{test,spec}.{js,cjs,mjs,ts,cts,mts,jsx,tsx}",

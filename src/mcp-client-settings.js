@@ -1,4 +1,5 @@
 import './mcp-client-settings.css';
+import { formatClientGenerationError } from './generation-progress.js';
 
 const icon = name => `<svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-${name}"></use></svg>`;
 
@@ -35,7 +36,10 @@ export function mountMcpSettings() {
     let editing = null;
     let busy = false;
     const field = name => form.elements.namedItem(name);
-    const message = (text, error = false) => { status.textContent = text; status.classList.toggle('error', error); };
+    const message = (text, error = false) => {
+        status.textContent = formatClientGenerationError(text);
+        status.classList.toggle('error', error);
+    };
     const transportFields = () => {
         root.querySelectorAll('[data-stdio]').forEach(el => { el.hidden = field('transport').value !== 'stdio'; });
         root.querySelectorAll('[data-http]').forEach(el => { el.hidden = field('transport').value === 'stdio'; });

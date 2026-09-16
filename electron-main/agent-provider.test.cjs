@@ -8,6 +8,14 @@ const { callAgentProvider } = require('./agent-provider.cjs');
 const provider = { type: 'openai', endpoint: 'https://relay.example/proxy/v1/images/generations?key=discard#fragment',
     apiKey: 'test-secret-do-not-log', model: 'test-model' };
 const messages = [{ role: 'user', content: 'Hello' }];
+
+test('Agent rejects an image model before sending any chat request, including stale text roles', async () => {
+    for (const capability of ['text','image',undefined]) {
+        await assert.rejects(callAgentProvider({ provider: { ...provider, model: 'gpt-image-2', capability }, messages,
+            fetchImpl: async () => assert.fail('A dedicated image model must not reach Chat Completions') }),
+        error => error.code === 'TEXT_PROVIDER_REQUIRED' && /文字或视觉理解模型/.test(error.message));
+    }
+});
 const tools = [
     { type: 'function', function: { name: 'board.add_node', description: 'Add a node',
         parameters: { type: 'object', properties: { label: { type: 'string' } }, required: ['label'] } } },

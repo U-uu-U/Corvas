@@ -330,6 +330,7 @@ export function collectInputContext(item, allConnections = [], resultCache = new
                     filePath: source.filePath || null,
                     fromNodeId: source.fromNodeId || null,
                     mediaType: source.mediaType || null,
+                    ...(source.referenceAnnotation ? { referenceAnnotation: source.referenceAnnotation } : {}),
                     width: Number(source.width) || null,
                     height: Number(source.height) || null
                 } : null

@@ -18,7 +18,8 @@ import {
 } from './image-node-settings.js';
 import {
     inferProviderCapability,
-    providerHasCapability
+    providerHasCapability,
+    canUseTextProvider
 } from './provider-capabilities.js';
 import {
     getImageGenerationPreferences as readImageGenerationPreferences,
@@ -34,6 +35,8 @@ import { reconcileApiConfig } from './api-config-recovery.js';
 import { CANCELED_IMAGE_REFERENCES } from './node-types.js';
 import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from './generation-request-params.js';
 import { requestRecoveryTaskId } from './generation-recovery-dialog.js';
+import { canRecoverGenerationTask, generationFailureError, formatClientGenerationError,
+    isGenerationFailureConfirmed, getGenerationRejectionInfo } from './generation-progress.js';
 import { showStatusNotification } from './status-notification.js';
 import { getVideoModelProfile, describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
 import { getModelPresentation, describeModelPresentation } from '../shared/model-presentation.mjs';
@@ -1005,7 +1008,7 @@ export class AgentSidebar {
     }
 
     _appendAgentError(message) {
-        return this._appendAgentMessageElement('error', message);
+        return this._appendAgentMessageElement('error', formatClientGenerationError(message));
     }
 
     _appendAgentTyping() {
@@ -2845,7 +2848,7 @@ export class AgentSidebar {
         if (!normalizedNodeId) return null;
         return this.generationTasks.find(task =>
             ['disconnected', 'failed', 'canceled'].includes(task?.status)
-            && Boolean(task?.taskId)
+            && Boolean(task?.taskId) && canRecoverGenerationTask(task)
             && String(task?.params?.nodeId || '') === normalizedNodeId
         ) || null;
     }
@@ -2855,6 +2858,7 @@ export class AgentSidebar {
     }
 
     _isGenerationDisconnect(error) {
+        if (error?.confirmedFailure === true || error?.code === 'UPSTREAM_TASK_FAILED') return false;
         // 主进程已经明确判定「结果未知」时以此为准（见 imageRequestFailure 的
         // submissionUnknown）。这类失败的语义是"可能已受理、无法确认"，既不该
         // 引导用户重复提交，也不该只当成普通网络失败。下面的关键词匹配仅作为
@@ -2873,14 +2877,19 @@ export class AgentSidebar {
         if (this.recoveringGenerationTasks?.has(taskId)) return this.generationTasks.find(task => task.id === taskId);
         const current = this.generationTasks.find(task => task.id === taskId);
         if (current?.status === 'canceled') return current;
-        const message = error?.message || String(error || '请求失败');
+        const message = formatClientGenerationError(error?.message || String(error || '请求失败'));
+        const rejection = getGenerationRejectionInfo(error?.code);
         const promptModerationFailed = current?.kind === 'video'
             && Boolean(current?.taskId)
             && this._isVideoPromptModerationFailure(message);
         return this._updateGenerationTask(taskId, {
             status: this._isGenerationDisconnect(error) ? 'disconnected' : 'failed',
             error: message,
-            ...(promptModerationFailed ? {
+            errorCode: error?.code || null,
+            confirmedFailure: error?.confirmedFailure === true || error?.code === 'UPSTREAM_TASK_FAILED',
+            ...(rejection ? {
+                params: { syncStage: rejection.stage }
+            } : promptModerationFailed ? {
                 params: { syncStage: 'prompt_moderation_failed' }
             } : {})
         });
@@ -2908,9 +2917,7 @@ export class AgentSidebar {
      * 会把这类任务误判为可安全重试的普通失败。
      */
     _generationFailureError(result, fallbackMessage = '请求失败') {
-        const error = new Error(result?.error || fallbackMessage);
-        if (result?.submissionUnknown === true) error.submissionUnknown = true;
-        return error;
+        return generationFailureError(result, fallbackMessage);
     }
 
     async _cancelGenerationTask(taskId) {
@@ -3077,6 +3084,7 @@ export class AgentSidebar {
             .map(details => details.dataset.taskRecoveryId));
         this.taskHistoryList.innerHTML = visibleTasks.map(task => {
             const status = statusLabels[task.status] ? task.status : 'failed';
+            const confirmedFailure = isGenerationFailureConfirmed(task);
             let syncStageLabel = status === 'running' && task.params?.syncStage === 'ready'
                 ? '待下载'
                 : status === 'running' && task.params?.syncStage === 'downloading'
@@ -3103,18 +3111,20 @@ export class AgentSidebar {
             const promptModerationFailed = task.kind === 'video'
                 && task.params?.syncStage === 'prompt_moderation_failed'
                 && Boolean(task.taskId);
-            const canRetry = !task.taskId && !task.filePath && (status === 'failed' || status === 'disconnected');
+            const rejection = getGenerationRejectionInfo(task.errorCode);
+            if (status === 'failed' && rejection) syncStageLabel = rejection.label;
+            const canRetry = !confirmedFailure && !task.taskId && !task.filePath && (status === 'failed' || status === 'disconnected');
             const retryLabel = '重新提交';
             const errorCopy = status === 'disconnected'
-                ? task.error || '与生成服务断开，任务 ID 和参数已保留。'
-                : task.error || (recovering ? task.params?.recoveryError : null);
+                ? formatClientGenerationError(task.error || '与生成服务断开，任务 ID 和参数已保留。')
+                : formatClientGenerationError(task.error || (recovering ? task.params?.recoveryError : null));
             const outputPaths = status === 'success' ? this._generationTaskOutputPaths(task) : [];
             const canLocate = this._canLocateGenerationTask(task);
             const recoveryControls = `<div class="agent-task-recovery">
                 <button type="button" data-recover-task="${this._escapeTaskText(task.id)}" ${recovering ? 'disabled' : ''}>${recovering ? '正在恢复' : (promptModerationFailed ? '继续恢复' : '拉取产物')}</button>
                 ${recovering ? `<button type="button" data-stop-recovery="${this._escapeTaskText(task.id)}">停止</button>` : ''}
             </div>`;
-            const collapseRecovery = status === 'success' && !recovering;
+            const collapseRecovery = (status === 'success' || confirmedFailure) && !recovering;
             return `
                 <article class="agent-task-item status-${status}">
                     <div class="agent-task-item-topline">
@@ -3226,6 +3236,14 @@ export class AgentSidebar {
                 task.taskId = record.taskId || task.taskId;
                 task.filePath = record.filePath || task.filePath;
                 task.filePaths = record.filePaths?.length ? record.filePaths : task.filePaths;
+                if (record.confirmedFailure === true && record.state === 'failed' && !task.filePath && task.status !== 'success') {
+                    task.status = 'failed';
+                    task.confirmedFailure = true;
+                    task.errorCode = record.errorCode;
+                    task.error = formatClientGenerationError(record.error || task.error);
+                    const rejection = getGenerationRejectionInfo(record.errorCode);
+                    if (rejection) task.params = { ...task.params, syncStage: rejection.stage };
+                }
                 task.params = { ...task.params, nodeId: task.params?.nodeId || record.nodeId,
                     targetDir: record.targetDir || task.params?.targetDir };
                 for (const key of ['promptDraftConfig', 'referenceBindings', 'userPrompt']) {
@@ -3252,7 +3270,7 @@ export class AgentSidebar {
         const sourceProviderId = String(task.providerId || '').split('::model:')[0];
         const currentProvider = this.providers.find(item => item.id === sourceProviderId);
         this.recoveringGenerationTasks.add(taskId);
-        this._updateGenerationTask(taskId, { status: 'running', error: null, taskId: remoteTaskId,
+        this._updateGenerationTask(taskId, { status: 'running', error: null, taskId: remoteTaskId, confirmedFailure: false, errorCode: null,
             ...(remoteTaskId !== task.taskId ? { filePath: null, filePaths: [] } : {}),
             params: { syncStage: 'recovering', recoveryStartedAt: Date.now() } });
         try {
@@ -3267,7 +3285,13 @@ export class AgentSidebar {
                 providerConfig: { ...currentProvider, sourceProviderId, model: task.model || currentProvider?.model }
             });
             if (result?.success === false) {
-                this._updateGenerationTask(taskId, { status: result.canceled ? 'canceled' : 'disconnected', error: result.error });
+                const error = this._generationFailureError(result);
+                const rejection = getGenerationRejectionInfo(error.code);
+                this._updateGenerationTask(taskId, {
+                    status: result.canceled ? 'canceled' : error.confirmedFailure ? 'failed' : 'disconnected',
+                    error: error.message, errorCode: error.code || null, confirmedFailure: error.confirmedFailure,
+                    ...(rejection ? { params: { syncStage: rejection.stage } } : {})
+                });
                 return;
             }
             this._updateGenerationTask(taskId, { status: 'success', error: null,
@@ -3275,7 +3299,8 @@ export class AgentSidebar {
                 taskId: result.taskId || remoteTaskId, filePath: result.filePath, filePaths: result.filePaths || [result.filePath],
                 params: { nodeId: result.nodeId || task.params?.nodeId, syncStage: 'completed' } });
         } catch (error) {
-            this._updateGenerationTask(taskId, { status: 'disconnected', error: error.message });
+            this._updateGenerationTask(taskId, { status: error.confirmedFailure ? 'failed' : 'disconnected', error: error.message,
+                confirmedFailure: error.confirmedFailure === true, errorCode: error.code || null });
         } finally {
             this.recoveringGenerationTasks.delete(taskId);
             this._renderGenerationTasks();
@@ -3810,7 +3835,7 @@ export class AgentSidebar {
     }
 
     _isTextProvider(provider) {
-        return providerHasCapability(provider, 'text');
+        return providerHasCapability(provider, 'text') && canUseTextProvider(provider);
     }
 
     _isAnthropicProvider(provider) {
@@ -3915,7 +3940,8 @@ export class AgentSidebar {
     }
 
     _getTextProvider() {
-        return this._findProvider(this.globalConfig.textProviderId);
+        const provider = this._findProvider(this.globalConfig.textProviderId);
+        return this._isTextProvider(provider) ? provider : null;
     }
 
     _getVideoProvider() {
@@ -4002,7 +4028,7 @@ export class AgentSidebar {
 
     getTextProviderConfig(binding = null) {
         const provider = this._getBoundProvider(binding, this._getTextProvider());
-        return provider ? { ...provider } : null;
+        return this._isTextProvider(provider) ? { ...provider } : null;
     }
 
     getImageIntentPipelineMode() {

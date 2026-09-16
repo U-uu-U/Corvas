@@ -82,6 +82,11 @@ async function setup(t, { items = [op('image')], connections = [], providers, mo
 }
 
 describe('AgentGeneration planning', () => {
+    test('runtime text resolver rejects a stale role on a dedicated image model', async t => {
+        const h = await setup(t, { providers: [provider('bad-text','text','gpt-image-2'),provider('text','text','gpt-5.5')] });
+        assert.throws(() => h.generation.resolveProvider({ providerId: 'bad-text' }, 'text'), { code: 'PROVIDER_REQUIRED' });
+        assert.equal(h.generation.resolveProvider({ providerId: 'text' }, 'text').model, 'gpt-5.5');
+    });
     test('remote sale prices reach Agent plans without changing approved snapshots or submitted parameters', async t => {
         const p = { ...provider('videos', 'video', 'sd2.5-route1'), endpoint: 'https://art.ravenhash.org/v1' };
         const h = await setup(t, { providers: [p], items: [op('video', 'video', { count: 2 })] });
