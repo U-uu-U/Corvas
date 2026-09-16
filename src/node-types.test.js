@@ -8,6 +8,15 @@ test.before(async () => {
     helpers = await import('./node-types.js');
 });
 
+test('文本节点合并多条上游情节，并可交给文字 AI 整理成故事', async () => {
+    const merged = await helpers.NODE_TYPES.text.execute(
+        { context: ['开端：主角收到一封信。', '发展：主角沿线索进入旧车站。', '结局：主角找到了失踪的朋友。'] },
+        { text: '', separator: '\n\n', useAi: false },
+        {}
+    );
+    assert.equal(merged.text, '开端：主角收到一封信。\n\n发展：主角沿线索进入旧车站。\n\n结局：主角找到了失踪的朋友。');
+});
+
 function trackedNodeContext(t, kind, model, generate) {
     const previousWindow = global.window;
     const calls = [], tasks = [], updates = [], failures = [];
@@ -32,6 +41,28 @@ function trackedNodeContext(t, kind, model, generate) {
     };
     return { calls, tasks, updates, failures, ctx };
 }
+
+test('reference image generation skips a mismatched planner but still sends the image request', async t => {
+    const h = trackedNodeContext(t, 'image', 'gpt-image-2', async () => ({ filePath: 'C:/output/fixture.png' }));
+    window.flowCanvas.ai = { planImageEdit: async () => assert.fail('Image API must not be used for planning') };
+    h.ctx.getTextProvider = () => ({ capability: 'image', model: 'gpt-image-2', apiKey: 'fixture' });
+    h.ctx.getImageIntentPipelineMode = () => 'compiled';
+    h.ctx.prepareImageReferences = references => ({ references });
+    const result = await helpers.NODE_TYPES.image.execute({ source: 'local-res://' + encodeURIComponent('C:/reference.png') },
+        { prompt: 'Keep the reference', count: 1 }, h.ctx);
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0].providerConfig.model, 'gpt-image-2');
+    assert.equal(result._resultFilePath, 'C:/output/fixture.png');
+});
+
+test('video node preserves portrait rejection identity and terminal state in its task record', async t => {
+    const h = trackedNodeContext(t, 'video', 'sd2.5-route1', async () => ({ success: false,
+        error: '参考图触发肖像保护限制', code: 'RH_PORTRAIT_SELF_REQUIRED', confirmedFailure: true, retryable: false }));
+    await assert.rejects(helpers.NODE_TYPES.video.execute({}, { prompt: 'portrait test', duration: 30, resolution: '720p', count: 1 }, h.ctx),
+        error => error.code === 'RH_PORTRAIT_SELF_REQUIRED' && error.confirmedFailure === true && error.retryable === false);
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.failures[0].error.confirmedFailure, true);
+});
 
 test('image execute: a failed batch retains all late successful images in partialOutput', async t => {
     const failure = Object.assign(new Error('Image request failed'), { code: 'UPSTREAM_TASK_FAILED' });
@@ -1014,6 +1045,63 @@ test('video execute: 使用节点绑定模型并透传完整参数与参考素�
         assert.equal(output._generation.model, 'seedance-2.0');
         assert.equal(output._generation.config.duration, 8);
         assert.equal(output._generation.config.ratio, '9:16');
+    } finally {
+        global.window = previousWindow;
+    }
+});
+
+test('video execute: 音频胶囊和用途标注进入提示词且仍走音频参考字段', async () => {
+    const calls = [];
+    const previousWindow = global.window;
+    global.window = {
+        flowCanvas: {
+            mcp: {
+                generateVideo: async options => {
+                    calls.push(options);
+                    return { filePath: 'C:/output/audio-citation.mp4' };
+                }
+            }
+        }
+    };
+
+    try {
+        await helpers.NODE_TYPES.video.execute({
+            source: ['local-res://' + encodeURIComponent('C:/refs/narration.wav')]
+        }, {
+            prompt: '跟随 ',
+            referenceCitationIds: ['audio-link'],
+            referenceCitationLabels: ['音频一'],
+            referenceCitationOccurrences: [{
+                id: 'audio-citation', connectionId: 'audio-link', sourceNodeId: 'audio-node', offset: 3
+            }],
+            duration: 5,
+            count: 1,
+            concurrency: 1
+        }, {
+            item: { id: 'video-node-with-audio' },
+            inputContext: [{
+                connectionId: 'audio-link',
+                sourceNodeId: 'audio-node',
+                values: ['local-res://' + encodeURIComponent('C:/refs/narration.wav')],
+                source: {
+                    id: 'audio-node',
+                    filePath: 'C:/refs/narration.wav',
+                    mediaType: 'audio',
+                    referenceAnnotation: '旁白'
+                }
+            }],
+            getVideoProvider: () => ({
+                id: 'video-provider', apiKey: 'test-key', endpoint: 'https://example.test/v1', model: 'video-model'
+            })
+        });
+
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls[0].audioReferences, [{ filePath: 'C:/refs/narration.wav' }]);
+        assert.deepEqual(calls[0].sourceReferences, []);
+        assert.match(calls[0].prompt, /音频一=第1段/);
+        assert.match(calls[0].prompt, /素材用途标注：音频一=旁白/);
+        assert.match(calls[0].prompt, /跟随 音频一/);
+        assert.equal(calls[0].referenceBindings[0].annotation, '旁白');
     } finally {
         global.window = previousWindow;
     }

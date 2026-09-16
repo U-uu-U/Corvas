@@ -736,6 +736,15 @@ async function fetchModelList(config = {}) {
 }
 
 
+async function checkTextProvider(provider, purpose) {
+    const { textProviderError } = await import('../src/provider-capabilities.js');
+    const error = textProviderError(provider);
+    if (error) require('./diagnostics.cjs').diagnostic('warn', 'provider.text_mismatch', {
+        purpose, model: provider?.model, capability: provider?.capability
+    });
+    return error;
+}
+
 function buildClassificationEndpoint(provider = {}) {
     const providerType = String(provider.type || 'openai').toLowerCase();
     const fallback = providerType === 'anthropic'
@@ -797,6 +806,7 @@ async function prepareAgentAttachmentPayload(attachments = [], context = null) {
                 url,
                 mediaType,
                 name: String(attachment?.name || '').trim() || path.basename(filePath || url),
+                annotation: String(attachment?.annotation || '').trim().slice(0, 80),
                 width: Number(attachment?.width) || null,
                 height: Number(attachment?.height) || null,
                 depth: Math.max(1, Number(attachment?.depth) || 1)
@@ -811,7 +821,8 @@ async function prepareAgentAttachmentPayload(attachments = [], context = null) {
             ? `，画布尺寸 ${attachment.width}x${attachment.height}`
             : '';
         const location = attachment.filePath || attachment.url;
-        return `${index + 1}. [${typeLabels[attachment.mediaType]}] ${attachment.name}${dimensions}，上游深度 ${attachment.depth}，位置：${location}`;
+        const annotation = attachment.annotation ? `，用途标注：${attachment.annotation}` : '';
+        return `${index + 1}. [${typeLabels[attachment.mediaType]}] ${attachment.name}${dimensions}${annotation}，上游深度 ${attachment.depth}，位置：${location}`;
     });
 
     for (let index = 0; index < normalized.length; index += 1) {
@@ -885,6 +896,8 @@ async function generateTextWithProvider(request = {}) {
     if (!provider?.endpoint || !provider?.apiKey || !provider?.model) {
         return { success: false, error: '文字 API 配置不完整' };
     }
+    const providerError = await checkTextProvider(provider, 'text');
+    if (providerError) return providerError;
     if (providerType === 'google') {
         return { success: false, error: '当前文字节点暂不支持 Google 原生格式，请使用 OpenAI 兼容端点' };
     }
@@ -1006,6 +1019,8 @@ async function describeImagesWithProvider(request = {}) {
     if (!provider?.endpoint || !provider?.apiKey || !provider?.model) {
         return { success: false, error: '文本与视觉 API 配置不完整' };
     }
+    const providerError = await checkTextProvider(provider, 'describe-images');
+    if (providerError) return providerError;
     if (providerType === 'google') {
         return { success: false, error: '画面提取暂不支持 Google 原生格式，请使用 OpenAI 兼容端点' };
     }
@@ -1161,6 +1176,8 @@ async function planImageEditWithProvider(request = {}) {
     if (!provider?.endpoint || !provider?.apiKey || !provider?.model) {
         return { success: false, code: 'PLANNER_PROVIDER_INVALID', error: '文字与视觉 API 配置不完整' };
     }
+    const providerError = await checkTextProvider(provider, 'image-planner');
+    if (providerError) return providerError;
     if (providerType === 'google') {
         return { success: false, code: 'PLANNER_PROVIDER_UNSUPPORTED', error: 'Planner 暂不支持 Google 原生格式' };
     }
@@ -1326,6 +1343,8 @@ function parseClassificationJson(text) {
 async function classifyAssetWithProvider(filePath, provider = {}) {
     if (!filePath || !fs.existsSync(filePath)) return { success: false, error: '素材文件不存在' };
     if (!provider?.apiKey || !provider?.model) return { success: false, error: '没有可用的分类 API 配置' };
+    const providerError = await checkTextProvider(provider, 'asset-classification');
+    if (providerError) return providerError;
     if (!/\.(?:jpe?g|png|webp|gif|bmp|tiff?)$/i.test(filePath)) {
         return { success: false, unsupported: true, error: '当前仅支持自动分类图片素材' };
     }
@@ -2462,6 +2481,10 @@ ipcMain.handle('mcp:image:generate', async (_, body) => {
             // 而渲染层需要它来区分「结果未知」与「确定失败」——前者绝不能
             // 引导用户直接重新提交（可能重复计费）。
             submissionUnknown: err?.submissionUnknown === true,
+            code: err?.code,
+            confirmedFailure: err?.confirmedFailure === true,
+            retryable: err?.retryable,
+            requestId: err?.requestId,
             error: err.message
         };
     }
@@ -2502,6 +2525,11 @@ ipcMain.handle('mcp:video:generate', async (_, body) => {
         return {
             success: false,
             canceled: err?.code === 'GENERATION_CANCELED' || err?.name === 'AbortError',
+            submissionUnknown: err?.submissionUnknown === true,
+            code: err?.code,
+            confirmedFailure: err?.confirmedFailure === true,
+            retryable: err?.retryable,
+            requestId: err?.requestId,
             error: err.message
         };
     }
@@ -3268,6 +3296,8 @@ ipcMain.handle('mcp:generation:recover', async (event, body) => {
         return { success: true, ...await flowCanvasBridge.recoverGenerationFromRenderer(body || {}) };
     } catch (error) {
         return { success: false, error: error.message, code: error.code,
+            confirmedFailure: error.confirmedFailure === true, submissionUnknown: error.submissionUnknown === true,
+            retryable: error.retryable, requestId: error.requestId,
             canceled: error.code === 'GENERATION_CANCELED' || error.name === 'AbortError' };
     }
 });

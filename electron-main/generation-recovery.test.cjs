@@ -5,6 +5,57 @@ const path = require('node:path');
 const os = require('node:os');
 const { GenerationRecoveryStore } = require('./generation-recovery-store.cjs');
 const Bridge = require('./mcp-bridge');
+const { mapLocalError } = require('../shared/public-api-error.cjs');
+const portraitReason = 'For 肖像保护, Dreamina Seedance 2.5 只支持生成包含您自己的视频. 请换一张参考图, or create a video from text。';
+
+test('portrait failures stop polling immediately for both HTTP and business-error envelopes', async () => {
+    for (const status of [200, 400, 500]) {
+        let calls = 0;
+        await assert.rejects(Bridge.pollOpenAiVideoTask('https://api.test/v1/video/generations', 'test-key', 'portrait-task', { status: 'pending' }, {
+            wait: async () => assert.fail('a rejected portrait must not enter recovery retries'),
+            fetchTask: async () => {
+                calls++;
+                return { response: { ok: status === 200, status }, text: JSON.stringify({ data: { fail_reason: portraitReason } }) };
+            }
+        }), error => error.code === 'RH_PORTRAIT_SELF_REQUIRED' && error.confirmedFailure === true
+            && error.retryable === false && error.taskId === 'portrait-task');
+        assert.equal(calls, 1);
+    }
+});
+
+for (const kind of ['image', 'video']) test(`${kind} polling surfaces copyright and content rejection without another query`, async () => {
+    const poll = Bridge[kind === 'image' ? 'pollOpenAiImageTask' : 'pollOpenAiVideoTask'];
+    for (const [reason, code] of [['素材图片包含版权内容，审核未通过', 'RH_REFERENCE_COPYRIGHT'],
+        ['内容审核未通过，请修改后重试', 'RH_CONTENT_REJECTED']]) {
+        for (const status of [200, 400, 500]) {
+            let calls = 0;
+            await assert.rejects(poll('https://api.test/v1/images/generations', 'test-key', 'review-task', { status: 'pending' }, {
+                wait: async () => assert.fail('known rejection must not keep polling'),
+                fetchTask: async (_url, init) => {
+                    assert.equal(init.method, 'GET');
+                    calls++;
+                    return { response: { ok: status === 200, status, headers: new Headers() },
+                        text: JSON.stringify({ result: { error: { reason: reason + ' supplier-secret.internal' } } }) };
+                }
+            }), error => error.code === code && error.confirmedFailure === true && error.retryable === false
+                && error.taskId === 'review-task' && !error.message.includes('supplier-secret'));
+            assert.equal(calls, 1);
+        }
+    }
+});
+
+test('terminal rejection during recovery is persisted under the original task ID', async t => {
+    const { bridge, body, directory } = setup(t);
+    const failure = mapLocalError(200, { error: portraitReason }, { query: true, taskId: 'remote' });
+    bridge._resumeImageFromRenderer = async () => { throw Object.assign(new Error(failure.error), failure); };
+    await assert.rejects(bridge.recoverGenerationFromRenderer(body), error => error.confirmedFailure === true);
+    const saved = new GenerationRecoveryStore(path.join(directory, 'records')).get('local');
+    assert.equal(saved.state, 'failed');
+    assert.equal(saved.taskId, 'remote');
+    assert.equal(saved.confirmedFailure, true);
+    assert.equal(saved.errorCode, 'RH_PORTRAIT_SELF_REQUIRED');
+    assert.doesNotMatch(saved.error, /Dreamina|Seedance/);
+});
 
 function setup(t) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-recovery-test-'));

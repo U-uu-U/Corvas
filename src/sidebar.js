@@ -360,6 +360,7 @@ export class SidebarManager {
             ...(metadata.tags || []),
             ...(metadata.colors || []),
             ...dimensions,
+            metadata.referenceAnnotation,
             metadata.summary,
             metadata.source?.pageTitle,
             metadata.source?.pageUrl,
@@ -400,6 +401,11 @@ export class SidebarManager {
             const result = await window.flowCanvas.asset.updateMetadata(filePath, patch);
             if (!result?.success) throw new Error(result?.error || '分类保存失败');
             this.applyAssetMetadata(filePath, result.metadata);
+            if (Object.hasOwn(patch || {}, 'referenceAnnotation')) {
+                document.dispatchEvent(new CustomEvent('asset-reference-annotation-updated', {
+                    detail: { filePath, metadata: result.metadata }
+                }));
+            }
         } catch (error) {
             console.warn('[Sidebar] 素材分类保存失败:', error);
         }
@@ -414,8 +420,13 @@ export class SidebarManager {
         const menu = document.createElement('div');
         menu.className = 'asset-classification-menu';
         menu.setAttribute('role', 'group');
-        menu.setAttribute('aria-label', '素材分类');
+        menu.setAttribute('aria-label', '素材标注与分类');
         menu.innerHTML = `
+            <div class="asset-classification-menu-head"><span>素材标注</span><small>引用时自动携带</small></div>
+            <label class="asset-reference-annotation-field">
+                <input type="text" data-reference-annotation maxlength="80" value="${this._escapeHtml(metadata.referenceAnnotation || '')}" placeholder="例：男主角、旁白、动作参考">
+                <button type="button" data-save-reference-annotation>保存</button>
+            </label>
             <div class="asset-classification-menu-head"><span>素材分类</span><small>可多选</small></div>
             <button type="button" data-favorite aria-pressed="${metadata.favorite === true}" class="asset-classification-favorite ${metadata.favorite ? 'active' : ''}">
                 <svg class="flow-icon flow-icon-xs" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-favorite"></use></svg>
@@ -457,6 +468,16 @@ export class SidebarManager {
             await this._updateAssetClassification(filePath, patch);
             if (this._closeAssetClassificationMenu === closeMenu) closeMenu(true);
         };
+
+        const annotationInput = menu.querySelector('[data-reference-annotation]');
+        const saveAnnotation = () => void updateClassification({
+            referenceAnnotation: String(annotationInput?.value || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80)
+        });
+        annotationInput?.addEventListener('keydown', event => {
+            event.stopPropagation();
+            if (event.key === 'Enter') { event.preventDefault(); saveAnnotation(); }
+        });
+        menu.querySelector('[data-save-reference-annotation]')?.addEventListener('click', saveAnnotation);
 
         menu.addEventListener('click', event => {
             const favoriteButton = event.target.closest('[data-favorite]');
@@ -799,6 +820,7 @@ export class SidebarManager {
                         ${['pending', 'running'].includes(classificationStatus) ? '<i title="等待智能分类">分类中</i>' : ''}
                         ${classificationStatus === 'failed' ? '<i class="is-error" title="智能分类失败">失败</i>' : ''}
                     </div>` : ''}
+                    ${metadata?.referenceAnnotation ? `<div class="asset-library-card-annotation" title="${this._escapeHtml(metadata.referenceAnnotation)}">${this._escapeHtml(metadata.referenceAnnotation)}</div>` : ''}
                 </article>`;
         }).join('');
 

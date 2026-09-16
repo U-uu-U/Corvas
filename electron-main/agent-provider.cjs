@@ -384,6 +384,9 @@ function unsupportedTools(status, text) {
  * covers both attempts and all body reads. Inject Electron net.fetch via fetchImpl.
  */
 async function callAgentProvider({ provider, messages, tools = [], signal, onDelta, maxTokens = 4096, fetchImpl } = {}) {
+    const { textProviderError } = await import('../src/provider-capabilities.js');
+    const providerError = textProviderError(provider);
+    if (providerError) throw Object.assign(new Error(providerError.error), { code: providerError.code });
     const key = String(provider?.apiKey || '').trim();
     const controller = new AbortController();
     let timer;

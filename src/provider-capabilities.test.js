@@ -22,6 +22,21 @@ test('旧配置继续按模型信息推断用途', () => {
     assert.equal(helpers.inferProviderCapability({ capability: 'multimodal' }), 'text');
 });
 
+test('text execution rejects dedicated generation models without changing saved roles', () => {
+    for (const model of ['gpt-image-2', 'gpt-image-2.5-sunburst', 'dall-e-3', 'mj_imagine', 'sd2.5-route1', 'minimax-h3']) {
+        const provider = { model, capability: 'text', endpoint: 'https://ai.ravenhash.org/v1' };
+        assert.equal(helpers.inferProviderCapability(provider), 'text');
+        assert.equal(helpers.canUseTextProvider(provider), false);
+        assert.equal(helpers.textProviderError(provider).code, 'TEXT_PROVIDER_REQUIRED');
+    }
+    for (const model of ['gpt-5.5', 'claude-sonnet', 'qwen-vl', 'custom-vision']) {
+        assert.equal(helpers.canUseTextProvider({ model, capability: 'text' }), true);
+        assert.equal(helpers.canUseTextProvider({ model, capability: 'image' }), false);
+    }
+    assert.equal(helpers.canUseTextProvider({ model: 'custom-text', endpoint: 'https://example.test/v1/images/generations' }), true);
+    assert.equal(helpers.providerHasCapability(null, 'text'), false);
+});
+
 test('Midjourney 图片模型只匹配初始四宫格生成动作', () => {
     assert.equal(helpers.isMidjourneyImageModel('mj_imagine'), true);
     assert.equal(helpers.isMidjourneyImageModel('Midjourney'), true);

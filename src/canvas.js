@@ -3,9 +3,11 @@
 // ============================================================
 
 import Konva from 'konva';
+import { installMediaViewportCulling } from './canvas-media-culling.js';
 import { GraphView } from './graph-view.js';
 import { collectUpstreamMediaAttachments, collectUpstreamPromptContext } from './agent-attachments.js';
 import { NODE_TYPES } from './node-types.js';
+import { formatClientGenerationError } from './generation-progress.js';
 import { nodeIconSvg } from './node-icons.js';
 import { GraphRunner, STATUS } from './graph-runner.js';
 import { generationNodeSignature } from '../shared/generation-node-state.mjs';
@@ -32,7 +34,7 @@ import {
     getGeneratorPlaceholderSize,
     getGeneratorSplitPositions
 } from './generator-placeholder-layout.js';
-import { formatGenerationElapsed, isGenerationRecoveryActive, canRecoverGenerationTask } from './generation-progress.js';
+import { formatGenerationElapsed, isGenerationRecoveryActive, canRecoverGenerationTask, isGenerationFailureConfirmed } from './generation-progress.js';
 import {
     clearGeneratorResults,
     ensureGeneratorResultEntries,
@@ -63,7 +65,11 @@ import {
     getGenerationReuseConfig,
     hasGenerationRecord
 } from './generation-record.js';
-import { withoutReferenceCitationGuide } from './reference-citations.js';
+import {
+    normalizeReferenceAnnotation,
+    referenceMaterialLabel,
+    withoutReferenceCitationGuide
+} from './reference-citations.js';
 import { isGptImage2Model, isMidjourneyImageModel } from './provider-capabilities.js';
 import { assertModelRequest, checkModelRequest } from './model-config-ui.js';
 import { getThemeColor } from './theme.js';
@@ -497,6 +503,21 @@ export class CanvasManager {
             this.layer.batchDraw();
         };
         document.documentElement.addEventListener(UI_SCALE_LIMIT_CHANGED, this._onUiScaleLimitChange);
+        this._onReferenceAnnotationMetadata = event => {
+            const filePath = String(event.detail?.filePath || '');
+            const annotation = normalizeReferenceAnnotation(event.detail?.metadata?.referenceAnnotation);
+            const normalized = normalizePathForCompare(resolveCanvasFilePath(filePath));
+            if (!normalized) return;
+            this.items.forEach(item => {
+                if (normalizePathForCompare(resolveCanvasFilePath(item.data?.filePath)) === normalized) {
+                    item.data.referenceAnnotation = annotation;
+                }
+            });
+            if (this._generationComposer?.nodeId) {
+                this._renderGenerationComposerReferences(this._generationComposer.nodeId);
+            }
+        };
+        document.addEventListener('asset-reference-annotation-updated', this._onReferenceAnnotationMetadata);
         this.generationPlaceholders = new Map();
         this.pendingGenerationPlacements = new Map();
         this.generationTaskStates = new Map();
@@ -626,23 +647,28 @@ export class CanvasManager {
         this.resourceSaverMode = !!this.storeData.resourceSaver;
         this._RESOURCE_HOVER_DELAY_MS = 450;
 
+        let viewportScaleX = this.stage.scaleX();
+        let viewportScaleY = this.stage.scaleY();
         this.stage.on('xChange yChange scaleXChange scaleYChange', () => {
             if (!this._rafPending) {
                 this._rafPending = true;
                 requestAnimationFrame(() => {
                     this._rafPending = false;
-                    this._syncHoveredMediaItemAtPointer();
+                    const scaleChanged = viewportScaleX !== this.stage.scaleX() || viewportScaleY !== this.stage.scaleY();
+                    viewportScaleX = this.stage.scaleX();
+                    viewportScaleY = this.stage.scaleY();
+                    if (!this._activeCanvasPanStop) this._syncHoveredMediaItemAtPointer();
                     this._scheduleSelectionToolbarSync();
                     this._positionImageCropOverlay();
                     this.syncGifs();
                     this.syncBackground();
-                    this._syncViewportFixedControls();
-                    this.syncPlanInlineEditors();
-                    this._syncPersistentTextEditors();
+                    if (scaleChanged) this._syncViewportFixedControls();
+                    this.syncPlanInlineEditors({ syncGraph: false });
+                    this.graphView?._syncPending();
+                    this._textNodeEditors.forEach((_, nodeId) => this._positionPersistentTextEditor(nodeId));
                     this._positionOpPromptEditor();
                     this._positionMediaTitleEditor();
                     this._positionGenerationComposer();
-                    this._syncCanvasViewDock();
                     this._scheduleMinimapDraw();
                     this.graphView?.scheduleVisiblePortsRefresh();
                     this._scheduleCullCheck(this._CULL_IDLE_MS);
@@ -2440,6 +2466,7 @@ export class CanvasManager {
             itemId: id,
             filePath,
             mediaType: this._getFileType(filePath),
+            annotation: normalizeReferenceAnnotation(item.data.referenceAnnotation),
             width: Number(item.data.width) || null,
             height: Number(item.data.height) || null
         };
@@ -2723,11 +2750,7 @@ export class CanvasManager {
             fill: '#25272c',
             stroke: 'rgba(255, 255, 255, 0.12)',
             strokeWidth: 1,
-            cornerRadius: 7,
-            shadowColor: 'rgba(0, 0, 0, 0.35)',
-            shadowBlur: 14,
-            shadowOffsetY: 5,
-            shadowOpacity: 0.5
+            cornerRadius: 7
         }));
 
         const sweepWidth = Math.max(72, Math.round(width * 0.34));
@@ -2971,9 +2994,6 @@ export class CanvasManager {
         let x1, y1, x2, y2;
         let selectionDirection = 'left-to-right';
         let isSelecting = false;
-        let isPanning = false;
-        let lastPanX = 0, lastPanY = 0;
-        let panMoved = false;
 
         const setCanvasDragEnabled = (enabled) => {
             this.stage.draggable(enabled);
@@ -2981,33 +3001,6 @@ export class CanvasManager {
                 item.group.draggable(enabled);
                 item.group.find?.('.planRowHandle').forEach(handle => handle.draggable(enabled));
             });
-        };
-
-        const detachPanningEndListeners = () => {
-            document.removeEventListener('mouseup', finishPanning, true);
-            document.removeEventListener('pointerup', finishPanning, true);
-            document.removeEventListener('pointercancel', finishPanning, true);
-            window.removeEventListener('blur', finishPanning);
-        };
-
-        const finishPanning = () => {
-            if (!isPanning) return;
-            isPanning = false;
-            // 右键按下即开始平移，松手后 contextmenu 才触发。移动过就算平移，
-            // 不弹菜单；原地点一下（位移为 0）才认作右键点击。
-            this._suppressStageMenu = panMoved;
-            document.body.style.cursor = 'default';
-            setCanvasDragEnabled(true);
-            detachPanningEndListeners();
-            this.emit('change');
-        };
-
-        const attachPanningEndListeners = () => {
-            detachPanningEndListeners();
-            document.addEventListener('mouseup', finishPanning, true);
-            document.addEventListener('pointerup', finishPanning, true);
-            document.addEventListener('pointercancel', finishPanning, true);
-            window.addEventListener('blur', finishPanning);
         };
 
         const detachSelectionEndListeners = () => {
@@ -3080,19 +3073,7 @@ export class CanvasManager {
                 }
             }
             if (e.evt.button === 1 || e.evt.button === 2) {
-                // Middle or Right click: 只平移画布，不拖动图片
-                e.evt.preventDefault();
-                isPanning = true;
-                panMoved = false;
-
-                // ── 关键：临时禁用 stage 和所有图片的 draggable ──
-                setCanvasDragEnabled(false);
-
-                const pos = this.stage.getPointerPosition();
-                lastPanX = pos.x;
-                lastPanY = pos.y;
-                document.body.style.cursor = 'grabbing';
-                attachPanningEndListeners();
+                this._startCanvasPanFromClientPoint(e.evt);
                 return;
             }
             const transformerTarget = e.target === this.imageTransformer
@@ -3226,6 +3207,7 @@ export class CanvasManager {
         });
 
         this.stage.on('mousemove', (e) => {
+            if (this._activeCanvasPanStop) return;
             const hoveredItem = this._findMediaReferenceItemFromNode(e.target);
             this._setHoveredMediaItem(
                 this._isInteractiveMediaProduct(hoveredItem?.data) ? hoveredItem.data.id : null
@@ -3234,24 +3216,6 @@ export class CanvasManager {
                 this.graphView._syncPending();
                 return;
             }
-            if (isPanning) {
-                e.evt.preventDefault();
-                const pos = this.stage.getPointerPosition();
-                const dx = pos.x - lastPanX;
-                const dy = pos.y - lastPanY;
-                lastPanX = pos.x;
-                lastPanY = pos.y;
-                if (dx || dy) panMoved = true;
-
-                this.stage.position({
-                    x: this.stage.x() + dx,
-                    y: this.stage.y() + dy
-                });
-                this.stage.batchDraw();
-                // syncGifs 已由 rAF 批处理统一调用
-                return;
-            }
-
             if (this._activePlanReferencePick && !this._planReferencePickTargetId) {
                 this._updatePlanReferencePickPreview(null, e.evt);
             }
@@ -3277,8 +3241,8 @@ export class CanvasManager {
             if (this.graphView?.pending) {
                 return;
             }
-            if (isPanning) {
-                finishPanning();
+            if (this._activeCanvasPanStop) {
+                this._activeCanvasPanStop(e.evt);
                 return;
             }
 
@@ -4226,6 +4190,7 @@ export class CanvasManager {
 
     // ── 清空画布上所有卡片（用于切换文件夹组） ──
     clearAll(options = {}) {
+        this._activeCanvasPanStop?.(null, { commit: false });
         // 生成面板必须在清空之前关闭：它捕获的是打开时刻的 data 对象，
         // 而调用方（撤销/重做、切换文件夹组）会用快照深拷贝替换 storeData.items，
         // renderInitialItems 再以新对象重建 this.items。面板若继续存活，用户
@@ -4638,10 +4603,7 @@ export class CanvasManager {
             ? getThemeColor('accent', '#d5d7db')
             : getThemeColor('canvas-node-border', 'rgba(255,255,255,0.14)'));
         node.strokeWidth(this.selectedItems.has(data.id) ? 2.5 : 1);
-        node.shadowColor?.(getThemeColor('canvas-control-shadow', 'rgba(0,0,0,0.32)'));
-        node.shadowBlur?.(10);
-        node.shadowOffsetY?.(3);
-        node.shadowOpacity?.(0.42);
+        node.shadowEnabled?.(false);
         node.perfectDrawEnabled?.(false);
     }
 
@@ -4660,10 +4622,6 @@ export class CanvasManager {
             stroke: getThemeColor('canvas-node-border', 'rgba(255,255,255,0.14)'),
             strokeWidth: 1,
             cornerRadius: 8,
-            shadowColor: 'rgba(0,0,0,0.32)',
-            shadowBlur: 10,
-            shadowOffsetY: 3,
-            shadowOpacity: 0.42,
             perfectDrawEnabled: false
         }));
 
@@ -4790,6 +4748,7 @@ export class CanvasManager {
     }
 
     _setHoveredMediaItem(itemId = null) {
+        if (this._activeCanvasPanStop) return;
         const nextId = itemId && this.items.has(itemId) ? itemId : null;
         if (this._hoveredMediaItemId === nextId) return;
 
@@ -4970,6 +4929,7 @@ export class CanvasManager {
             name: 'nodeGroup',
             filePath: data.filePath
         });
+        installMediaViewportCulling(group, data);
 
         // 默认占位块（在图片未加载完成前或非图片文件时显示）
         group.add(this._createFallbackGroup(fileType, placeholderSize.width, placeholderSize.height, data.filePath));
@@ -5133,6 +5093,7 @@ export class CanvasManager {
             loadErrorMessage: '',
             isHovered: false
         });
+        void this._hydrateReferenceAnnotation(data);
 
         const pendingPlacement = this.pendingGenerationPlacements.get(data.id);
         if (pendingPlacement) this._applyGenerationPlacement(data.id, pendingPlacement);
@@ -5140,6 +5101,41 @@ export class CanvasManager {
         this.graphView?.renderPorts(data.id);
 
         return group;
+    }
+
+    async _hydrateReferenceAnnotation(data) {
+        if (!data?.filePath || normalizeReferenceAnnotation(data.referenceAnnotation)
+            || !window.flowCanvas?.asset?.readMetadata) return;
+        try {
+            const metadata = await window.flowCanvas.asset.readMetadata([data.filePath]);
+            const annotation = normalizeReferenceAnnotation(metadata?.[data.filePath]?.referenceAnnotation);
+            if (!annotation || !this.items.has(data.id) || data.referenceAnnotation) return;
+            data.referenceAnnotation = annotation;
+            if (this._generationComposer?.nodeId) {
+                this._renderGenerationComposerReferences(this._generationComposer.nodeId);
+            }
+        } catch (error) {
+            console.warn('[Canvas] 素材标注读取失败:', error);
+        }
+    }
+
+    async _saveReferenceAnnotation(source, value) {
+        if (!source) return '';
+        const annotation = normalizeReferenceAnnotation(value);
+        source.referenceAnnotation = annotation;
+        this.emit('change');
+        const filePath = this._copyableFilePath(source);
+        if (!filePath || !window.flowCanvas?.asset?.updateMetadata) return annotation;
+        try {
+            const result = await window.flowCanvas.asset.updateMetadata(filePath, { referenceAnnotation: annotation });
+            if (!result?.success) throw new Error(result?.error || '素材标注保存失败');
+            document.dispatchEvent(new CustomEvent('asset-reference-annotation-updated', {
+                detail: { filePath, metadata: result.metadata }
+            }));
+        } catch (error) {
+            this._showCanvasStatus(error?.message || '素材标注保存失败', 3200, 'error');
+        }
+        return annotation;
     }
 
     /**
@@ -5803,8 +5799,9 @@ export class CanvasManager {
         const isRecovering = isGenerationRecoveryActive(recoveryTask);
         const results = ensureGeneratorResultEntries(data);
         const resultCount = results.length;
-        const isRecoverable = ['disconnected', 'failed', 'canceled'].includes(recoveryTask?.status)
-            || (recoveryTask?.status === 'success' && !resultCount && canRecoverGenerationTask(recoveryTask));
+        const isRecoverable = (!isGenerationFailureConfirmed(recoveryTask) || Boolean(recoveryTask?.filePath))
+            && (['disconnected', 'failed', 'canceled'].includes(recoveryTask?.status)
+                || (recoveryTask?.status === 'success' && !resultCount && canRecoverGenerationTask(recoveryTask)));
         const isBusy = recoveryTask ? recoveryTask.status === 'running'
             : status === STATUS.QUEUED || status === STATUS.RUNNING;
         const stroke = isRecoverable
@@ -5904,11 +5901,7 @@ export class CanvasManager {
             fill: getThemeColor('canvas-node-bg', '#202123'),
             stroke,
             strokeWidth: status === STATUS.ERROR && !isRecovering ? 1.5 : 1,
-            cornerRadius: 8,
-            shadowColor: getThemeColor('canvas-control-shadow', 'rgba(0, 0, 0, 0.36)'),
-            shadowBlur: 14,
-            shadowOffsetY: 5,
-            shadowOpacity: results[0] ? 0 : 0.5
+            cornerRadius: 8
         });
         group.add(background);
 
@@ -6645,11 +6638,7 @@ export class CanvasManager {
             fill: getThemeColor('canvas-node-bg', '#202123'),
             stroke: status === 'error' ? OP_STATUS_COLORS.error : getThemeColor('canvas-node-border', 'rgba(255,255,255,0.13)'),
             strokeWidth: status === 'error' ? 1.5 : 1,
-            cornerRadius: 8,
-            shadowColor: getThemeColor('canvas-control-shadow', 'rgba(0,0,0,0.32)'),
-            shadowBlur: 12,
-            shadowOffsetY: 4,
-            shadowOpacity: 0.45
+            cornerRadius: 8
         }));
 
         const promptField = data.nodeType === 'text' ? 'text' : 'prompt';
@@ -8544,7 +8533,9 @@ export class CanvasManager {
         composer.setAttribute('aria-label', data.nodeType === 'video' ? '视频生成设置' : '图片生成设置');
         composer.innerHTML = `
             <div class="generation-composer-reference-row">
-                <div class="generation-composer-references" data-reference-list></div>
+                <div class="generation-composer-reference-scroll">
+                    <div class="generation-composer-references" data-reference-list></div>
+                </div>
                 ${data.nodeType === 'image' ? `
                     <button class="generation-composer-upstream-plan" type="button" data-upstream-plan hidden
                         title="规划上游提示词" aria-label="规划上游提示词" aria-haspopup="dialog">
@@ -8795,21 +8786,26 @@ export class CanvasManager {
         const citationState = this._generationComposerCitationState(data, references);
         references.forEach(({ connection, source }, index) => {
             const tile = document.createElement('div');
-            tile.className = 'generation-composer-reference';
+            tile.className = 'generation-composer-reference has-annotation';
             tile.title = this._fileNameFromPath(source.filePath) || `参考素材 ${index + 1}`;
             const mediaType = this._getItemMediaType(source);
             if (overflowIds.has(connection.id)) {
                 tile.classList.add('is-over-limit');
                 tile.title += ' · 超出当前模型限制，请移除或切换模型';
             }
-            // 与 _generationComposerCitationState 共用同一判定，保证磁贴显示的
-            // 编号与点击后插入的胶囊编号一致（见 _isCitableImageReference）。
-            if (this._isCitableImageReference(source)) {
+            const preview = document.createElement('span');
+            preview.className = 'generation-composer-reference-preview';
+            // 三类参考素材共用同一编号来源，避免 UI 标签与实际上传顺序错位。
+            if (this._isCitableReference(source)) {
                 const referenceLabel = citationState.labelsById.get(connection.id);
-                const image = document.createElement('img');
-                image.src = `local-res://${encodeURIComponent(resolveCanvasFilePath(source.filePath))}`;
-                image.alt = '';
-                tile.appendChild(image);
+                if (mediaType === 'image') {
+                    const image = document.createElement('img');
+                    image.src = `local-res://${encodeURIComponent(resolveCanvasFilePath(this._referenceFilePath(source)))}`;
+                    image.alt = '';
+                    preview.appendChild(image);
+                } else {
+                    preview.innerHTML = `<svg class="flow-icon" aria-hidden="true"><use href="./icons/flow-icons.svg#${mediaType === 'audio' ? 'icon-audio' : 'icon-video'}"></use></svg>`;
+                }
                 tile.classList.add('citable');
                 tile.classList.toggle('cited', citationState.selectedIds.has(connection.id));
                 tile.tabIndex = 0;
@@ -8829,11 +8825,39 @@ export class CanvasManager {
                     addCitation();
                 });
             } else {
-                const icon = document.createElement('span');
                 const iconId = mediaType === 'audio' ? 'icon-audio' : 'icon-video';
-                icon.innerHTML = `<svg class="flow-icon" aria-hidden="true"><use href="./icons/flow-icons.svg#${iconId}"></use></svg>`;
-                tile.appendChild(icon);
+                preview.innerHTML = `<svg class="flow-icon" aria-hidden="true"><use href="./icons/flow-icons.svg#${iconId}"></use></svg>`;
             }
+            tile.appendChild(preview);
+            const caption = document.createElement('label');
+            caption.className = 'generation-composer-reference-annotation';
+            caption.addEventListener('pointerdown', event => event.stopPropagation());
+            caption.addEventListener('click', event => event.stopPropagation());
+            const referenceLabel = citationState.labelsById.get(connection.id)
+                || { image: '图片', video: '视频', audio: '音频' }[mediaType] || '素材';
+            const labelText = document.createElement('b');
+            labelText.textContent = referenceLabel;
+            const annotation = document.createElement('input');
+            annotation.type = 'text';
+            annotation.maxLength = 80;
+            annotation.value = normalizeReferenceAnnotation(source.referenceAnnotation);
+            annotation.placeholder = '标注用途';
+            annotation.title = `为${referenceLabel}标注用途`;
+            annotation.setAttribute('aria-label', `为${referenceLabel}标注用途`);
+            for (const type of ['pointerdown', 'mousedown', 'click', 'dblclick', 'keydown']) {
+                annotation.addEventListener(type, event => event.stopPropagation());
+            }
+            annotation.addEventListener('input', () => {
+                source.referenceAnnotation = annotation.value.slice(0, 80);
+                active.changed = true;
+            });
+            annotation.addEventListener('change', async () => {
+                annotation.value = await this._saveReferenceAnnotation(source, annotation.value);
+                this._renderGenerationComposerCitations(nodeId, references);
+                this._cacheMediaGenerationPromptDraft(data);
+            });
+            caption.append(labelText, annotation);
+            tile.appendChild(caption);
             const remove = document.createElement('button');
             remove.type = 'button';
             remove.title = '移除参考素材';
@@ -8879,32 +8903,31 @@ export class CanvasManager {
         this._positionGenerationComposer();
     }
 
-    _generationImageReferenceLabel(index) {
-        const numerals = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
-        return `图${numerals[index] || index + 1}`;
+    _generationReferenceLabel(mediaType, index) {
+        return referenceMaterialLabel(mediaType, index);
     }
 
-    /**
-     * 能否作为「可引用参考图」（会拿到 图一/图二 编号、可插入引用胶囊）。
-     *
-     * 必须同时满足「是图片」和「有真实文件路径」。后者排除了带生成结果的
-     * 生成节点：它有 mediaType/图片输出，却没有 filePath，渲染时走的是图标
-     * 分支、无法被引用。历史上编号状态（_generationComposerCitationState）
-     * 只按「是图片」过滤，而参考条按「是图片 且 有 filePath」编号，两套下标
-     * 不同源 —— 当生成节点与普通素材同时作参考时，磁贴写着「点击引用图一」，
-     * 点下去插入的却是「图二」，用户照 UI 写的编号会指向另一张图。
-     */
-    _isCitableImageReference(source) {
-        return this._getItemMediaType(source) === 'image' && Boolean(source?.filePath);
+    _referenceFilePath(source) {
+        return String(this._copyableFilePath(source) || source?.filePath || '').trim();
+    }
+
+    _isCitableReference(source) {
+        return ['image', 'video', 'audio'].includes(this._getItemMediaType(source))
+            && Boolean(this._referenceFilePath(source));
     }
 
     _generationComposerCitationState(data, references = this._opReferenceEntries(data)) {
         data.config = data.config || {};
-        const imageReferences = references.filter(({ source }) => this._isCitableImageReference(source));
-        const imagePaths = [...new Set(imageReferences.map(({ source }) => source.filePath))];
-        const labelsById = new Map(imageReferences.map(({ connection, source }) => [
-            connection.id, this._generationImageReferenceLabel(imagePaths.indexOf(source.filePath))
-        ]));
+        const citableReferences = references.filter(({ source }) => this._isCitableReference(source));
+        const pathsByType = new Map();
+        const labelsById = new Map(citableReferences.map(({ connection, source }) => {
+            const mediaType = this._getItemMediaType(source);
+            if (!pathsByType.has(mediaType)) pathsByType.set(mediaType, []);
+            const paths = pathsByType.get(mediaType);
+            const filePath = this._referenceFilePath(source);
+            if (!paths.includes(filePath)) paths.push(filePath);
+            return [connection.id, this._generationReferenceLabel(mediaType, paths.indexOf(filePath))];
+        }));
         const configuredIds = Array.isArray(data.config.referenceCitationIds)
             ? data.config.referenceCitationIds
             : [];
@@ -8916,14 +8939,15 @@ export class CanvasManager {
             }))).map(entry => {
                 if (!entry) return null;
                 const reference = entry.sourceNodeId
-                    ? imageReferences.find(({ source }) => source.id === entry.sourceNodeId)
-                    : imageReferences.find(({ connection }) => connection.id === entry.connectionId);
-                return reference ? { ...entry, connectionId: reference.connection.id, sourceNodeId: reference.source.id, missing: false }
+                    ? citableReferences.find(({ source }) => source.id === entry.sourceNodeId)
+                    : citableReferences.find(({ connection }) => connection.id === entry.connectionId);
+                return reference ? { ...entry, connectionId: reference.connection.id, sourceNodeId: reference.source.id,
+                    annotation: normalizeReferenceAnnotation(reference.source.referenceAnnotation), missing: false }
                     : { ...entry, missing: true };
             }).filter(Boolean);
         data.config.referenceCitationOccurrences = occurrences;
         const selectedIds = new Set(occurrences.map(entry => entry.connectionId));
-        const orderedIds = imageReferences
+        const orderedIds = citableReferences
             .map(({ connection }) => connection.id)
             .filter(id => selectedIds.has(id));
         const configuredOffsets = data.config.referenceCitationOffsets
@@ -8938,8 +8962,12 @@ export class CanvasManager {
         const labels = orderedIds.map(id => labelsById.get(id));
         data.config.referenceCitationIds = orderedIds;
         data.config.referenceCitationLabels = labels;
+        data.config.referenceCitationAnnotations = Object.fromEntries(citableReferences
+            .filter(({ connection, source }) => orderedIds.includes(connection.id) && normalizeReferenceAnnotation(source.referenceAnnotation))
+            .map(({ connection, source }) => [connection.id, normalizeReferenceAnnotation(source.referenceAnnotation)]));
         data.config.referenceCitationOffsets = offsets;
-        return { imageReferences, labelsById, selectedIds: new Set(orderedIds), orderedIds, labels, offsets, occurrences };
+        return { citableReferences, imageReferences: citableReferences, labelsById,
+            selectedIds: new Set(orderedIds), orderedIds, labels, offsets, occurrences };
     }
 
     _addGenerationComposerCitation(nodeId, connectionId) {
@@ -8947,7 +8975,7 @@ export class CanvasManager {
         const data = this.items.get(nodeId)?.data;
         if (active?.nodeId !== nodeId || !data) return;
         const state = this._generationComposerCitationState(data);
-        const index = state.imageReferences.findIndex(({ connection }) => connection.id === connectionId);
+        const index = state.citableReferences.findIndex(({ connection }) => connection.id === connectionId);
         if (index < 0) return;
         const prompt = active.element.querySelector('[data-prompt]');
         const citation = this._createGenerationComposerCitation(
@@ -8981,9 +9009,12 @@ export class CanvasManager {
             }
             citation.dataset.citationId = occurrence.connectionId;
             const label = occurrence.missing ? '引用失联' : labelsById.get(occurrence.connectionId);
-            citation.textContent = label;
+            const reference = state.citableReferences.find(entry => entry.source.id === occurrence.sourceNodeId);
+            const annotation = normalizeReferenceAnnotation(reference?.source.referenceAnnotation || occurrence.annotation);
+            citation.textContent = occurrence.missing ? label : (annotation ? `${annotation} · ${label}` : label);
             citation.classList.toggle('is-missing', occurrence.missing === true);
-            citation.dataset.referencePath = state.imageReferences.find(entry => entry.source.id === occurrence.sourceNodeId)?.source.filePath || '';
+            citation.dataset.referencePath = reference ? this._referenceFilePath(reference.source) : '';
+            citation.dataset.referenceMediaType = reference ? this._getItemMediaType(reference.source) : '';
             citation.title = occurrence.missing ? '素材已失联，点击移除此引用' : `取消引用${label}`;
             citation.setAttribute('aria-label', `取消引用${label}`);
             existingById.set(occurrenceId, citation);
@@ -8993,10 +9024,14 @@ export class CanvasManager {
         for (let index = missing.length - 1; index >= 0; index -= 1) {
             const entry = missing[index];
             const label = entry.missing ? '引用失联' : labelsById.get(entry.connectionId);
-            const pill = this._createGenerationComposerCitation(nodeId, entry.connectionId, label, entry.id);
+            const reference = state.citableReferences.find(candidate => candidate.source.id === entry.sourceNodeId);
+            const annotation = normalizeReferenceAnnotation(reference?.source.referenceAnnotation || entry.annotation);
+            const pill = this._createGenerationComposerCitation(nodeId, entry.connectionId,
+                entry.missing ? label : (annotation ? `${annotation} · ${label}` : label), entry.id);
             pill.classList.toggle('is-missing', entry.missing === true);
             if (entry.missing) pill.title = '素材已失联，点击移除此引用';
-            pill.dataset.referencePath = state.imageReferences.find(reference => reference.source.id === entry.sourceNodeId)?.source.filePath || '';
+            pill.dataset.referencePath = reference ? this._referenceFilePath(reference.source) : '';
+            pill.dataset.referenceMediaType = reference ? this._getItemMediaType(reference.source) : '';
             this._insertGenerationComposerCitation(
                 prompt,
                 pill,
@@ -9024,7 +9059,7 @@ export class CanvasManager {
         pill.addEventListener('mouseenter', () => {
             closePreview();
             const filePath = pill.dataset.referencePath;
-            if (!filePath) return;
+            if (!filePath || pill.dataset.referenceMediaType !== 'image') return;
             const preview = document.createElement('img');
             preview.className = 'generation-citation-preview';
             preview.setAttribute('popover', 'manual');
@@ -9142,7 +9177,7 @@ export class CanvasManager {
 
     _syncGenerationComposerCitationsFromPrompt(data, prompt) {
         const references = this._opReferenceEntries(data);
-        const imageReferences = references.filter(({ source }) => this._getItemMediaType(source) === 'image');
+        const citableReferences = references.filter(({ source }) => this._isCitableReference(source));
         const measuredOffsets = this._generationComposerCitationOffsets(prompt);
         const previous = new Map((data.config.referenceCitationOccurrences || []).map(entry => [entry.id, entry]));
         data.config.referenceCitationOccurrences = [...prompt.querySelectorAll('[data-citation-id]')]
@@ -9151,7 +9186,9 @@ export class CanvasManager {
                 id: citation.dataset.citationOccurrenceId,
                 connectionId: citation.dataset.citationId,
                 sourceNodeId: previous.get(citation.dataset.citationOccurrenceId)?.sourceNodeId
-                    || imageReferences.find(({ connection }) => connection.id === citation.dataset.citationId)?.source.id,
+                    || citableReferences.find(({ connection }) => connection.id === citation.dataset.citationId)?.source.id,
+                annotation: normalizeReferenceAnnotation(citableReferences
+                    .find(({ connection }) => connection.id === citation.dataset.citationId)?.source.referenceAnnotation),
                 offset: measuredOffsets[citation.dataset.citationOccurrenceId]
             }));
         const state = this._generationComposerCitationState(data, references);
@@ -12808,9 +12845,9 @@ export class CanvasManager {
         editor.style.height = `${metrics.height}px`;
     }
 
-    syncPlanInlineEditors() {
+    syncPlanInlineEditors({ syncGraph = true } = {}) {
         this.planInlineEditors?.forEach((_, planId) => this._positionPlanInlineEditor(planId));
-        this.graphView?.sync();
+        if (syncGraph) this.graphView?.sync();
     }
 
     focusPlanInlineEditor(planId) {
@@ -12888,68 +12925,97 @@ export class CanvasManager {
         }
         event.preventDefault();
         event.stopPropagation();
-        let last = this._getStagePointerFromClient(event.clientX, event.clientY);
+        const origin = this.stage.position();
+        const startX = event.clientX;
+        const startY = event.clientY;
+        let lastX = startX;
+        let lastY = startY;
+        let moved = false;
+        let panFrame = 0;
+        let pendingPosition = null;
         const passthroughElement = options.passthroughElement || null;
         const pointerCaptureElement = options.pointerCaptureElement || null;
         const pointerId = options.pointerId;
-        const previousPointerEvents = passthroughElement?.style?.pointerEvents;
         if (pointerCaptureElement && pointerId != null && pointerCaptureElement.setPointerCapture) {
             try { pointerCaptureElement.setPointerCapture(pointerId); } catch (_) { }
         }
         if (passthroughElement) passthroughElement.classList.add('is-canvas-panning');
+        const previousCursor = document.body.style.cursor;
         document.body.style.cursor = 'grabbing';
+        const dragStates = [[this.stage, this.stage.draggable()]];
         this.stage.draggable(false);
         this._forEachNode(item => {
+            dragStates.push([item.group, item.group.draggable()]);
             item.group.draggable(false);
-            item.group.find?.('.planRowHandle').forEach(handle => handle.draggable(false));
-        });
-        let lastMoveStamp = null;
-
-        const move = (moveEvent) => {
-            moveEvent.preventDefault();
-            const stamp = `${moveEvent.timeStamp}:${moveEvent.clientX}:${moveEvent.clientY}`;
-            if (stamp === lastMoveStamp) return;
-            lastMoveStamp = stamp;
-            const next = this._getStagePointerFromClient(moveEvent.clientX, moveEvent.clientY);
-            this.stage.position({
-                x: this.stage.x() + next.x - last.x,
-                y: this.stage.y() + next.y - last.y
+            item.group.find?.('.planRowHandle').forEach(handle => {
+                dragStates.push([handle, handle.draggable()]);
+                handle.draggable(false);
             });
-            last = next;
+            clearTimeout(item.hoverTimer);
+            item.hoverTimer = null;
+        });
+        // Panning needs no hit testing. Keep the rendered media and their load tokens intact.
+        const listeningStates = this.stage.getLayers().map(layer => [layer, layer.listening()]);
+        listeningStates.forEach(([layer]) => layer.listening(false));
+        const flush = () => {
+            if (panFrame) cancelAnimationFrame(panFrame);
+            panFrame = 0;
+            if (!pendingPosition) return;
+            this.stage.position(pendingPosition);
+            pendingPosition = null;
             this.stage.batchDraw();
-            this.syncPlanInlineEditors();
-            this.syncGifs();
         };
 
-        const stop = (stopEvent = null) => {
+        const move = (moveEvent) => {
             if (this._activeCanvasPanStop !== stop) return;
+            moveEvent.preventDefault();
+            moveEvent.stopPropagation();
+            if (!Number.isFinite(moveEvent.clientX) || !Number.isFinite(moveEvent.clientY)) return;
+            if (lastX === moveEvent.clientX && lastY === moveEvent.clientY) return;
+            lastX = moveEvent.clientX;
+            lastY = moveEvent.clientY;
+            moved = true;
+            pendingPosition = { x: origin.x + lastX - startX, y: origin.y + lastY - startY };
+            if (!panFrame) panFrame = requestAnimationFrame(flush);
+        };
+
+        const stop = (stopEvent = null, { commit = true } = {}) => {
+            if (this._activeCanvasPanStop !== stop) return;
+            if (stopEvent?.type === 'mouseup' || stopEvent?.type === 'pointerup') {
+                move(stopEvent);
+                this.stage.setPointersPositions(stopEvent);
+            }
             stopEvent?.preventDefault?.();
             stopEvent?.stopPropagation?.();
+            flush();
             this._activeCanvasPanStop = null;
-            document.body.style.cursor = 'default';
+            this._suppressStageMenu = moved;
+            document.body.style.cursor = previousCursor || 'default';
             if (passthroughElement) {
-                passthroughElement.style.pointerEvents = previousPointerEvents || '';
                 passthroughElement.classList.remove('is-canvas-panning');
             }
             if (pointerCaptureElement && pointerId != null && pointerCaptureElement.releasePointerCapture) {
                 try { pointerCaptureElement.releasePointerCapture(pointerId); } catch (_) { }
             }
-            this.stage.draggable(true);
-            this._forEachNode(item => {
-                item.group.draggable(true);
-                item.group.find?.('.planRowHandle').forEach(handle => handle.draggable(true));
+            dragStates.forEach(([node, draggable]) => node.draggable(draggable));
+            listeningStates.forEach(([layer, listening]) => {
+                layer.listening(listening);
+                layer.drawHit();
             });
             document.removeEventListener('mousemove', move, true);
             document.removeEventListener('pointermove', move, true);
             document.removeEventListener('mouseup', stop, true);
             document.removeEventListener('pointerup', stop, true);
             document.removeEventListener('pointercancel', stop, true);
-            pointerCaptureElement?.removeEventListener?.('pointermove', move, true);
-            pointerCaptureElement?.removeEventListener?.('pointerup', stop, true);
-            pointerCaptureElement?.removeEventListener?.('pointercancel', stop, true);
             pointerCaptureElement?.removeEventListener?.('lostpointercapture', stop, true);
             window.removeEventListener('blur', stop);
-            this.emit('change');
+            if (commit) {
+                this._syncHoveredMediaItemAtPointer();
+                const hovered = this.items.get(this._hoveredMediaItemId);
+                if (hovered && !hovered.hoverFull) this._scheduleResourceSaverPromote(hovered);
+                this._scheduleCullCheck(0);
+                if (moved) this.emit('change');
+            }
         };
 
         this._activeCanvasPanStop = stop;
@@ -12958,9 +13024,6 @@ export class CanvasManager {
         document.addEventListener('mouseup', stop, true);
         document.addEventListener('pointerup', stop, true);
         document.addEventListener('pointercancel', stop, true);
-        pointerCaptureElement?.addEventListener?.('pointermove', move, true);
-        pointerCaptureElement?.addEventListener?.('pointerup', stop, true);
-        pointerCaptureElement?.addEventListener?.('pointercancel', stop, true);
         pointerCaptureElement?.addEventListener?.('lostpointercapture', stop, true);
         window.addEventListener('blur', stop);
     }
@@ -14139,7 +14202,7 @@ export class CanvasManager {
     }
 
     _showCanvasStatus(text, timeoutMs = 1800, kind = 'info') {
-        showStatusNotification(text, { kind, duration: timeoutMs });
+        showStatusNotification(formatClientGenerationError(text), { kind, duration: timeoutMs });
     }
 
     _capturePlanInlineFocus(planId) {
@@ -14231,11 +14294,11 @@ export class CanvasManager {
     }
 
     _scheduleResourceSaverPromote(item) {
-        if (!this.resourceSaverMode || item.isResizing || !item.group.getLayer()) return;
+        if (this._activeCanvasPanStop || !this.resourceSaverMode || item.isResizing || !item.group.getLayer()) return;
         clearTimeout(item.hoverTimer);
         item.hoverTimer = setTimeout(() => {
             item.hoverTimer = null;
-            if (!this.resourceSaverMode || item.isResizing || !item.group.getLayer() || item.hoverFull) return;
+            if (this._activeCanvasPanStop || !this.resourceSaverMode || item.isResizing || !item.group.getLayer() || item.hoverFull) return;
             item.hoverFull = true;
             if (item.loaded || item.loading || item.loadQueued) {
                 this._prepareQualityReload(item, false);
@@ -14248,7 +14311,7 @@ export class CanvasManager {
     _demoteResourceSaverItem(item) {
         clearTimeout(item.hoverTimer);
         item.hoverTimer = null;
-        if (!this.resourceSaverMode || item.isResizing || !item.hoverFull || !item.group.getLayer()) return;
+        if (this._activeCanvasPanStop || !this.resourceSaverMode || item.isResizing || !item.hoverFull || !item.group.getLayer()) return;
         if (item.autoPlayVideo || (item.videoElement && !item.videoElement.paused)) return;
 
         item.hoverFull = false;
@@ -14286,6 +14349,7 @@ export class CanvasManager {
     }
 
     _drainContentLoadQueue() {
+        if (this._activeCanvasPanStop) return;
         while (this._activeContentLoads < this._MAX_CONTENT_LOADS && this._contentLoadQueue.length > 0) {
             const item = this._contentLoadQueue.shift();
             if (!item || item.loaded || item.loading || !item.group.getLayer()) {

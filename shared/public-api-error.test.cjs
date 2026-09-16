@@ -1,10 +1,59 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { CATALOG, failureNode, publicFailure, readPublicError, publicErrorResult } = require('./public-api-error.cjs');
+const { CATALOG, failureNode, publicFailure, readPublicError, publicErrorResult, mapLocalError } = require('./public-api-error.cjs');
 const requestId = 'rh_' + 'a'.repeat(32);
 const privateDetail = 'supplier-secret.internal 10.0.0.3 user@example.test /opt/vendor/key.pem sk-private_fake_key Authorization: Bearer private-token';
 
+const portraitReason = 'For 肖像保护, Dreamina Seedance 2.5 只支持生成包含您自己的视频. 请换一张参考图, or create a video from text。';
+
+test('portrait rejection uses the actionable safe message in raw and nested failure envelopes', () => {
+    for (const payload of [
+        { error: { message: portraitReason + privateDetail } },
+        { status: 'failed', data: { error: { message: portraitReason } } },
+        ...['failReason', 'fail_reason', 'failure_reason', 'error_message', 'errorMessage'].map(key => ({ data: { [key]: portraitReason } }))
+    ]) {
+        const result = mapLocalError(200, payload, { query: true, taskId: 'portrait-task' });
+        assert.equal(result.code, 'RH_PORTRAIT_SELF_REQUIRED');
+        assert.match(result.error, /本人肖像/);
+        assert.match(result.error, /更换.*参考图.*纯文字生成/);
+        assert.doesNotMatch(result.error, /Dreamina|Seedance|supplier-secret|sk-private|服务暂时/);
+        assert.equal(result.confirmedFailure, true);
+        assert.equal(result.submissionUnknown, false);
+        assert.equal(result.retryable, false);
+        assert.equal(result.taskId, 'portrait-task');
+    }
+});
+
+test('generic likeness restrictions do not invent a self-only rule; missing IDs remain definite rejections', () => {
+    const result = mapLocalError(400, { error: { message: 'Realistic human faces are not supported by portrait protection' } });
+    assert.equal(result.code, 'RH_PORTRAIT_RESTRICTED');
+    assert.equal(result.confirmedFailure, true);
+    assert.doesNotMatch(result.error, /仅支持.*本人/);
+    const own = mapLocalError(400, { error: 'Only supports videos of yourself' });
+    assert.equal(own.code, 'RH_PORTRAIT_SELF_REQUIRED');
+    assert.notEqual(mapLocalError(400, { error: 'Only supports videos of your product' }).code, own.code);
+    assert.equal(failureNode({ choices: [{ message: { content: portraitReason } }], prompt: portraitReason }), null);
+});
+
+test('public portrait failures retain task identity and terminal state through repeated mapping', () => {
+    const payload = publicFailure(200, { task_id: 'portrait-task', status: 'failed', error: portraitReason }).body;
+    payload.error.message = privateDetail;
+    payload.error.retryable = true;
+    for (const result of [mapLocalError(200, payload, { query: true }), publicErrorResult(payload)]) {
+        assert.equal(result.code, 'RH_PORTRAIT_SELF_REQUIRED');
+        assert.equal(result.confirmedFailure, true);
+        assert.equal(result.retryable, false);
+        assert.equal(result.taskId, 'portrait-task');
+        assert.doesNotMatch(result.error, /private|supplier/);
+    }
+    assert.equal(mapLocalError(502, { error: portraitReason }, { transport: true }).submissionUnknown, true);
+    const transient = mapLocalError(503, { status: 'error', error: 'service temporarily unavailable' }, { query: true });
+    assert.equal(transient.confirmedFailure, false);
+    assert.equal(transient.retryable, true);
+});
+
 for (const [status, raw, code] of [
+    [400, 'This model is not supported on the Chat Completions endpoint', 'RH_MODEL_ENDPOINT_MISMATCH'],
     [400, 'invalid_parameter duration', 'RH_INVALID_REQUEST'],
     [401, 'invalid key', 'RH_AUTH_FAILED'], [402, 'insufficient_quota', 'RH_QUOTA_EXHAUSTED'],
     [403, 'access denied', 'RH_PERMISSION_DENIED'], [413, 'too large', 'RH_MEDIA_TOO_LARGE'],
@@ -18,7 +67,7 @@ for (const [status, raw, code] of [
     assert.equal(result.body.error.message, CATALOG[code][1]);
     assert.equal(result.body.error.request_id, requestId);
     assert.equal(JSON.stringify(result).includes('supplier-secret'), false);
-    assert.equal(Object.keys(result.body).join(','), 'error');
+    assert.equal(Object.keys(result.body).join(','), code === 'RH_CONTENT_REJECTED' ? 'error,status' : 'error');
 });
 
 test('POST transport and 5xx retain unknown outcome without resubmission', () => {
@@ -69,4 +118,71 @@ test('client validates catalogue and reconstructs rather than displays echoed me
     value.error.code = '__proto__';
     assert.equal(readPublicError(value), null);
     assert.equal(publicErrorResult('not-json'), null);
+});
+
+const reviewCases = [
+    ['素材图片包含版权内容，审核未通过', 'RH_REFERENCE_COPYRIGHT'],
+    ['内容审核未通过，请修改后重试', 'RH_CONTENT_REJECTED'],
+    ['提示词审核不通过', 'RH_PROMPT_REJECTED'],
+    ['参考视频未通过内容安全检查', 'RH_REFERENCE_REJECTED'],
+    ['生成结果未通过内容审核', 'RH_OUTPUT_REJECTED'],
+    ['Reference image rejected: copyrighted content', 'RH_REFERENCE_COPYRIGHT'],
+    ['Copyright policy violation', 'RH_COPYRIGHT_REJECTED'],
+    ['prompt_moderation_failed', 'RH_PROMPT_REJECTED'],
+    ['Output video blocked by content filter', 'RH_OUTPUT_REJECTED']
+];
+
+for (const [reason, code] of reviewCases) test(`review reason preserves its category: ${code} / ${reason}`, () => {
+    const envelopes = [
+        { error: { message: reason, supplier: privateDetail } },
+        { data: { status: 'failed', failure_reason: reason } },
+        { status: 'failed', result: { reason } },
+        { success: false, result: { error: { detail: reason } } },
+        { base_resp: { status_code: 104, status_msg: reason } }
+    ];
+    for (const payload of envelopes) {
+        for (const status of [200, 400, 403, 500]) {
+            const result = mapLocalError(status, payload, { query: true, taskId: 'review-task' });
+            assert.equal(result.code, code);
+            assert.equal(result.confirmedFailure, true);
+            assert.equal(result.retryable, false);
+            assert.equal(result.submissionUnknown, false);
+            assert.equal(result.taskId, 'review-task');
+            assert.doesNotMatch(result.error, /supplier-secret|Bearer|sk-private|服务暂时不可用|未能完成/);
+        }
+    }
+});
+
+test('review service failures, pending review and creative output are not content rejections', () => {
+    for (const reason of ['审核服务暂时不可用', '审核接口超时', 'Moderation service failed', 'copyright service unavailable']) {
+        const result = mapLocalError(503, { error: { message: reason } }, { query: true });
+        assert.equal(result.confirmedFailure, false);
+        assert.equal(result.retryable, true);
+    }
+    for (const payload of [
+        { status: 'pending', message: '内容审核中' },
+        { status: 'processing', description: 'Copyright review pending' },
+        { status: 'completed', prompt: '素材图片包含版权内容，审核未通过', output: { content: '内容审核未通过' } },
+        { choices: [{ message: { content: '生成结果未通过内容审核' } }] }
+    ]) assert.equal(failureNode(payload), null);
+    const unknown = mapLocalError(200, { status: 'failed', reason: privateDetail }, { query: true });
+    assert.equal(unknown.code, 'RH_TASK_FAILED');
+    assert.equal(unknown.confirmedFailure, true);
+    assert.doesNotMatch(unknown.error, /supplier-secret|Bearer/);
+    assert.equal(mapLocalError(502, { error: { message: reviewCases[0][0] } }).submissionUnknown, true);
+});
+
+test('public review errors cannot lose terminal state or echo a substituted sensitive message', () => {
+    for (const [reason, code] of reviewCases) {
+        const value = publicFailure(200, { error: reason }, { query: true, taskId: 'review-task' }).body;
+        value.error.message = privateDetail;
+        value.error.retryable = true;
+        for (const result of [publicErrorResult(value), mapLocalError(200, value, { query: true })]) {
+            assert.equal(result.code, code);
+            assert.equal(result.confirmedFailure, true);
+            assert.equal(result.retryable, false);
+            assert.equal(result.taskId, 'review-task');
+            assert.equal(result.error, CATALOG[code][1]);
+        }
+    }
 });

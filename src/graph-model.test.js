@@ -93,6 +93,14 @@ test('canConnect: 合法连线通过', () => {
     assert.deepStrictEqual(G.canConnect(from, 'text', to, 'source', []), { ok: true });
 });
 
+test('canConnect: 多个文本节点可以同时接入文本生成合并节点', () => {
+    const second = op('plot-b', 'text');
+    const story = op('story', 'text');
+    const existing = [conn('plot-a', 'text', 'story', 'context')];
+    const result = G.canConnect(second, 'text', story, 'context', existing);
+    assert.deepStrictEqual(result, { ok: true });
+});
+
 test('canConnect: 类型不匹配被拒', () => {
     const from = media('m1', 'a.mp4');
     const to = op('g1', 'image');
@@ -319,6 +327,17 @@ test('collectInputContext: 保留连接 ID、来源节点、素材尺寸和原�
             height: 450
         }
     }]);
+});
+
+test('collectInputContext: 素材用途标注随来源节点进入生成上下文', () => {
+    const source = { ...media('voice', 'C:/refs/voice.wav'), mediaType: 'audio', referenceAnnotation: '旁白' };
+    const target = op('gen', 'video');
+    const edge = conn('voice', 'out', 'gen', 'source');
+    const context = G.collectInputContext(target, [edge], new Map([
+        ['voice', { out: 'local-res://' + encodeURIComponent(source.filePath) }]
+    ]), [source, target]);
+
+    assert.equal(context[0].source.referenceAnnotation, '旁白');
 });
 
 test('canConnect: multi 端口允许多条连线，不触发替换', () => {

@@ -8,10 +8,11 @@ import {
     extractDeterministicSignals,
     validateEditPlan
 } from './image-intent-pipeline.js';
-import { isMidjourneyImageModel } from './provider-capabilities.js';
+import { isMidjourneyImageModel, canUseTextProvider } from './provider-capabilities.js';
 import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from './generation-request-params.js';
 import { inferClosestAspectRatio } from './image-node-settings.js';
 import { restoreReferenceCitations, referenceCitationGuide, withoutReferenceCitationGuide, bindReferenceCitations } from './reference-citations.js';
+import { generationFailureError } from './generation-progress.js';
 
 // ============================================================
 // Flow Canvas — Node Type Definitions (节点类型注册表)
@@ -47,19 +48,6 @@ function throwIfGenerationCanceled(ctx, result = null) {
     error.name = 'AbortError';
     error.code = 'GENERATION_CANCELED';
     throw error;
-}
-
-/**
- * 把主进程返回的失败结果转成 Error，并保留其结构化语义。
- *
- * `submissionUnknown` 表示「服务端可能已受理、结果无法确认」，渲染层据此把任务
- * 归为 disconnected 而不是 failed，从而不引导用户直接重新提交（可能重复计费）。
- * 直接用 new Error(result.error) 会丢掉这个标记，只靠错误文案里的关键词去猜。
- */
-function generationFailureError(result, fallbackMessage = '生图未返回图片') {
-    const error = new Error(result?.error || fallbackMessage);
-    if (result?.submissionUnknown === true) error.submissionUnknown = true;
-    return error;
 }
 
 /** local-res:// URL → 文件路径。上游媒体端口传的都是这个协议。 */
@@ -170,7 +158,7 @@ function startImageIntentPipeline({ prompt, config, ctx, references, imageProvid
     let plannerPromise;
     let cacheHit = false;
 
-    if (!plannerProvider?.apiKey || !plannerProvider?.model) {
+    if (!plannerProvider?.apiKey || !canUseTextProvider(plannerProvider)) {
         plannerPromise = Promise.resolve({
             success: false,
             code: 'PLANNER_PROVIDER_UNAVAILABLE',
@@ -409,7 +397,7 @@ function packGenerationResults(portName, results) {
 // 多条上游文本按 separator 拼接，不需要单独的合并节点。
 NODE_TYPES['text'] = {
     type: 'text',
-    title: '文本 / Prompt',
+    title: '文本生成 / 合并',
     icon: 'pencil-line',
     color: '#6366f1',
     width: 320,
@@ -422,7 +410,7 @@ NODE_TYPES['text'] = {
     config: [
         { key: 'useAi', label: '使用文字 AI 生成', type: 'checkbox', default: false },
         { key: 'text', label: '文本内容', type: 'textarea', default: '' },
-        { key: 'separator', label: '上游拼接分隔符', type: 'text', default: '\n' },
+        { key: 'separator', label: '情节合并分隔符', type: 'text', default: '\n' },
         { key: 'splitBy', label: '拆分为多条（分隔符，留空不拆）', type: 'text', default: '' }
     ],
     async execute(inputs, config, ctx) {
@@ -496,7 +484,7 @@ NODE_TYPES['image'] = {
         const own = ctx?.item?.filePath;
         const refs = toFileList(sources.filter(value => localResourceType(value) === 'image'));
         if (own && !refs.some(r => r.filePath === own)) refs.unshift({ filePath: own });
-        const bound = bindReferenceCitations(config, refs, ctx?.inputContext);
+        const bound = bindReferenceCitations(config, refs.map(reference => ({ ...reference, mediaType: 'image' })), ctx?.inputContext);
         config = bound.config;
         const inputPrompts = sources.filter(value => typeof value === 'string' && !toFilePath(value));
         if (inputPrompts.length) config.generationUpstreamPrompts = inputPrompts;
@@ -598,7 +586,7 @@ NODE_TYPES['image'] = {
                 ? filePaths.map(filePath => 'local-res://' + encodeURIComponent(filePath))
                 : [result?.url].filter(Boolean);
             if (!imageUrls.length) {
-                const failure = generationFailureError(result);
+                const failure = generationFailureError(result, '生图未返回图片');
                 if (clientTaskId) ctx?.recordGenerationError?.(clientTaskId, failure);
                 intent?.finish({
                     ...imageProviderSummary(provider),
@@ -708,7 +696,13 @@ NODE_TYPES['video'] = {
         const own = ctx?.item?.filePath;
         const frames = toFileList(sources.filter(value => localResourceType(value) === 'image'));
         if (!frames.length && own) frames.push({ filePath: own });
-        const bound = bindReferenceCitations(config, frames, ctx?.inputContext);
+        const videoReferences = toFileList(sources.filter(value => localResourceType(value) === 'video'));
+        const audioReferences = toFileList(sources.filter(value => localResourceType(value) === 'file'));
+        const bound = bindReferenceCitations(config, [
+            ...frames.map(reference => ({ ...reference, mediaType: 'image' })),
+            ...videoReferences.map(reference => ({ ...reference, mediaType: 'video' })),
+            ...audioReferences.map(reference => ({ ...reference, mediaType: 'audio' }))
+        ], ctx?.inputContext);
         config = bound.config;
         const inputPrompts = sources.filter(value => typeof value === 'string' && !toFilePath(value));
         if (inputPrompts.length) config.generationUpstreamPrompts = inputPrompts;
@@ -751,9 +745,6 @@ NODE_TYPES['video'] = {
                 '16:9'
             )
             : (config.ratio || undefined);
-        const videoReferences = toFileList(sources.filter(value => localResourceType(value) === 'video'));
-        const audioReferences = toFileList(sources.filter(value => localResourceType(value) === 'file'));
-
         for (const prompt of prompts) {
             ctx?.validateGenerationRequest?.({
                 kind: 'video', provider, prompt,
@@ -839,7 +830,7 @@ NODE_TYPES['video'] = {
                     addToCanvas: false
                 });
                 throwIfGenerationCanceled(ctx, result);
-                if (result?.success === false) throw new Error(result.error || '视频生成请求失败');
+                if (result?.success === false) throw generationFailureError(result, '视频生成请求失败');
             } catch (error) {
                 if (clientTaskId) ctx?.recordGenerationError?.(clientTaskId, error);
                 throw error;
