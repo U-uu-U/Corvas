@@ -11,7 +11,8 @@ export function createApplicationLauncher({ onSelect }) {
     menu.hidden = true;
     menu.innerHTML = `<span class="corvas-app-launcher-label">创作应用</span>
         <button type="button" data-app="agent">${icon('sparkles')}<span>AI Agent</span></button>
-        <button type="button" data-app="hunyuan">${cube}<span>混元 3D</span></button>`;
+        <button type="button" data-app="hunyuan">${cube}<span>混元 3D</span></button>
+        <button type="button" data-app="rhino"><span class="corvas-rhino-mark" aria-hidden="true">Rh</span><span>Rhino</span></button>`;
     document.body.append(menu);
     let timer;
     const hide = () => { clearTimeout(timer); menu.hidden = true; };

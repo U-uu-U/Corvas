@@ -39,6 +39,7 @@ import { canRecoverGenerationTask, generationFailureError, formatClientGeneratio
     isGenerationFailureConfirmed, getGenerationRejectionInfo } from './generation-progress.js';
 import { showStatusNotification } from './status-notification.js';
 import { createApplicationLauncher, createHunyuanPanel } from './hunyuan-accounts.js';
+import { createRhinoPanel, RHINO_EDIT_SKILL } from './rhino-workbench.js';
 import { getVideoModelProfile, describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
 import { getModelPresentation, describeModelPresentation } from '../shared/model-presentation.mjs';
 import { modelConfigStore } from './model-config.js';
@@ -107,6 +108,7 @@ const AGENT_CONVERSATION_MESSAGE_LIMIT = 80;
 const AGENT_PENDING_ATTACHMENTS_STORAGE_KEY = 'flow-canvas-agent-pending-attachments-v1';
 const AGENT_PENDING_ATTACHMENT_LIMIT = 32;
 const AGENT_SKILLS = Object.freeze([
+    RHINO_EDIT_SKILL,
     {
         id: 'board-planning',
         name: '画板规划',
@@ -328,7 +330,20 @@ export class AgentSidebar {
         this.hunyuanPanel = createHunyuanPanel({
             onClose: () => this.setMode('canvas'), onAgent: () => this.setMode('agent')
         });
-        this.applicationLauncher = createApplicationLauncher({ onSelect: mode => this.setMode(mode) });
+        this.rhinoPanel = createRhinoPanel({ onClose: () => this.setMode('canvas'), onAgent: prompt => {
+            this.globalConfig.agentSkillIds = [...new Set([...this._selectedAgentSkillIds(), RHINO_EDIT_SKILL.id])];
+            this._saveConfig(); this._renderAgentSkillList();
+            this.setMode('agent');
+            if (prompt && this.inputEl) {
+                this.inputEl.value = this.inputEl.value.trim() ? `${this.inputEl.value}\n\n${prompt}` : prompt;
+                this.inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            this.inputEl?.focus();
+        } });
+        this.applicationLauncher = createApplicationLauncher({ onSelect: mode => {
+            this.setMode(mode);
+            if (mode === 'rhino') this.rhinoPanel?.launch();
+        } });
         this._bindAgentSidebarResize();
         this._syncHudState();
 
@@ -2546,7 +2561,7 @@ export class AgentSidebar {
 
     setMode(mode = 'canvas', settingsTab = null) {
         this._finishAgentSidebarResize?.();
-        const nextMode = ['agent', 'settings', 'hunyuan', 'canvas'].includes(mode) ? mode : 'canvas';
+        const nextMode = ['agent', 'settings', 'hunyuan', 'rhino', 'canvas'].includes(mode) ? mode : 'canvas';
         this.applicationLauncher?.hide();
         const body = document.body;
         // 离开设置界面时必须解除快捷键录制状态。_captureShortcut 是 document 捕获
@@ -2567,7 +2582,7 @@ export class AgentSidebar {
             }[nextMode] || '';
         }
 
-        body.classList.remove('agent-mode', 'settings-mode', 'hunyuan-mode');
+        body.classList.remove('agent-mode', 'settings-mode', 'hunyuan-mode', 'rhino-mode');
         if (nextMode === 'canvas') {
             body.classList.remove('creation-mode');
             this.close();
@@ -3671,6 +3686,7 @@ export class AgentSidebar {
 
     _syncHudState() {
         this.hunyuanPanel?.setVisible(this.currentMode === 'hunyuan' && document.body.classList.contains('agent-open'));
+        this.rhinoPanel?.setVisible(this.currentMode === 'rhino' && document.body.classList.contains('agent-open'));
         const settingsButton = document.getElementById('agentSettingsBtn');
         const settingsOpen = this.currentMode === 'settings' && document.body.classList.contains('agent-open');
         settingsButton?.classList.toggle('active', settingsOpen);
@@ -3682,7 +3698,7 @@ export class AgentSidebar {
             ? '左键关闭侧边栏，右键收起画布'
             : '左键打开 AI Agent，右键收起画布';
         button.setAttribute('aria-expanded', String(isOpen));
-        button.setAttribute('aria-controls', this.currentMode === 'hunyuan' ? 'hunyuanAccountsPanel' : 'agentSidebar');
+        button.setAttribute('aria-controls', ({ hunyuan: 'hunyuanAccountsPanel', rhino: 'rhinoWorkbenchPanel' })[this.currentMode] || 'agentSidebar');
         button.setAttribute('aria-label', label);
         button.title = label;
     }
