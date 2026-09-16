@@ -255,6 +255,9 @@ export class AgentSidebar {
         this.agentAttachmentList = document.getElementById('agentAttachmentList');
         this.agentContextSummary = document.getElementById('agentContextSummary');
         this.agentAttachmentClear = document.getElementById('agentAttachmentClear');
+        this.agentAddMaterialBtn = document.getElementById('agentAddMaterialBtn');
+        this.agentMaterialPickHint = document.getElementById('agentMaterialPickHint');
+        this.agentMaterialPickKey = null;
         this.sendBtn = document.getElementById('agentSendBtn');
         this.planBtn = document.getElementById('agentPlanBtn');
         this.clearBtn = document.getElementById('agentClearBtn');
@@ -374,6 +377,12 @@ export class AgentSidebar {
         modelConfigStore.subscribe(() => this._renderAgentComposerModels());
         this.options.subscribeCanvasSelection?.((entries) => {
             this.lastCanvasSelection = Array.isArray(entries) ? entries : [];
+        });
+        this.options.subscribeAgentMaterialSelection?.(event => this._onAgentMaterialSelection(event));
+        this.options.subscribeMaterialPickState?.(event => {
+            if (event.owner !== 'agent') return;
+            this.agentMaterialPickKey = event.active ? this._activeConversationCacheKey() : null;
+            this._renderAgentMaterialPickState();
         });
         this.options.subscribeAssetLibrarySettings?.(() => this._renderAssetLibrarySettings());
     }
@@ -753,6 +762,8 @@ export class AgentSidebar {
                     name: String(attachment?.name || '').trim()
                         || (filePath || url).replace(/\\/g, '/').split('/').pop()
                         || `${mediaType}素材`,
+                    ...(attachment.manual === true ? { manual: true } : {}),
+                    ...(attachment.annotation ? { annotation: String(attachment.annotation).trim().slice(0, 80) } : {}),
                     width: Number(attachment?.width) || null,
                     height: Number(attachment?.height) || null,
                     depth: Math.max(1, Number(attachment?.depth) || 1)
@@ -785,7 +796,8 @@ export class AgentSidebar {
         // Keep retained references in their visible order; append newly connected media last.
         for (const previous of sameNode ? this.pendingAgentAttachments : []) {
             const key = this._pendingAgentAttachmentKey(previous);
-            if (remaining.has(key)) attachments.push(remaining.get(key));
+            if (remaining.has(key)) attachments.push({ ...remaining.get(key), ...(previous.manual ? { manual: true } : {}) });
+            else if (previous.manual && !excluded.has(key)) attachments.push(previous);
             remaining.delete(key);
         }
         attachments.push(...remaining.values());
@@ -821,6 +833,10 @@ export class AgentSidebar {
     }
 
     _restorePendingAgentAttachments(key = this._activeConversationCacheKey()) {
+        if (this.agentMaterialPickKey && this.agentMaterialPickKey !== key) {
+            this.options.endMediaReferencePick?.({ clearHighlights: true, silent: true });
+            this.agentMaterialPickKey = null;
+        }
         const store = this._loadPendingAgentAttachmentStore();
         let state = store[key];
         if (!state && key === this._activeConversationCacheKey() && store[this.activeProjectCacheKey]) {
@@ -847,17 +863,70 @@ export class AgentSidebar {
             image.addEventListener('error', () => preview.classList.add('failed'));
             preview.appendChild(image);
         }
-        const icon = document.createElement('svg');
-        icon.className = 'flow-icon agent-attachment-fallback';
+        const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        icon.setAttribute('class', 'flow-icon agent-attachment-fallback');
         icon.setAttribute('aria-hidden', 'true');
-        const use = document.createElement('use');
+        const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
         use.setAttribute('href', `./icons/flow-icons.svg#icon-${attachment.mediaType}`);
         icon.appendChild(use);
         preview.appendChild(icon);
         return preview;
     }
 
+    _renderAgentMaterialPickState() {
+        const active = this.agentMaterialPickKey === this._activeConversationCacheKey();
+        this.agentAddMaterialBtn?.classList.toggle('active', active);
+        this.agentAddMaterialBtn?.setAttribute('aria-pressed', String(active));
+        const label = this.agentAddMaterialBtn?.querySelector('span');
+        if (label) label.textContent = active ? '完成选择' : '添加素材';
+        if (this.agentMaterialPickHint) this.agentMaterialPickHint.hidden = !active;
+    }
+
+    _toggleAgentMaterialPick() {
+        if (this.agentMaterialPickKey === this._activeConversationCacheKey()) {
+            this.options.endMediaReferencePick?.({ clearHighlights: true });
+            this.agentMaterialPickKey = null;
+        } else {
+            this._closeAgentComposerPopovers();
+            const started = this.options.beginAgentMaterialPick?.(this.pendingAgentAttachments, this.pendingAgentSource?.nodeId);
+            if (started) this.agentMaterialPickKey = this._activeConversationCacheKey();
+        }
+        this._renderAgentMaterialPickState();
+    }
+
+    _onAgentMaterialSelection(event) {
+        if (event.owner !== 'agent' || this.agentMaterialPickKey !== this._activeConversationCacheKey()) return;
+        const entry = event.changedEntry;
+        if (!entry) return;
+        const attachment = this._normalizePendingAgentAttachments([{ ...entry,
+            sourceNodeId: entry.id, itemId: entry.id, manual: true }])[0];
+        if (!attachment) return;
+        const key = this._pendingAgentAttachmentKey(attachment);
+        const index = this.pendingAgentAttachments.findIndex(previous => this._pendingAgentAttachmentKey(previous) === key);
+        if (event.selected) {
+            if (index < 0 && this.pendingAgentAttachments.length >= AGENT_PENDING_ATTACHMENT_LIMIT) {
+                this.options.endMediaReferencePick?.({ clearHighlights: true });
+                this.agentMaterialPickKey = null;
+                this._appendAgentError(`最多可添加 ${AGENT_PENDING_ATTACHMENT_LIMIT} 个素材。`);
+                this._renderAgentMaterialPickState();
+                return;
+            }
+            if (index < 0) this.pendingAgentAttachments.push(attachment);
+            else this.pendingAgentAttachments[index] = attachment;
+            if (this.pendingAgentSource) this.pendingAgentSource.excludedAttachmentKeys =
+                (this.pendingAgentSource.excludedAttachmentKeys || []).filter(value => value !== key);
+        } else if (index >= 0) {
+            this.pendingAgentAttachments.splice(index, 1);
+            if (this.pendingAgentSource) this.pendingAgentSource.excludedAttachmentKeys = [...new Set([
+                ...(this.pendingAgentSource.excludedAttachmentKeys || []), key
+            ])];
+        }
+        this._savePendingAgentAttachments();
+        this._renderPendingAgentAttachments();
+    }
+
     _renderPendingAgentAttachments() {
+        this._renderAgentMaterialPickState();
         if (!this.agentAttachmentTray || !this.agentAttachmentList) return;
         const attachments = this.pendingAgentAttachments;
         const source = this.pendingAgentSource;
@@ -868,7 +937,10 @@ export class AgentSidebar {
             if (source?.effectivePrompt) summary.push('提示词');
             const parameterCount = Object.keys(source?.parameters || {}).length;
             if (parameterCount) summary.push(`${parameterCount} 项参数`);
-            if (attachments.length) summary.push(`${attachments.length} 个素材`);
+            for (const [type, label] of [['image', '图片'], ['video', '视频'], ['audio', '音频']]) {
+                const count = attachments.filter(attachment => attachment.mediaType === type).length;
+                if (count) summary.push(`${label}${count}`);
+            }
             this.agentContextSummary.textContent = summary.join(' · ') || '节点上下文';
         }
         this.agentAttachmentList.replaceChildren();
@@ -902,11 +974,16 @@ export class AgentSidebar {
         }
         this._savePendingAgentAttachments();
         this._renderPendingAgentAttachments();
+        if (this.agentMaterialPickKey === this._activeConversationCacheKey()) {
+            this.options.beginAgentMaterialPick?.(this.pendingAgentAttachments, this.pendingAgentSource?.nodeId);
+        }
         this.inputEl?.focus();
     }
 
     _clearPendingAgentAttachments(key = this._activeConversationCacheKey()) {
         if (key === this._activeConversationCacheKey()) {
+            if (this.agentMaterialPickKey) this.options.endMediaReferencePick?.({ clearHighlights: true, silent: true });
+            this.agentMaterialPickKey = null;
             this.pendingAgentAttachments = [];
             this.pendingAgentSource = null;
             this._renderPendingAgentAttachments();
@@ -1667,6 +1744,14 @@ export class AgentSidebar {
     }
 
     async generateImageFromNode(details = {}, instruction = '', { fromSidebar = false } = {}) {
+        if (details?.nodeId === this.pendingAgentSource?.nodeId) {
+            try {
+                this.options.connectAgentReferences?.(details.nodeId, this.pendingAgentAttachments.filter(attachment => attachment.manual));
+            } catch (error) {
+                this._appendAgentError(error.message);
+                return { ok: false, reason: error.message };
+            }
+        }
         const canRefreshContext = details?.nodeId && typeof this.options.getAgentNodeContext === 'function';
         const latest = canRefreshContext ? this.options.getAgentNodeContext(details.nodeId) : null;
         if (canRefreshContext && !latest) {
@@ -2429,7 +2514,13 @@ export class AgentSidebar {
             if (button) this._removePendingAgentAttachment(Number(button.dataset.removeAgentAttachment));
         });
         this.agentAttachmentClear?.addEventListener('click', () => this._clearPendingAgentAttachments());
+        this.agentAddMaterialBtn?.addEventListener('click', () => this._toggleAgentMaterialPick());
         this.inputEl?.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && this.agentMaterialPickKey) {
+                event.preventDefault();
+                this._toggleAgentMaterialPick();
+                return;
+            }
             if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
             event.preventDefault();
             void this._sendAgentMessage();
@@ -3670,6 +3761,10 @@ export class AgentSidebar {
     }
 
     close() {
+        if (this.agentMaterialPickKey) {
+            this.options.endMediaReferencePick?.({ clearHighlights: true, silent: true });
+            this.agentMaterialPickKey = null;
+        }
         this._finishAgentSidebarResize?.();
         // 面板收起时务必解除快捷键录制，否则 _captureShortcut 仍会在 document
         // 捕获阶段吞掉全应用按键（详见 setMode 中的说明）。

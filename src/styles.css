@@ -3989,6 +3989,39 @@ body.agent-mode .agent-input {
     font-size: 13px;
 }
 
+.agent-material-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    margin-bottom: 8px;
+}
+
+.agent-add-material-btn {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--hover-bg);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.agent-add-material-btn:hover,
+.agent-add-material-btn.active,
+.agent-add-material-btn:focus-visible {
+    color: var(--text-primary);
+    border-color: var(--text-secondary);
+}
+
+#agentMaterialPickHint { color: var(--text-secondary); font-size: 10px; }
+#agentMaterialPickHint[hidden] { display: none; }
+
 .agent-attachment-tray[hidden] {
     display: none !important;
 }
