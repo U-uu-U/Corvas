@@ -8,15 +8,13 @@ const partitionFor = id => {
     if (!ACCOUNT_ID.test(id || '')) throw new Error('混元账号不存在');
     return `persist:corvas-hunyuan-${id}`;
 };
-const webUrl = value => {
-    try { return ['https:', 'http:'].includes(new URL(value).protocol); } catch { return false; }
-};
 
 class HunyuanAccounts {
-    constructor({ dataDir, BrowserWindow, session, onChange = () => {} }) {
+    constructor({ dataDir, launchBrowser, clearLegacySession = async () => {}, onChange = () => {} }) {
         this.file = path.join(dataDir, 'hunyuan-accounts.json');
-        this.BrowserWindow = BrowserWindow;
-        this.session = session;
+        this.profilesDir = path.join(dataDir, 'hunyuan-browser-profiles');
+        this.launchBrowser = launchBrowser;
+        this.clearLegacySession = clearLegacySession;
         this.onChange = onChange;
         this.windows = new Map();
         this.states = new Map();
@@ -42,7 +40,7 @@ class HunyuanAccounts {
 
     list() {
         return { error: this.loadError, accounts: this.accounts.map(account => ({ ...account,
-            windowOpen: Boolean(this.windows.get(account.id)?.main),
+            windowOpen: this.windows.has(account.id),
             status: this.states.get(account.id) || 'closed' })) };
     }
 
@@ -79,83 +77,63 @@ class HunyuanAccounts {
             if (!previous && this.accounts.length >= 50) throw new Error('最多可添加 50 个混元账号');
             const account = { ...(previous || { id: crypto.randomUUID(), createdAt: new Date().toISOString(), lastOpenedAt: null }), name: name.trim() };
             this.persist(previous ? this.accounts.map(entry => entry.id === id ? account : entry) : [...this.accounts, account]);
-            this.windows.get(id)?.main?.setTitle(`混元 3D · ${account.name}`);
+            this.send(id, { type: 'rename', name: account.name });
             this.notify();
             return { ...this.list(), account: { ...account } };
         });
     }
 
-    preferences(id) {
-        return { session: this.session.fromPartition(partitionFor(id)),
-            nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true };
-    }
-
-    secureWindow(window, id, group) {
-        group.children.add(window);
-        const web = window.webContents;
-        // Login popups share this account's session, never the canvas preload or another account.
-        web.setWindowOpenHandler(({ url }) => webUrl(url) || url === 'about:blank'
-            ? { action: 'allow', overrideBrowserWindowOptions: { width: 1000, height: 760,
-                autoHideMenuBar: true, webPreferences: this.preferences(id) } }
-            : { action: 'deny' });
-        web.on('did-create-window', child => this.secureWindow(child, id, group));
-        web.on('will-navigate', (event, url) => { if (!webUrl(url) && url !== 'about:blank') event.preventDefault(); });
-        web.on('will-redirect', (event, url) => { if (!webUrl(url) && url !== 'about:blank') event.preventDefault(); });
-        web.on('will-attach-webview', event => event.preventDefault());
-        window.on('closed', () => group.children.delete(window));
+    send(id, message) {
+        const child = this.windows.get(id)?.child;
+        if (!child?.connected) return;
+        child.send(message, error => {
+            if (error && this.windows.get(id)?.child === child) {
+                this.states.set(id, 'error'); this.notify();
+            }
+        });
     }
 
     open({ id } = {}) {
         const account = this.account(id);
-        let group = this.windows.get(id);
-        if (group?.main && !group.main.isDestroyed()) {
-            if (group.main.isMinimized()) group.main.restore();
-            group.main.show();
-            group.main.focus();
-            if (this.states.get(id) === 'error') this.load(group.main, id);
+        if (this.windows.has(id)) {
+            this.send(id, { type: 'focus' });
             return this.list();
         }
         this.persist(this.accounts.map(entry => entry.id === id ? { ...entry, lastOpenedAt: new Date().toISOString() } : entry));
-        const window = new this.BrowserWindow({ width: 1320, height: 900, minWidth: 840, minHeight: 600,
-            title: `混元 3D · ${account.name}`, backgroundColor: '#17181b', autoHideMenuBar: true,
-            webPreferences: this.preferences(id) });
-        group = { main: window, children: new Set() };
-        this.windows.set(id, group);
-        this.secureWindow(window, id, group);
-        window.on('page-title-updated', event => {
-            event.preventDefault();
-            window.setTitle(`混元 3D · ${this.accounts.find(entry => entry.id === id)?.name || account.name}`);
+        // Each process has its own Chromium window-name registry as well as its own profile.
+        const child = this.launchBrowser({ id, name: account.name, profileDir: path.join(this.profilesDir, id) });
+        const record = { child, closing: false };
+        this.windows.set(id, record);
+        record.closed = new Promise(resolve => {
+            const finish = code => {
+                if (this.windows.get(id) === record) {
+                    this.windows.delete(id);
+                    if (code && !record.closing) this.states.set(id, 'error');
+                    else this.states.delete(id);
+                    this.notify();
+                }
+                resolve();
+            };
+            child.once('close', finish);
+            child.once('error', () => finish(1));
         });
-        const update = state => {
-            if (this.windows.get(id) !== group || this.removing.has(id)) return;
-            this.states.set(id, state);
-            this.notify();
-        };
-        window.webContents.on('did-start-loading', () => update('loading'));
-        window.webContents.on('did-finish-load', () => update('open'));
-        window.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
-            if (isMainFrame && code !== -3) update('error');
+        child.on('message', message => {
+            if (this.windows.get(id) !== record || record.closing || message?.type !== 'status'
+                || !['loading', 'open', 'error'].includes(message.status)) return;
+            this.states.set(id, message.status); this.notify();
         });
-        window.webContents.on('render-process-gone', () => update('error'));
-        window.on('closed', () => {
-            for (const child of [...group.children]) if (!child.isDestroyed()) child.destroy();
-            this.session.fromPartition(partitionFor(id)).flushStorageData();
-            this.windows.delete(id);
-            this.states.delete(id);
-            this.notify();
-        });
-        this.load(window, id);
+        this.states.set(id, 'loading');
+        this.notify();
         return this.list();
     }
 
-    load(window, id) {
-        this.states.set(id, 'loading');
-        this.notify();
-        window.loadURL(HUNYUAN_URL).catch(error => {
-            if (window.isDestroyed() || error.code === 'ERR_ABORTED') return;
-            this.states.set(id, 'error');
-            this.notify();
-        });
+    async close(id) {
+        const record = this.windows.get(id);
+        if (!record) return;
+        record.closing = true;
+        this.send(id, { type: 'close' });
+        const timeout = setTimeout(() => record.child.kill(), 5000);
+        try { await record.closed; } finally { clearTimeout(timeout); }
     }
 
     remove({ id } = {}) {
@@ -163,12 +141,9 @@ class HunyuanAccounts {
             this.account(id);
             this.removing.add(id);
             try {
-                this.windows.get(id)?.main?.destroy();
-                const profile = this.session.fromPartition(partitionFor(id));
-                await profile.closeAllConnections();
-                await profile.clearStorageData();
-                await profile.clearCache();
-                profile.flushStorageData();
+                await this.close(id);
+                await fs.promises.rm(path.join(this.profilesDir, id), { recursive: true, force: true, maxRetries: 3, retryDelay: 150 });
+                await this.clearLegacySession(id);
                 this.persist(this.accounts.filter(account => account.id !== id));
                 this.states.delete(id);
                 this.notify();
@@ -178,7 +153,7 @@ class HunyuanAccounts {
     }
 
     closeAll() {
-        for (const { main } of [...this.windows.values()]) if (!main.isDestroyed()) main.destroy();
+        return Promise.all([...this.windows.keys()].map(id => this.close(id)));
     }
 }
 

@@ -68,7 +68,7 @@ export function createHunyuanPanel({ onClose, onAgent }) {
     root.innerHTML = `<header class="hunyuan-panel-head"><div>${cube}<h2>混元 3D</h2></div>
         <button type="button" data-action="close" title="关闭侧边栏" aria-label="关闭混元账号侧栏">${icon('close')}</button></header>
         <div class="hunyuan-panel-intro"><strong>选择一个账号开始创作</strong>
-            <p>各账号独立保存登录状态，可同时打开。首次使用请在混元网页中登录。</p></div>
+            <p>各账号使用独立浏览器环境，可同时打开。首次使用请在各自窗口中登录。</p></div>
         <div class="hunyuan-account-toolbar"><span>我的账号 <small data-count>0</small></span>
             <button type="button" data-action="add">${icon('add')}添加账号</button></div>
         <form class="hunyuan-account-form" hidden><label for="hunyuanAccountName">账号名称</label>
@@ -121,7 +121,7 @@ export function createHunyuanPanel({ onClose, onAgent }) {
             const copy = document.createElement('div'); copy.className = 'hunyuan-account-copy';
             const title = document.createElement('strong'); title.textContent = account.name; title.title = account.name;
             const state = document.createElement('span');
-            state.textContent = { loading: '网页加载中…', open: '窗口已打开', error: '网页加载失败，点击重试', closed: '独立登录窗口' }[account.status] || '独立登录窗口';
+            state.textContent = { loading: '网页加载中…', open: '窗口已打开', error: '浏览器打开失败，点击重试', closed: '独立登录环境' }[account.status] || '独立登录环境';
             state.className = `hunyuan-account-state ${account.status || 'closed'}`;
             copy.append(title, state);
             const open = button(account.status === 'error' ? '重试' : account.windowOpen ? '切换窗口' : '打开', 'open');

@@ -2,12 +2,13 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { _electron: electron, chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
 (async () => {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'corvas-hunyuan-ui-'));
     const screenshotDir = path.resolve(__dirname, '../output/playwright');
     let app, page;
+    const browsers = new Map();
     const launch = async () => {
         const env = { ...process.env, FLOW_HUNYUAN_SMOKE_PROFILE: profile };
         delete env.ELECTRON_RUN_AS_NODE;
@@ -41,12 +42,19 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
     const openAccount = async id => {
         await page.bringToFront();
         await page.locator(`[data-account-id="${id}"] [data-action="open"]`).click();
+        let browser = browsers.get(id);
         for (let i = 0; i < 150; i++) {
-            const windows = app.windows().filter(window => window.url().startsWith('https://3d.hunyuan.tencent.com/'));
-            for (const window of windows) {
-                const name = await (await app.browserWindow(window)).evaluate(win => win.getTitle());
-                const account = await page.evaluate(id => window.flowCanvas.hunyuan.list().then(result => result.accounts.find(a => a.id === id)), id);
-                if (name.includes(account.name)) { await window.waitForLoadState('domcontentloaded'); return window; }
+            if (!browser) {
+                try {
+                    const port = (await fs.readFile(path.join(profile, 'data/hunyuan-browser-profiles', id, 'DevToolsActivePort'), 'utf8')).split('\n')[0];
+                    browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+                    browsers.set(id, browser);
+                } catch { /* The isolated browser is still starting. */ }
+            }
+            const window = browser?.contexts()[0]?.pages().find(window => window.url().startsWith('https://3d.hunyuan.tencent.com/'));
+            if (window) {
+                await window.waitForLoadState('domcontentloaded');
+                return window;
             }
             await new Promise(resolve => setTimeout(resolve, 100));
         }
@@ -84,17 +92,27 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await second.evaluate(() => localStorage.setItem('test-account', 'B'));
         await page.bringToFront();
         await page.locator(`[data-account-id="${a.id}"] [data-action="open"]`).click();
-        assert.equal(app.windows().filter(win => win.url().startsWith('https://3d.hunyuan.tencent.com/')).length, 2);
-        const popupPromise = app.waitForEvent('window');
+        assert.equal(first.context().pages().length, 1);
+        assert.equal(second.context().pages().length, 1);
+        assert.notEqual(first.context().browser(), second.context().browser());
+        const popupPromise = first.waitForEvent('popup');
         await first.bringToFront();
         await first.getByText('Login popup').click();
         const popup = await popupPromise;
         await popup.waitForLoadState('domcontentloaded');
-        const sessionsEqual = await app.evaluate(({ BrowserWindow }, [firstId, popupId]) => {
-            return BrowserWindow.fromId(firstId).webContents.session === BrowserWindow.fromId(popupId).webContents.session;
-        }, [await (await app.browserWindow(first)).evaluate(win => win.id), await (await app.browserWindow(popup)).evaluate(win => win.id)]);
-        assert.equal(sessionsEqual, true);
-        await (await app.browserWindow(popup)).evaluate(win => win.close());
+        assert.equal(popup.context(), first.context());
+        await popup.evaluate(() => localStorage.setItem('login-account', 'A'));
+        await second.bringToFront();
+        const secondPopupPromise = second.waitForEvent('popup');
+        await second.getByText('Login popup').click();
+        const secondPopup = await secondPopupPromise;
+        await secondPopup.waitForLoadState('domcontentloaded');
+        assert.equal(secondPopup.context(), second.context());
+        assert.equal(await secondPopup.evaluate(() => window.opener !== null), true);
+        assert.equal(await secondPopup.evaluate(() => localStorage.getItem('login-account')), null);
+        assert.equal(await popup.evaluate(() => localStorage.getItem('login-account')), 'A');
+        await secondPopup.close();
+        await popup.close();
         await page.bringToFront();
         await page.locator(`[data-account-id="${a.id}"] [data-action="rename"]`).click();
         await page.locator('#hunyuanAccountName').fill('产品主账号');
@@ -118,6 +136,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await page.locator('#agentToggleBtn').click();
         assert.equal(await panel().isVisible(), false);
         await app.close(); app = null; page = null;
+        browsers.clear();
         await launch();
         await openPanel();
         const restored = await page.evaluate(() => window.flowCanvas.hunyuan.list());
@@ -133,8 +152,8 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await row.locator('[data-action="remove"]').click();
         await row.locator('[data-action="confirm-remove"]').click();
         await page.waitForFunction(id => !document.querySelector(`[data-account-id="${id}"]`), a.id);
-        const removedCookies = await app.evaluate(async ({ session }, id) => session.fromPartition(`persist:corvas-hunyuan-${id}`).cookies.get({ name: 'fixture_account' }), a.id);
-        assert.deepEqual(removedCookies, []);
+        assert.equal(reopenedA.isClosed(), true);
+        await assert.rejects(fs.stat(path.join(profile, 'data/hunyuan-browser-profiles', a.id)), { code: 'ENOENT' });
         assert.equal(await reopenedB.evaluate(() => localStorage.getItem('test-account')), 'B');
         console.log('Hunyuan UI smoke passed: launcher, account management, independent sessions, isolated login popups, restart persistence, removal, themes and compact sidebar.');
     } catch (error) {

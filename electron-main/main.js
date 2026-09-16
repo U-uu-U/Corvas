@@ -18,7 +18,8 @@ const { ApiConfigStore } = require('./api-config-store');
 const { fetchModelConfig } = require('./model-config-service.cjs');
 const { DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
 const { mapLocalError } = require('../shared/public-api-error.cjs');
-const { HunyuanAccounts } = require('./hunyuan-accounts.cjs');
+const { HunyuanAccounts, partitionFor } = require('./hunyuan-accounts.cjs');
+const { launchHunyuanBrowser } = require('./hunyuan-browser-process.cjs');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -305,7 +306,7 @@ function createWindow() {
     }
 
     mainWindow.on('closed', () => {
-        hunyuanAccounts?.closeAll();
+        void hunyuanAccounts?.closeAll();
         flowCanvasBridge?.setBoardToolsReady(false, {
             code: 'RENDERER_NOT_READY',
             message: 'Corvas main window was closed'
@@ -1466,7 +1467,15 @@ for (const action of ['list', 'save', 'remove', 'open']) {
             throw new Error('混元账号请求来源无效');
         }
         hunyuanAccounts ||= new HunyuanAccounts({ dataDir: path.join(app.getPath('userData'), 'data'),
-            BrowserWindow, session, onChange: data => {
+            launchBrowser: launchHunyuanBrowser,
+            clearLegacySession: async id => {
+                const legacy = session.fromPartition(partitionFor(id));
+                await legacy.closeAllConnections();
+                await legacy.clearStorageData();
+                await legacy.clearCache();
+                legacy.flushStorageData();
+            },
+            onChange: data => {
                 if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hunyuan:changed', data);
             } });
         return hunyuanAccounts[action](request || {});
@@ -3296,9 +3305,9 @@ let agentShutdownPromise = null;
 let agentShutdownComplete = false;
 app.on('before-quit', event => {
     isQuitting = true;
-    if (agentServices && !agentShutdownComplete) {
+    if ((agentServices || hunyuanAccounts) && !agentShutdownComplete) {
         event.preventDefault();
-        agentShutdownPromise ||= agentServices.close().catch(() => {}).finally(() => {
+        agentShutdownPromise ||= Promise.all([agentServices?.close(), hunyuanAccounts?.closeAll()]).catch(() => {}).finally(() => {
             agentShutdownComplete = true;
             app.quit();
         });
