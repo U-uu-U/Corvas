@@ -806,6 +806,7 @@ async function prepareAgentAttachmentPayload(attachments = [], context = null) {
                 url,
                 mediaType,
                 name: String(attachment?.name || '').trim() || path.basename(filePath || url),
+                annotation: String(attachment?.annotation || '').trim().slice(0, 80),
                 width: Number(attachment?.width) || null,
                 height: Number(attachment?.height) || null,
                 depth: Math.max(1, Number(attachment?.depth) || 1)
@@ -820,7 +821,8 @@ async function prepareAgentAttachmentPayload(attachments = [], context = null) {
             ? `，画布尺寸 ${attachment.width}x${attachment.height}`
             : '';
         const location = attachment.filePath || attachment.url;
-        return `${index + 1}. [${typeLabels[attachment.mediaType]}] ${attachment.name}${dimensions}，上游深度 ${attachment.depth}，位置：${location}`;
+        const annotation = attachment.annotation ? `，用途标注：${attachment.annotation}` : '';
+        return `${index + 1}. [${typeLabels[attachment.mediaType]}] ${attachment.name}${dimensions}${annotation}，上游深度 ${attachment.depth}，位置：${location}`;
     });
 
     for (let index = 0; index < normalized.length; index += 1) {

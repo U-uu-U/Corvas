@@ -51,6 +51,7 @@ function attachmentsForItem(rawItem, depth) {
             url: String(url || ''),
             mediaType: resolvedType,
             name: displayName(filePath, url, item.title || `${resolvedType}素材`),
+            annotation: String(item.referenceAnnotation || '').trim().slice(0, 80),
             width: Number(width) || Number(item.width) || null,
             height: Number(height) || Number(item.height) || null,
             depth

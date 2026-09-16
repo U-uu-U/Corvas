@@ -58,6 +58,7 @@ function inputReferenceCandidates(inputContext = []) {
             sourceNodeId: String(entry?.sourceNodeId || entry?.source?.id || ''),
             sourcePort: String(entry?.sourcePort || ''),
             filePath,
+            annotation: String(entry?.source?.referenceAnnotation || '').trim().slice(0, 80),
             generationHistory: entry?.source?.fromNodeId
                 ? { parentNodeId: String(entry.source.fromNodeId) }
                 : undefined
@@ -95,6 +96,7 @@ export function buildReferenceContext({
             capsuleLabel,
             sourceNodeId: candidate?.sourceNodeId || (uploadIndex === 0 ? String(targetNodeId || '') : ''),
             sourceConnectionId: candidate?.connectionId || null,
+            annotation: candidate?.annotation || String(reference?.annotation || '').trim().slice(0, 80),
             originalFilePath: filePath,
             originalImageHash: null,
             uploadIndex,
@@ -156,6 +158,7 @@ export function createPlannerRequest(context, signals) {
             capsuleLabel: reference.capsuleLabel,
             uploadIndex: reference.uploadIndex,
             connectionIndex: reference.connectionIndex,
+            annotation: reference.annotation || '',
             mentionSpans: reference.mentionSpans || []
         })),
         deterministicSignals: signals,
@@ -334,7 +337,8 @@ function compactConstraint(value) {
 function referencePosition(context, referenceId) {
     const reference = (context?.references || []).find(entry => entry.referenceId === referenceId);
     if (!reference) return referenceId || '未指定参考图';
-    return `第${reference.uploadIndex + 1}张参考图（${reference.capsuleLabel || reference.referenceId}）`;
+    const annotation = String(reference.annotation || '').trim();
+    return `第${reference.uploadIndex + 1}张参考图（${reference.capsuleLabel || reference.referenceId}${annotation ? `，用途：${annotation}` : ''}）`;
 }
 
 export function compileImageProviderRequest({ editPlan, context, provider = {} } = {}) {

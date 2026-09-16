@@ -484,7 +484,7 @@ NODE_TYPES['image'] = {
         const own = ctx?.item?.filePath;
         const refs = toFileList(sources.filter(value => localResourceType(value) === 'image'));
         if (own && !refs.some(r => r.filePath === own)) refs.unshift({ filePath: own });
-        const bound = bindReferenceCitations(config, refs, ctx?.inputContext);
+        const bound = bindReferenceCitations(config, refs.map(reference => ({ ...reference, mediaType: 'image' })), ctx?.inputContext);
         config = bound.config;
         const inputPrompts = sources.filter(value => typeof value === 'string' && !toFilePath(value));
         if (inputPrompts.length) config.generationUpstreamPrompts = inputPrompts;
@@ -696,7 +696,13 @@ NODE_TYPES['video'] = {
         const own = ctx?.item?.filePath;
         const frames = toFileList(sources.filter(value => localResourceType(value) === 'image'));
         if (!frames.length && own) frames.push({ filePath: own });
-        const bound = bindReferenceCitations(config, frames, ctx?.inputContext);
+        const videoReferences = toFileList(sources.filter(value => localResourceType(value) === 'video'));
+        const audioReferences = toFileList(sources.filter(value => localResourceType(value) === 'file'));
+        const bound = bindReferenceCitations(config, [
+            ...frames.map(reference => ({ ...reference, mediaType: 'image' })),
+            ...videoReferences.map(reference => ({ ...reference, mediaType: 'video' })),
+            ...audioReferences.map(reference => ({ ...reference, mediaType: 'audio' }))
+        ], ctx?.inputContext);
         config = bound.config;
         const inputPrompts = sources.filter(value => typeof value === 'string' && !toFilePath(value));
         if (inputPrompts.length) config.generationUpstreamPrompts = inputPrompts;
@@ -739,9 +745,6 @@ NODE_TYPES['video'] = {
                 '16:9'
             )
             : (config.ratio || undefined);
-        const videoReferences = toFileList(sources.filter(value => localResourceType(value) === 'video'));
-        const audioReferences = toFileList(sources.filter(value => localResourceType(value) === 'file'));
-
         for (const prompt of prompts) {
             ctx?.validateGenerationRequest?.({
                 kind: 'video', provider, prompt,

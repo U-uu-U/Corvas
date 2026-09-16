@@ -1050,6 +1050,63 @@ test('video execute: 使用节点绑定模型并透传完整参数与参考素�
     }
 });
 
+test('video execute: 音频胶囊和用途标注进入提示词且仍走音频参考字段', async () => {
+    const calls = [];
+    const previousWindow = global.window;
+    global.window = {
+        flowCanvas: {
+            mcp: {
+                generateVideo: async options => {
+                    calls.push(options);
+                    return { filePath: 'C:/output/audio-citation.mp4' };
+                }
+            }
+        }
+    };
+
+    try {
+        await helpers.NODE_TYPES.video.execute({
+            source: ['local-res://' + encodeURIComponent('C:/refs/narration.wav')]
+        }, {
+            prompt: '跟随 ',
+            referenceCitationIds: ['audio-link'],
+            referenceCitationLabels: ['音频一'],
+            referenceCitationOccurrences: [{
+                id: 'audio-citation', connectionId: 'audio-link', sourceNodeId: 'audio-node', offset: 3
+            }],
+            duration: 5,
+            count: 1,
+            concurrency: 1
+        }, {
+            item: { id: 'video-node-with-audio' },
+            inputContext: [{
+                connectionId: 'audio-link',
+                sourceNodeId: 'audio-node',
+                values: ['local-res://' + encodeURIComponent('C:/refs/narration.wav')],
+                source: {
+                    id: 'audio-node',
+                    filePath: 'C:/refs/narration.wav',
+                    mediaType: 'audio',
+                    referenceAnnotation: '旁白'
+                }
+            }],
+            getVideoProvider: () => ({
+                id: 'video-provider', apiKey: 'test-key', endpoint: 'https://example.test/v1', model: 'video-model'
+            })
+        });
+
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls[0].audioReferences, [{ filePath: 'C:/refs/narration.wav' }]);
+        assert.deepEqual(calls[0].sourceReferences, []);
+        assert.match(calls[0].prompt, /音频一=第1段/);
+        assert.match(calls[0].prompt, /素材用途标注：音频一=旁白/);
+        assert.match(calls[0].prompt, /跟随 音频一/);
+        assert.equal(calls[0].referenceBindings[0].annotation, '旁白');
+    } finally {
+        global.window = previousWindow;
+    }
+});
+
 test('video execute: 参考图预处理失败时仍立即创建并标记任务记录', async () => {
     const createdTasks = [];
     const errors = [];

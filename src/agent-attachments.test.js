@@ -15,7 +15,8 @@ test('collects and de-duplicates transitive upstream media in nearest-first orde
     const items = [
         { id: 'target', kind: 'op', nodeType: 'image' },
         { id: 'prompt', kind: 'op', nodeType: 'text' },
-        { id: 'image-a', kind: 'media', mediaType: 'image', filePath: 'C:\\assets\\a.png', width: 640, height: 480 },
+        { id: 'image-a', kind: 'media', mediaType: 'image', filePath: 'C:\\assets\\a.png',
+            referenceAnnotation: '男主角', width: 640, height: 480 },
         { id: 'video-a', kind: 'media', mediaType: 'video', filePath: 'C:\\assets\\clip.mp4' }
     ];
     const connections = [
@@ -28,6 +29,7 @@ test('collects and de-duplicates transitive upstream media in nearest-first orde
     const result = collectUpstreamMediaAttachments({ targetNodeId: 'target', items, connections });
 
     assert.deepEqual(result.map(entry => entry.name), ['a.png', 'clip.mp4']);
+    assert.equal(result[0].annotation, '男主角');
     assert.equal(result[0].depth, 1);
     assert.equal(result[1].depth, 2);
 });

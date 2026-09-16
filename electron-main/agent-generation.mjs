@@ -25,7 +25,7 @@ function nodeAttachment(node) {
     const primary = getGeneratorResultEntries(node)[0];
     const filePath = primary?.filePath || node.filePath || '';
     const url = primary?.url || node.url || '';
-    return { filePath, url,
+    return { filePath, url, annotation: node.referenceAnnotation || '',
         mediaType: primary?.item?.mediaType || node.mediaType
             || (filePath || url ? mediaKind((filePath || url).split(/[?#]/, 1)[0]) : node.nodeType) };
 }
@@ -66,12 +66,23 @@ function requestSize(config, references) {
     return config.size || `${size.width}x${size.height}`;
 }
 function bindAgentReferences(config, references, connections) {
-    const images = references.filter(reference => reference.kind === 'image')
-        .map(reference => ({ ...reference, filePath: reference.filePath || `pending:${reference.nodeId}` }));
-    const files = [...new Set(images.map(reference => reference.filePath))].map(filePath => ({ filePath }));
-    return bindReferenceCitations(config, files, images.map(reference => ({
+    const files = [];
+    const seen = new Set();
+    for (const reference of references) {
+        const filePath = reference.filePath || `pending:${reference.nodeId}`;
+        const key = `${reference.kind}:${String(filePath).replace(/\\/g, '/').toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        files.push({
+            filePath,
+            mediaType: reference.kind,
+            annotation: reference.annotation,
+            sourceNodeId: reference.nodeId
+        });
+    }
+    return bindReferenceCitations(config, files, references.map(reference => ({
         connectionId: connections.find(connection => connection.from.nodeId === reference.nodeId)?.id,
-        source: { id: reference.nodeId, filePath: reference.filePath }
+        source: { id: reference.nodeId, filePath: reference.filePath, referenceAnnotation: reference.annotation }
     })));
 }
 const error = (code, message) => Object.assign(new Error(message), { code });
@@ -237,7 +248,8 @@ export class AgentGeneration {
                 config.resolutionTier ||= option?.default ?? optionValues(option, [isMidjourney(provider) ? '1K' : '2K'])[0];
             }
             const references = inputs.filter(n => !texts.has(n.id)).map(n => ({ nodeId: n.id, filePath: steps.some(step => step.nodeId === n.id) ? '' : this._pathFor(n),
-                kind: n.kind === 'op' ? n.nodeType : n.mediaType || mediaKind(n.filePath || ''), width: n.width, height: n.height }));
+                kind: n.kind === 'op' ? n.nodeType : n.mediaType || mediaKind(n.filePath || ''),
+                annotation: n.referenceAnnotation || '', width: n.width, height: n.height }));
             if (node.id === run.source?.nodeId && attachments.length) {
                 const position = reference => {
                     const index = attachments.findIndex(attachment => matchesAttachment(attachment, nodes.get(reference.nodeId)));
@@ -368,9 +380,9 @@ export class AgentGeneration {
             clientTaskId: step.id, prompt: step.prompt, targetDir, addToCanvas: false,
             promptDraftConfig, referenceBindings: bound.bindings, userPrompt,
             projectId: run.projectId, nodeId: outputId,
-            sourceReferences: bound.bindings.map(r => ({ filePath: r.filePath })),
-            videoReferences: references.filter(r => r.kind === 'video').map(r => ({ filePath: r.filePath })),
-            audioReferences: references.filter(r => r.kind === 'audio').map(r => ({ filePath: r.filePath })),
+            sourceReferences: bound.bindings.filter(r => r.mediaType === 'image').map(r => ({ filePath: r.filePath })),
+            videoReferences: bound.bindings.filter(r => r.mediaType === 'video').map(r => ({ filePath: r.filePath })),
+            audioReferences: bound.bindings.filter(r => r.mediaType === 'audio').map(r => ({ filePath: r.filePath })),
             size: requestSize(config, references), quality: config.quality || 'high',
             responseFormat: config.responseFormat || 'url', ratio, resolution: config.resolution, duration: config.duration,
             generateAudio: !!config.generateAudio, cameraFixed: !!config.cameraFixed, watermark: !!config.watermark, webSearch: !!config.webSearch };

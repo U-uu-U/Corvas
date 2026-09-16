@@ -329,6 +329,17 @@ test('collectInputContext: 保留连接 ID、来源节点、素材尺寸和原�
     }]);
 });
 
+test('collectInputContext: 素材用途标注随来源节点进入生成上下文', () => {
+    const source = { ...media('voice', 'C:/refs/voice.wav'), mediaType: 'audio', referenceAnnotation: '旁白' };
+    const target = op('gen', 'video');
+    const edge = conn('voice', 'out', 'gen', 'source');
+    const context = G.collectInputContext(target, [edge], new Map([
+        ['voice', { out: 'local-res://' + encodeURIComponent(source.filePath) }]
+    ]), [source, target]);
+
+    assert.equal(context[0].source.referenceAnnotation, '旁白');
+});
+
 test('canConnect: multi 端口允许多条连线，不触发替换', () => {
     const b = media('b', 'b.png');
     const gen = op('gen', 'image');

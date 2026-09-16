@@ -488,6 +488,30 @@
     color: var(--accent-strong);
 }
 
+:root[data-theme='light'] .generation-composer-reference-preview {
+    border-color: #e2e2e8;
+}
+
+:root[data-theme='light'] .generation-composer-reference-annotation b {
+    color: #373740;
+}
+
+:root[data-theme='light'] .generation-composer-reference-annotation input {
+    color: #555661;
+}
+
+:root[data-theme='light'] .asset-reference-annotation-field input {
+    border-color: #d8d8df;
+    background: #ffffff;
+    color: #25252c;
+}
+
+:root[data-theme='light'] .asset-library-card-annotation {
+    border-color: #85818f;
+    background: #f1f1f5;
+    color: #55545f;
+}
+
 :root[data-theme='light'] .agent-task-history-head,
 :root[data-theme='light'] .agent-task-history-filters,
 :root[data-theme='light'] .agent-task-history-item,

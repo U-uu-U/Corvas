@@ -71,3 +71,37 @@ test('uncited images remain in bindings at their original upload positions', () 
     assert.deepEqual(bound.bindings.map(entry => entry.position), [1, 2]);
     assert.deepEqual(bound.config, {});
 });
+
+test('mixed media capsules keep per-type numbering and carry material annotations into the guide', () => {
+    const config = {
+        prompt: 'A B C',
+        referenceCitationIds: ['image-link', 'video-link', 'audio-link'],
+        referenceCitationOccurrences: [
+            { id: 'image-citation', connectionId: 'image-link', sourceNodeId: 'image-node', offset: 0 },
+            { id: 'video-citation', connectionId: 'video-link', sourceNodeId: 'video-node', offset: 2 },
+            { id: 'audio-citation', connectionId: 'audio-link', sourceNodeId: 'audio-node', offset: 4 }
+        ]
+    };
+    const references = [
+        { filePath: '/portrait.png', mediaType: 'image', annotation: '男主角' },
+        { filePath: '/motion.mp4', mediaType: 'video', annotation: '动作参考' },
+        { filePath: '/narration.wav', mediaType: 'audio', annotation: '旁白' }
+    ];
+    const context = [
+        { connectionId: 'image-link', source: { id: 'image-node', filePath: '/portrait.png' } },
+        { connectionId: 'video-link', source: { id: 'video-node', filePath: '/motion.mp4' } },
+        { connectionId: 'audio-link', source: { id: 'audio-node', filePath: '/narration.wav' } }
+    ];
+
+    const bound = bindReferenceCitations(config, references, context);
+
+    assert.deepEqual(bound.config.referenceCitationLabels, ['图一', '视频一', '音频一']);
+    assert.equal(restoreReferenceCitations(config.prompt, bound.config), '图一A 视频一B 音频一C');
+    assert.equal(referenceCitationGuide(bound.config),
+        '参考素材编号与上传顺序一致：图一=第1张，视频一=第1个，音频一=第1段。素材用途标注：图一=男主角；视频一=动作参考；音频一=旁白。');
+    assert.deepEqual(bound.bindings.map(entry => [entry.mediaType, entry.label, entry.annotation]), [
+        ['image', '图一', '男主角'],
+        ['video', '视频一', '动作参考'],
+        ['audio', '音频一', '旁白']
+    ]);
+});
