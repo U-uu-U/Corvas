@@ -1334,7 +1334,14 @@ class FlowCanvasBridge {
         throwIfGenerationCanceled(signal);
         const resolvedTaskId = completed.taskId || taskId;
         this.notifyVideoProgress?.({ clientTaskId: body.clientTaskId || null, stage: 'download' });
-        const filePath = await downloadVideo(completed.url, targetDir, namingPrompt(body), signal);
+        const filePath = await downloadVideoWithAutoRefresh(completed, targetDir, namingPrompt(body), {
+            generationEndpoint: endpoint,
+            apiKey,
+            model,
+            taskId: resolvedTaskId,
+            preferVideoTaskEndpoint: isMiniMaxH3Model(model) || isSeedanceVideoModel(model),
+            signal
+        });
         this._rememberResult(body, { filePath, filePaths: [filePath], taskId: resolvedTaskId,
             mediaType: 'video', video: { url: completed.url }, targetDir });
         throwIfGenerationCanceled(signal);
@@ -3052,6 +3059,45 @@ async function downloadVideo(url, targetDir, prompt, signal = null) {
         extension: videoExtensionFromUrl(finalUrl, contentType) });
 }
 
+const GENERATED_MEDIA_AUTO_REFRESH_ATTEMPTS = 3;
+const GENERATED_MEDIA_AUTO_REFRESH_INTERVAL_MS = 15_000;
+const GENERATED_MEDIA_AUTO_REFRESH_STATUSES = new Set([401, 403, 404, 408, 425, 429, 500, 502, 503, 504]);
+
+async function downloadVideoWithAutoRefresh(completed, targetDir, prompt, options = {}) {
+    let current = completed;
+    let refreshAttempts = 0;
+    const taskId = String(options.taskId || current?.taskId || '').trim();
+    const download = options.download || downloadVideo;
+    const poll = options.poll || pollOpenAiVideoTask;
+    const wait = options.wait || sleep;
+    while (true) {
+        try {
+            return await download(current.url, targetDir, prompt, options.signal);
+        } catch (error) {
+            const status = Number(error?.status);
+            if (!taskId || !GENERATED_MEDIA_AUTO_REFRESH_STATUSES.has(status)
+                || refreshAttempts >= GENERATED_MEDIA_AUTO_REFRESH_ATTEMPTS) {
+                throw error;
+            }
+            refreshAttempts += 1;
+            options.onRefresh?.({ attempt: refreshAttempts, waitMs: GENERATED_MEDIA_AUTO_REFRESH_INTERVAL_MS, status });
+            await wait(GENERATED_MEDIA_AUTO_REFRESH_INTERVAL_MS, options.signal);
+            current = await poll(
+                options.generationEndpoint,
+                options.apiKey,
+                taskId,
+                { id: taskId, task_id: taskId, status: 'pending', recovering: true },
+                {
+                    model: options.model,
+                    preferVideoTaskEndpoint: options.preferVideoTaskEndpoint === true,
+                    signal: options.signal,
+                    onProgress: options.onProgress
+                }
+            );
+        }
+    }
+}
+
 async function downloadGeneratedBuffer(url, {
     headers,
     signal,
@@ -3466,7 +3512,14 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         });
         throwIfGenerationCanceled(options.signal);
         options.onProgress?.({ stage: 'download' });
-        const filePath = await downloadVideo(completed.url, targetDir, namingPrompt(options, prompt), options.signal);
+        const filePath = await downloadVideoWithAutoRefresh(completed, targetDir, namingPrompt(options, prompt), {
+            generationEndpoint: endpoint,
+            apiKey,
+            model,
+            taskId: completed.taskId || taskId,
+            preferVideoTaskEndpoint: isMiniMaxH3 || isSeedance,
+            signal: options.signal
+        });
         options.onDownloaded?.({ filePath, filePaths: [filePath], taskId: completed.taskId || taskId,
             mediaType: 'video', video: { url: completed.url }, targetDir });
         throwIfGenerationCanceled(options.signal);
@@ -3769,3 +3822,4 @@ function clone(value) {
 module.exports = FlowCanvasBridge;
 module.exports.pollOpenAiImageTask = pollOpenAiImageTask;
 module.exports.pollOpenAiVideoTask = pollOpenAiVideoTask;
+module.exports.downloadVideoWithAutoRefresh = downloadVideoWithAutoRefresh;
