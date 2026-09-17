@@ -337,6 +337,44 @@ test('表单脚本需要登录，且从 /admin 页面使用绝对路由', async 
     }
 });
 
+test('管理面板渲染时长与参考素材控件，保存后 /config 下发新边界', async () => {
+    const { readEditorValues, applyEditorValues } = await import('./lib/admin-editor-model.mjs');
+    const server = await startServer();
+    try {
+        const { cookie } = await login(server.base);
+        const { html, csrf } = await openAdmin(server.base, cookie);
+        // 「后台调不了时长」就是这里缺控件造成的：面板必须真的渲染出来。
+        assert.match(html, /时长约束/);
+        assert.match(html, /参考素材限制/);
+        for (const field of ['durationMode', 'durationValue', 'durationMin', 'durationMax', 'durationValues',
+            'durationDefault', 'referenceImagesMode', 'referenceImagesMax', 'referenceVideosMax', 'referenceAudiosMode']) {
+            assert.ok(html.includes(`data-field="${field}"`), `管理面板缺少 ${field} 控件`);
+        }
+
+        const { config: before } = await fetchConfig(server.base);
+        const entry = before.models.find(model => model.id === 'ravenhash-video.sd2.5-route1');
+        const touched = new Set(['durationMode', 'durationMin', 'durationMax', 'durationDefault', 'referenceImagesMax']);
+        const edited = applyEditorValues(entry,
+            { ...readEditorValues(entry), durationMode: 'range', durationMin: '4', durationMax: '30',
+                durationDefault: '30', referenceImagesMax: '20' }, touched);
+        const edited_models = before.models.map(model => (model.id === entry.id ? edited : model));
+
+        const saved = await postForm(server.base, '/admin/save',
+            { csrf, content: JSON.stringify({ ...before, models: edited_models }), note: '调整时长与参考图上限' }, { cookie });
+        assert.equal(saved.status, 303, await saved.text());
+
+        const { config: after } = await fetchConfig(server.base);
+        const live = after.models.find(model => model.id === entry.id);
+        assert.deepEqual(live.options.duration, { type: 'range', min: 4, max: 30, integer: true,
+            unit: 'second', default: 30, note: entry.options.duration.note });
+        assert.equal(live.capabilities.referenceImages.max, 20);
+        assert.equal(live.notes, entry.notes, 'CSV 原文 notes 不应被表单改写');
+        assert.equal(after.models.length, before.models.length, '只应修改目标条目');
+    } finally {
+        await server.cleanup();
+    }
+});
+
 test('默认监听 127.0.0.1:8087，且可被环境变量覆盖', () => {
     // 回归守卫：部署脚本与 nginx 配置的默认端口必须和这里一致
     const defaults = resolveServerConfig({});
