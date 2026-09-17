@@ -3,6 +3,8 @@ import './mcp-client-settings.js';
 import './diagnostics-settings.js';
 import './generation-recovery.css';
 import './light-theme.css';
+import './hunyuan-accounts.css';
+import './rhino-workbench.css';
 import { initTheme } from './theme.js';
 import { initCanvasUiScaleSettings } from './canvas-ui-scale.js';
 import { showStatusNotification } from './status-notification.js';
@@ -119,6 +121,10 @@ async function bootstrap() {
             getPlanningContext: () => planService?.getAgentContext?.(canvasManager?.getSelectedFilePaths?.() || []) || null,
             subscribeCanvasSelection: (handler) => canvasManager?.on?.('selectionChanged', handler),
             endMediaReferencePick: (options) => canvasManager?.endMediaReferencePick?.(options),
+            beginAgentMaterialPick: (attachments, sourceNodeId) => canvasManager?.beginAgentMaterialPick(attachments, sourceNodeId),
+            subscribeAgentMaterialSelection: handler => canvasManager?.on('mediaReferenceSelectionChanged', handler),
+            subscribeMaterialPickState: handler => canvasManager?.on('mediaReferencePickStateChanged', handler),
+            connectAgentReferences: (nodeId, attachments) => canvasManager?.connectAgentReferences(nodeId, attachments),
             getActiveProjectId: () => storeData?.activeGroupId || null,
             getAssetLibrarySettings: () => sidebarManager?.getAssetLibrarySettings?.() || {},
             chooseAssetLibraryFolder: () => sidebarManager?.chooseAssetLibraryFolder?.({ makeDefault: true }) || null,

@@ -2369,7 +2369,7 @@ export class CanvasManager {
         requestAnimationFrame(() => preview.classList.add('show'));
     }
 
-    beginMediaReferencePick(type, entries = [], maxItems = 1, allSelections = {}) {
+    beginMediaReferencePick(type, entries = [], maxItems = 1, allSelections = {}, options = {}) {
         const normalizedType = type === 'mixed'
             ? 'mixed'
             : (['image', 'video', 'audio'].includes(type) ? type : 'image');
@@ -2385,10 +2385,11 @@ export class CanvasManager {
                 mediaType,
                 Math.max(0, Number(maxItems?.[mediaType]) || 0)
             ]));
-            this._activeMediaReferencePick = { type: 'mixed', limits };
+            this._activeMediaReferencePick = { type: 'mixed', limits, owner: options.owner || null,
+                excludedIds: options.excludedIds || [] };
             this._renderMediaReferencePickHighlights();
             this._showCanvasStatus('依次点击画布中的图片、视频或音频素材；再次点击可取消选择', 4200);
-            this.emit('mediaReferencePickStateChanged', { active: true, type: 'mixed' });
+            this.emit('mediaReferencePickStateChanged', { active: true, type: 'mixed', owner: options.owner || null });
             return true;
         }
         const normalizedEntries = (Array.isArray(entries) ? entries : [])
@@ -2436,6 +2437,38 @@ export class CanvasManager {
         return true;
     }
 
+    beginAgentMaterialPick(attachments = [], sourceNodeId = '') {
+        this._closeGenerationComposer({ commit: true });
+        const selections = { image: [], video: [], audio: [] };
+        for (const attachment of attachments) {
+            const id = attachment.sourceNodeId || attachment.itemId || attachment.id;
+            const entry = this._normalizeMediaReferenceEntry({ id });
+            if (entry && selections[entry.mediaType] && !selections[entry.mediaType].some(item => item.id === entry.id)) {
+                selections[entry.mediaType].push(entry);
+            }
+        }
+        return this.beginMediaReferencePick('mixed', [], { image: 32, video: 32, audio: 32 }, selections,
+            { owner: 'agent', excludedIds: sourceNodeId ? [sourceNodeId] : [] });
+    }
+
+    connectAgentReferences(nodeId, attachments = []) {
+        const target = this.items.get(nodeId)?.data;
+        if (!target || target.kind !== 'op' || !['image', 'video'].includes(target.nodeType)) return false;
+        for (const attachment of attachments) {
+            const sourceId = attachment.sourceNodeId || attachment.itemId;
+            const source = this.items.get(sourceId)?.data;
+            if (!source || sourceId === nodeId) throw new Error('添加的素材节点已删除或不能引用自身，请重新选择素材。');
+            const type = this._getItemMediaType(source);
+            if (target.nodeType === 'image' && type !== 'image') continue;
+            if (!['image', 'video', 'audio'].includes(type)) continue;
+            const existing = this.graphView?.connections.some(connection => connection.kind !== 'history'
+                && connection.from.nodeId === sourceId && this._isGeneratorInputConnection(target, connection));
+            if (!existing && !this.graphView?.connect({ nodeId: sourceId, port: this._mediaOutputPortName(source) },
+                { nodeId, port: 'source' })) throw new Error('参考素材连接失败，请检查是否形成循环连接。');
+        }
+        return true;
+    }
+
     endMediaReferencePick(options = {}) {
         const pick = this._activeMediaReferencePick;
         if (!pick && !options.clearHighlights) return false;
@@ -2451,7 +2484,7 @@ export class CanvasManager {
         }
         this._renderMediaReferencePickHighlights();
         document.body.style.cursor = 'default';
-        if (pick) this.emit('mediaReferencePickStateChanged', { active: false, type });
+        if (pick) this.emit('mediaReferencePickStateChanged', { active: false, type, owner: pick.owner || null });
         if (pick && !options.silent) this._showCanvasStatus('参考素材选择已完成');
         return true;
     }
@@ -2497,6 +2530,10 @@ export class CanvasManager {
     _toggleMediaReferencePick(item) {
         const pick = this._activeMediaReferencePick;
         if (!pick || !item?.data) return;
+        if (pick.excludedIds?.includes(item.data.id)) {
+            this._showCanvasStatus('不能将当前生成节点作为自己的参考素材');
+            return;
+        }
         const entry = this._normalizeMediaReferenceEntry({
             id: item.data.id,
             filePath: this._copyableFilePath(item.data)
@@ -2535,7 +2572,10 @@ export class CanvasManager {
         this._renderMediaReferencePickHighlights();
         this.emit('mediaReferenceSelectionChanged', {
             type: targetType,
-            entries: entries.map(candidate => ({ ...candidate }))
+            entries: entries.map(candidate => ({ ...candidate })),
+            owner: pick.owner || null,
+            changedEntry: { ...entry },
+            selected: existingIndex < 0
         });
         if (pick.type !== 'mixed' && existingIndex < 0 && entries.length >= maxItems) {
             this.endMediaReferencePick({ silent: true });
@@ -3252,6 +3292,7 @@ export class CanvasManager {
         this.stage.on('dragend', (e) => {
             if (e.target.name() === 'nodeGroup') {
                 const group = e.target;
+                group.setAttr('copyDragActive', false);
                 const entry = this._getNodeEntry(group.attrs.id);
                 if (!entry) return;
                 const data = entry.data;
@@ -3343,29 +3384,20 @@ export class CanvasManager {
                     return;
                 }
 
-                // ── Ctrl+拖拽：在原位留下副本，拖走原件 ──
-                if (e.evt && (e.evt.ctrlKey || e.evt.metaKey) && !this._isAltDragModifier(e.evt)) {
-                    const clonedDataList = [];
-                    let cloneIdx = 0;
-                    this.selectedItems.forEach(id => {
-                        const item = this.items.get(id);
-                        if (!item) return;
-                        const cloneData = {
-                            id: Date.now().toString() + '_c' + (cloneIdx++) + Math.random().toString(36).substr(2, 5),
-                            kind: item.data.kind,
-                            mediaType: item.data.mediaType,
-                            filePath: item.data.filePath,
-                            x: item.group.x(),
-                            y: item.group.y(),
-                            width: item.data.width,
-                            height: item.data.height,
-                            addedAt: Date.now()
-                        };
-                        this._createCard(cloneData);
-                        clonedDataList.push(cloneData);
-                    });
-                    if (clonedDataList.length > 0) {
-                        this.emit('clonedItems', clonedDataList);
+                // Keep the original identity and connections in place; drag a full copy.
+                if (e.evt && (e.evt.ctrlKey || e.evt.metaKey) && !this._isAltDragModifier(e.evt)
+                    && !group.getAttr('copyDragActive')) {
+                    const sourceIds = [...this.selectedItems].filter(id => this.items.has(id));
+                    const draggedIndex = sourceIds.indexOf(group.attrs.id);
+                    if (draggedIndex >= 0) {
+                        group.stopDrag();
+                        const copies = this.duplicateItems(sourceIds, { offset: 0 });
+                        const draggedCopy = this.items.get(copies[draggedIndex]?.id)?.group;
+                        if (draggedCopy) {
+                            draggedCopy.setAttr('copyDragActive', true);
+                            draggedCopy.startDrag(e);
+                        }
+                        return;
                     }
                 }
 
@@ -5343,7 +5375,7 @@ export class CanvasManager {
         return data;
     }
 
-    duplicateItems(itemIds = []) {
+    duplicateItems(itemIds = [], { offset = 30 } = {}) {
         const sourceIds = (Array.isArray(itemIds) && itemIds.length ? itemIds : [...this.selectedItems])
             .filter(id => this.items.has(id));
         if (!sourceIds.length) return [];
@@ -5352,8 +5384,8 @@ export class CanvasManager {
             const source = this.items.get(id);
             const data = JSON.parse(JSON.stringify(source.data || {}));
             data.id = `${data.kind === 'op' ? 'op' : 'item'}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
-            data.x = Math.round(source.group.x() + 30 + index * 6);
-            data.y = Math.round(source.group.y() + 30 + index * 6);
+            data.x = Math.round(source.group.x() + offset + (offset ? index * 6 : 0));
+            data.y = Math.round(source.group.y() + offset + (offset ? index * 6 : 0));
             data.addedAt = Date.now();
             if (data.kind === 'op') {
                 data.runStatus = 'idle';
@@ -5629,6 +5661,16 @@ export class CanvasManager {
             parameters,
             attachments: this._getUpstreamAgentAttachments(nodeId)
         };
+    }
+
+    prepareAgentGenerationContext(nodeId) {
+        const data = this.items.get(nodeId)?.data;
+        if (!data) return null;
+        if (data.composerDraft) {
+            this._cacheMediaGenerationPromptDraft(data);
+            if (!this._materializeMediaComposerDraft(nodeId)) return null;
+        }
+        return this.getAgentGenerationContext(nodeId);
     }
 
     _drawOpReferenceStrip(group, data, width) {
@@ -8646,7 +8688,8 @@ export class CanvasManager {
             try {
                 const enabled = await this.options.setImageIntentPipelineEnabled?.(enable);
                 if (enable && enabled) {
-                    await this.options.prepareAgentFromNode?.(this.getAgentGenerationContext(nodeId));
+                    const context = this.prepareAgentGenerationContext(nodeId);
+                    if (context) await this.options.prepareAgentFromNode?.(context);
                 }
             } finally {
                 agentToggle.disabled = false;

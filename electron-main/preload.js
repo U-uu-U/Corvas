@@ -53,6 +53,31 @@ contextBridge.exposeInMainWorld('flowCanvas', {
         test: request => ipcRenderer.invoke('mcp-client:test', request),
     },
 
+    hunyuan: {
+        list: () => ipcRenderer.invoke('hunyuan:list'),
+        save: account => ipcRenderer.invoke('hunyuan:save', account),
+        remove: request => ipcRenderer.invoke('hunyuan:remove', request),
+        open: request => ipcRenderer.invoke('hunyuan:open', request),
+        onChanged: callback => {
+            const listener = (_, data) => callback(data);
+            ipcRenderer.on('hunyuan:changed', listener);
+            return () => ipcRenderer.removeListener('hunyuan:changed', listener);
+        }
+    },
+
+    rhino: {
+        status: () => ipcRenderer.invoke('rhino:status'),
+        save: settings => ipcRenderer.invoke('rhino:save', settings),
+        open: request => ipcRenderer.invoke('rhino:open', request),
+        choose: () => ipcRenderer.invoke('rhino:choose'),
+        copyCommand: () => ipcRenderer.invoke('rhino:copyCommand'),
+        onChanged: callback => {
+            const listener = (_, data) => callback(data);
+            ipcRenderer.on('rhino:changed', listener);
+            return () => ipcRenderer.removeListener('rhino:changed', listener);
+        }
+    },
+
     agent: {
         start: request => ipcRenderer.invoke('agent:start', request),
         get: request => ipcRenderer.invoke('agent:get', request),

@@ -134,6 +134,44 @@ test('removing a duplicate preserves plan references to the original and legacy 
     assert.deepEqual(row.references, [{ itemId: 'original', filePath: '/shared.mp4' }, { filePath: '/shared.mp4' }]);
 });
 
+test('Agent handoff materializes the composer before returning a context that can outlive the popup', t => {
+    const draft = { id: 'media-composer-original', kind: 'op', nodeType: 'image', composerDraft: true,
+        composerSourceItemId: 'original', config: { prompt: 'Preserve this prompt', count: 2 } };
+    const manager = Object.assign(Object.create(CanvasManager.prototype), {
+        items: new Map([[draft.id, { data: draft }]]),
+        _cacheMediaGenerationPromptDraft: t.mock.fn(),
+        _materializeMediaComposerDraft(id) {
+            assert.equal(id, draft.id); delete draft.composerDraft; return draft;
+        },
+        getAgentGenerationContext(id) {
+            assert.equal(draft.composerDraft, undefined);
+            return { nodeId: id, parameters: structuredClone(draft.config) };
+        }
+    });
+    const context = manager.prepareAgentGenerationContext(draft.id);
+    assert.equal(manager._cacheMediaGenerationPromptDraft.mock.callCount(), 1);
+    assert.equal(context.nodeId, draft.id);
+    assert.equal(context.parameters.count, 2);
+});
+
+test('Agent reference wiring uses stable source IDs and never reuses a same-path duplicate', t => {
+    const target = { id: 'target', kind: 'op', nodeType: 'image' };
+    const originals = [{ id: 'original', filePath: '/same.png' }, { id: 'copy', filePath: '/same.png' }];
+    const connections = [];
+    const manager = Object.assign(Object.create(CanvasManager.prototype), {
+        items: new Map([target, ...originals].map(data => [data.id, { data }])),
+        _getItemMediaType: () => 'image', _mediaOutputPortName: () => 'out',
+        _isGeneratorInputConnection: (_target, connection) => connection.to.nodeId === target.id,
+        graphView: { connections, connect: (from, to) => { const edge = { from, to }; connections.push(edge); return edge; } }
+    });
+    manager.connectAgentReferences(target.id, [{ sourceNodeId: 'original' }]);
+    manager.items.delete('copy');
+    manager.connectAgentReferences(target.id, [{ sourceNodeId: 'original' }]);
+    assert.equal(connections.length, 1);
+    assert.equal(connections[0].from.nodeId, 'original');
+    assert.throws(() => manager.connectAgentReferences(target.id, [{ sourceNodeId: 'copy', filePath: '/same.png' }]), /已删除/);
+});
+
 test('selecting a restrictive video model reports overflow without disconnecting references', t => {
     const manager = Object.assign(Object.create(CanvasManager.prototype), {
         options: {}, graphView: { disconnect: t.mock.fn() }, _showCanvasStatus: t.mock.fn(),

@@ -2,7 +2,7 @@
 // Corvas — Electron Main Process
 // ============================================================
 
-const { app, BrowserWindow, ipcMain, shell, clipboard, nativeImage, dialog, protocol, net, Menu, screen, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, clipboard, nativeImage, dialog, protocol, net, Menu, screen, safeStorage, session } = require('electron');
 const path = require('path');
 require('./app-identity.cjs').configureAppIdentity(app);
 const util = require('util');
@@ -18,6 +18,10 @@ const { ApiConfigStore } = require('./api-config-store');
 const { fetchModelConfig } = require('./model-config-service.cjs');
 const { DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
 const { mapLocalError } = require('../shared/public-api-error.cjs');
+const { HunyuanAccounts, partitionFor } = require('./hunyuan-accounts.cjs');
+const { launchHunyuanBrowser } = require('./hunyuan-browser-process.cjs');
+const { RhinoDesktop } = require('./rhino-desktop.cjs');
+const { RhinoWorkbench } = require('./rhino-workbench.cjs');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -45,6 +49,8 @@ let flowCanvasBridge = null;
 let browserSyncService = null;
 let apiConfigStore = null;
 let agentServices = null;
+let hunyuanAccounts = null;
+let rhinoWorkbench = null;
 let mediaPreviewWasFullScreen = null;
 // 文件移动会让 chokidar 先后报告旧路径 unlink、新路径 add。
 // 这两条事件由 moveFilesToFolder 的结果统一处理，不能再让 renderer 当成真实删除/新增。
@@ -303,6 +309,7 @@ function createWindow() {
     }
 
     mainWindow.on('closed', () => {
+        void hunyuanAccounts?.closeAll();
         flowCanvasBridge?.setBoardToolsReady(false, {
             code: 'RENDERER_NOT_READY',
             message: 'Corvas main window was closed'
@@ -1454,6 +1461,47 @@ for (const action of ['list', 'save', 'remove', 'test']) {
         if (!isCurrentMainWindowSender(event)) throw new Error('MCP 请求来源无效');
         if (!agentServices) throw new Error('Agent 服务尚未初始化');
         return agentServices.mcpClient[action](request || {});
+    });
+}
+
+for (const action of ['list', 'save', 'remove', 'open']) {
+    ipcMain.handle(`hunyuan:${action}`, (event, request) => {
+        if (!isCurrentMainWindowSender(event) || event.senderFrame !== mainWindow.webContents.mainFrame) {
+            throw new Error('混元账号请求来源无效');
+        }
+        hunyuanAccounts ||= new HunyuanAccounts({ dataDir: path.join(app.getPath('userData'), 'data'),
+            launchBrowser: launchHunyuanBrowser,
+            clearLegacySession: async id => {
+                const legacy = session.fromPartition(partitionFor(id));
+                await legacy.closeAllConnections();
+                await legacy.clearStorageData();
+                await legacy.clearCache();
+                legacy.flushStorageData();
+            },
+            onChange: data => {
+                if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hunyuan:changed', data);
+            } });
+        return hunyuanAccounts[action](request || {});
+    });
+}
+
+for (const action of ['status', 'save', 'open', 'choose', 'copyCommand']) {
+    ipcMain.handle(`rhino:${action}`, async (event, request) => {
+        if (!isCurrentMainWindowSender(event) || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('Rhino 请求来源无效');
+        if (!agentServices) throw new Error('Agent 服务尚未初始化');
+        rhinoWorkbench ||= new RhinoWorkbench({ directory: path.join(app.getPath('userData'), 'data'),
+            desktop: new RhinoDesktop(), mcpClient: agentServices.mcpClient,
+            onChange: data => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('rhino:changed', data); } });
+        if (action === 'choose') {
+            const result = await dialog.showOpenDialog(mainWindow, { title: '选择 Rhino 程序', properties: ['openFile'],
+                filters: [{ name: 'Rhino', extensions: IS_MAC ? ['app'] : ['exe'] }] });
+            return result.canceled ? rhinoWorkbench.status() : rhinoWorkbench.save({ executablePath: result.filePaths[0] });
+        }
+        if (action === 'copyCommand') {
+            clipboard.writeText(rhinoWorkbench.connectionCommand());
+            return { success: true };
+        }
+        return rhinoWorkbench[action](request || {});
     });
 }
 
@@ -3280,9 +3328,10 @@ let agentShutdownPromise = null;
 let agentShutdownComplete = false;
 app.on('before-quit', event => {
     isQuitting = true;
-    if (agentServices && !agentShutdownComplete) {
+    rhinoWorkbench?.close();
+    if ((agentServices || hunyuanAccounts) && !agentShutdownComplete) {
         event.preventDefault();
-        agentShutdownPromise ||= agentServices.close().catch(() => {}).finally(() => {
+        agentShutdownPromise ||= Promise.all([agentServices?.close(), hunyuanAccounts?.closeAll()]).catch(() => {}).finally(() => {
             agentShutdownComplete = true;
             app.quit();
         });

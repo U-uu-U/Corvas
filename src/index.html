@@ -735,6 +735,14 @@
 
                 <div class="agent-input-area">
                     <div class="agent-input-wrapper">
+                        <div class="agent-material-toolbar">
+                            <button type="button" class="agent-add-material-btn" id="agentAddMaterialBtn"
+                                aria-label="添加素材" aria-pressed="false" title="从画布添加图片、视频或音频">
+                                <svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-add"></use></svg>
+                                <span>添加素材</span>
+                            </button>
+                            <span id="agentMaterialPickHint" hidden>点击画布素材，Esc 完成</span>
+                        </div>
                         <section class="agent-attachment-tray" id="agentAttachmentTray" aria-label="待发送的节点上下文" hidden>
                             <header class="agent-attachment-head">
                                 <span id="agentContextSummary">节点上下文</span>
