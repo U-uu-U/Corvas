@@ -167,7 +167,8 @@ test('runFrom: 同一节点链防重复，互不相干的链可并发', async ()
     const first = runner.runFrom('s1');
     const duplicate = await runner.runFrom('s1');
     assert.equal(duplicate.ok, false);
-    assert.match(duplicate.reason, /节点链正在执行/);
+    assert.equal(duplicate.code, 'NODE_BUSY');
+    assert.match(duplicate.reason, /当前节点正在生成/);
 
     const independent = runner.runFrom('s2');
     await new Promise(resolve => setImmediate(resolve));
@@ -243,7 +244,9 @@ test('runFrom: 共享正在执行的上游任务时拒绝重复执行', async ()
     const first = runner.runFrom('left');
     const second = await runner.runFrom('right');
     assert.equal(second.ok, false);
-    assert.match(second.reason, /节点链正在执行/);
+    assert.equal(second.code, 'NODE_BUSY');
+    assert.equal(second.nodeId, 'shared');
+    assert.match(second.reason, /上游节点正在生成且尚无可复用产物/);
 
     release();
     assert.equal((await first).ok, true);
@@ -305,6 +308,56 @@ for (const sourceKind of ['media', 'text', 'product']) {
         assert.equal(runner.activeNodes.size, 0);
     });
 }
+
+for (const savedKind of ['media', 'product']) {
+    test(`saved ${savedKind} cuts execution dependencies so its running ancestor cannot block another branch`, async t => {
+        const originalVideo = NT.video;
+        const pending = deferred();
+        const called = [];
+        NT.video = { ...originalVideo, execute: async (inputs, _config, ctx) => {
+            called.push(ctx.item.id);
+            if (ctx.item.id === 'ancestor') return pending.promise;
+            assert.deepEqual(inputs.source, ['local-res://' + encodeURIComponent('C:/saved.png')]);
+            return { video: 'C:/result.mp4' };
+        } };
+        t.after(() => { NT.video = originalVideo; pending.resolve({ video: 'ancestor.mp4' }); });
+        const reference = savedKind === 'media' ? media('saved', 'C:/saved.png')
+            : { ...op('saved', 'image'), resultEntries: [{ filePath: 'C:/saved.png' }] };
+        const items = [op('ancestor', 'video'), reference, op('target', 'video')];
+        const ctx = makeCtx(items, [conn('ancestor', 'video', 'saved', 'source'),
+            conn('saved', savedKind === 'media' ? 'out' : 'image', 'target', 'source')]);
+        const runner = new R.GraphRunner(ctx);
+        const running = runner.runFrom('ancestor');
+        const result = await runner.runFrom('target');
+        assert.equal(result.ok, true);
+        assert.deepEqual(result.ran, ['saved', 'target']);
+        assert.deepEqual(called, ['ancestor', 'target']);
+        assert.equal(items[0].runStatus, R.STATUS.RUNNING);
+        pending.resolve({ video: 'ancestor.mp4' });
+        await running;
+        assert.equal(runner.activeNodes.size, 0);
+    });
+}
+
+test('a reference with a saved product can be read while its next version is generating', async t => {
+    const originalImage = NT.image;
+    const originalVideo = NT.video;
+    const pending = deferred();
+    NT.image = { ...originalImage, execute: () => pending.promise };
+    NT.video = { ...originalVideo, execute: async inputs => {
+        assert.deepEqual(inputs.source, ['local-res://' + encodeURIComponent('C:/previous.png')]);
+        return { video: 'C:/result.mp4' };
+    } };
+    t.after(() => { NT.image = originalImage; NT.video = originalVideo; pending.resolve({ image: 'new.png' }); });
+    const source = { ...op('source', 'image'), resultEntries: [{ filePath: 'C:/previous.png' }] };
+    const runner = new R.GraphRunner(makeCtx([source, op('target', 'video')], [conn('source', 'image', 'target', 'source')]));
+    const running = runner.runFrom('source');
+    assert.equal((await runner.runFrom('target')).ok, true);
+    assert.equal(source.runStatus, R.STATUS.RUNNING);
+    assert.equal((await runner.runFrom('source')).code, 'NODE_BUSY');
+    pending.resolve({ image: 'new.png' });
+    await running;
+});
 
 test('runFrom: a failed branch does not change a parallel branch or its shared input', async t => {
     const originalVideo = NT.video;

@@ -51,13 +51,28 @@ function videoPayloadObject(payload, key) {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 }
 
+function taskIdFromVideoQueryUrl(value) {
+    if (typeof value !== 'string' || !value.trim()) return '';
+    try {
+        const url = new URL(value, 'https://relative.invalid');
+        const match = url.pathname.match(/\/v1\/(?:videos(?:\/generations)?|video\/generations|tasks)\/([a-z0-9_-]+)\/?$/i);
+        return match?.[1] || '';
+    } catch { return ''; }
+}
+
 function getVideoTaskId(payload) {
     const data = videoPayloadObject(payload, 'data');
     const result = videoPayloadObject(payload, 'result');
     const value = payload?.task_id || payload?.id
         || data?.task_id || data?.id
         || result?.task_id || result?.id;
-    return value == null ? '' : String(value).trim();
+    if (value != null && String(value).trim()) return String(value).trim();
+    // Some relays wrap status_url as data[].url and drop the original task ID.
+    const candidates = [payload?.status_url, data?.status_url, result?.status_url,
+        payload?.url, data?.url, result?.url,
+        ...(Array.isArray(payload?.data) ? payload.data.flatMap(item => typeof item === 'string'
+            ? [item] : [item?.status_url, item?.url]) : [])];
+    return candidates.map(taskIdFromVideoQueryUrl).find(Boolean) || '';
 }
 
 function getVideoTaskStatus(payload) {
@@ -75,6 +90,8 @@ function getVideoTaskProgress(payload) {
 }
 
 function getVideoResultUrl(payload) {
+    const status = getVideoTaskStatus(payload).toLowerCase();
+    if (status && !['completed', 'succeeded', 'success'].includes(status)) return '';
     const data = videoPayloadObject(payload, 'data');
     const result = videoPayloadObject(payload, 'result');
     const output = videoPayloadObject(payload, 'output');
@@ -113,7 +130,7 @@ function getVideoResultUrl(payload) {
     return candidates.find(value => {
         if (typeof value !== 'string' || !value.trim()) return false;
         const normalized = value.trim();
-        if (statusUrls.has(normalized)) return false;
+        if (statusUrls.has(normalized) || taskIdFromVideoQueryUrl(normalized)) return false;
         if (!taskId) return true;
         try {
             const pathname = new URL(normalized).pathname.replace(/\/+$/, '');

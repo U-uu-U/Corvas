@@ -1340,7 +1340,8 @@ class FlowCanvasBridge {
             model,
             taskId: resolvedTaskId,
             preferVideoTaskEndpoint: isMiniMaxH3Model(model) || isSeedanceVideoModel(model),
-            signal
+            signal,
+            onProgress: progress => this.notifyVideoProgress?.({ clientTaskId: body.clientTaskId || null, ...progress })
         });
         this._rememberResult(body, { filePath, filePaths: [filePath], taskId: resolvedTaskId,
             mediaType: 'video', video: { url: completed.url }, targetDir });
@@ -3081,6 +3082,8 @@ async function downloadVideoWithAutoRefresh(completed, targetDir, prompt, option
             }
             refreshAttempts += 1;
             options.onRefresh?.({ attempt: refreshAttempts, waitMs: GENERATED_MEDIA_AUTO_REFRESH_INTERVAL_MS, status });
+            options.onProgress?.({ stage: 'recovering', retryCount: refreshAttempts,
+                lastError: `下载地址暂不可用（HTTP ${status}），正在重新查询任务` });
             await wait(GENERATED_MEDIA_AUTO_REFRESH_INTERVAL_MS, options.signal);
             current = await poll(
                 options.generationEndpoint,
@@ -3163,7 +3166,9 @@ async function downloadGeneratedBuffer(url, {
         }
     }
     const fallbackText = http1FallbackAttempts > 0 ? `，其中 HTTP/1.1 回退 ${http1FallbackAttempts} 次` : '';
-    throw new Error(`下载生成产物失败（${describeRemoteEndpoint(url)}，已尝试 ${attemptsMade} 次${fallbackText}）：${describeRemoteFailure(lastError)}。可使用“继续下载”再次拉取产物。`);
+    throw Object.assign(new Error(`下载生成产物失败（${describeRemoteEndpoint(url)}，已尝试 ${attemptsMade} 次${fallbackText}）：${describeRemoteFailure(lastError)}。可使用“继续下载”再次拉取产物。`), {
+        code: 'DOWNLOAD_FAILED', status: lastError?.status, cause: lastError, retryable: true
+    });
 }
 
 function generatedMediaDownloadHttpError(status) {
@@ -3518,7 +3523,8 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             model,
             taskId: completed.taskId || taskId,
             preferVideoTaskEndpoint: isMiniMaxH3 || isSeedance,
-            signal: options.signal
+            signal: options.signal,
+            onProgress: options.onProgress
         });
         options.onDownloaded?.({ filePath, filePaths: [filePath], taskId: completed.taskId || taskId,
             mediaType: 'video', video: { url: completed.url }, targetDir });

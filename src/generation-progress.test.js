@@ -5,7 +5,7 @@ import { formatGenerationElapsed, isGenerationRecoveryActive, canRecoverGenerati
 
 test('客户端错误展示会隐藏上游站点并保留任务标识', () => {
     const message = formatClientGenerationError('下载生成产物失败（https://video.zhubo.asia/v1/videos/task_9151，已尝试 1 次）：HTTP 401');
-    assert.equal(message, '生成已完成，但产物下载失败，系统已自动刷新下载地址（任务 task_9151）');
+    assert.equal(message, '下载地址已失效或无访问权限，可在任务记录中继续拉取，无需重新生成（任务 task_9151）');
     assert.equal(message.includes('video.zhubo.asia'), false);
 });
 

@@ -53,6 +53,7 @@ const {
     buildVideoGenerationEndpoint,
     getVideoPayloadError,
     getVideoResultUrl,
+    getVideoTaskId,
     getVideoTaskProgress,
     getVideoTaskStatus,
     isMiniMaxH3NativeEndpoint,
@@ -281,6 +282,27 @@ test('MiniMax H3 视频协议: 中转地址不被改写，显式任务中心按 
     );
     assert.equal(isMiniMaxH3UnavailableResponse(400, '{"error":{"message":"模型不可用"}}'), true);
     assert.equal(isMiniMaxH3UnavailableResponse(401, '模型不可用'), false);
+});
+
+test('video relay task URLs wrapped as data URLs recover task identity without downloading the status endpoint', () => {
+    for (const route of ['videos', 'videos/generations', 'video/generations', 'tasks']) {
+        const url = `https://video.example/v1/${route}/task_10194?model=seedance_v2.5`;
+        const payload = { created: 1789653371, data: [{ url }] };
+        assert.equal(getVideoTaskId(payload), 'task_10194');
+        assert.equal(getVideoResultUrl(payload), '');
+        assert.equal(getVideoResultUrl({ ...payload, data: [{ url }, { url: 'https://cdn.example/output.mp4' }] }),
+            'https://cdn.example/output.mp4');
+    }
+    assert.equal(getVideoTaskId({ data: [{ url: 'https://cdn.example/output.mp4' }] }), '');
+    assert.equal(getVideoResultUrl({ data: [{ url: 'https://cdn.example/output.mp4' }] }), 'https://cdn.example/output.mp4');
+    assert.equal(getVideoResultUrl({ id: 'task_10194', data: [{ url: 'https://video.example/v1/videos/task_10194/content' }] }),
+        'https://video.example/v1/videos/task_10194/content');
+});
+
+test('pending or failed video responses never treat attached URLs as completed media', () => {
+    for (const status of ['queued', 'pending', 'processing', 'in_progress', 'failed', 'cancelled']) {
+        assert.equal(getVideoResultUrl({ id: 'task_test', status, video_url: 'https://cdn.example/preview.mp4' }), '');
+    }
 });
 
 test('HM multimodal routes use the documented unified wire format without truncation', () => {

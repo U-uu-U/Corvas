@@ -22,6 +22,38 @@ try {
 const mediaUrl = bytes => `https://hm-fixture.test/media/${crypto.createHash('sha256').update(bytes).digest('hex')}`;
 const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 
+test('HM submit wrapped as a status URL persists its task ID then polls with relay authentication', async t => {
+    profile = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-hm-wrapped-'));
+    t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+    const bridge = new Bridge({ store: { load: () => ({ items: [] }) }, recoveryDirectory: path.join(profile, 'records') });
+    bridge._loadWithPlanService = () => ({ data: { items: [] }, planService: {} });
+    let posts = 0;
+    let polls = 0;
+    let downloads = 0;
+    fetchFixture = async (url, options) => {
+        if (options.method === 'POST') {
+            posts++;
+            return json({ created: 1789653371, data: [{ url: 'https://supplier.example/v1/videos/task_10194' }] });
+        }
+        assert.equal(new URL(url).hostname, 'relay.example', 'must not download or send relay credentials to the supplier task URL');
+        if (url.endsWith('/output.mp4')) {
+            downloads++;
+            return new Response('video fixture');
+        }
+        polls++;
+        assert.equal(options.headers.Authorization, 'Bearer fixture-key');
+        assert.equal(bridge.recoveryStore.get('local-task').taskId, 'task_10194');
+        assert.match(url, /\/task_10194\?model=seedance_v2.5$/);
+        return json({ id: 'task_10194', status: 'completed', video_url: 'https://relay.example/output.mp4' });
+    };
+    const result = await bridge.generateVideoFromRenderer({ clientTaskId: 'local-task', nodeId: 'node',
+        prompt: 'fixture', duration: 9, targetDir: profile, addToCanvas: false,
+        providerConfig: { endpoint: 'https://relay.example/v1', model: 'seedance_v2.5', apiKey: 'fixture-key' } });
+    assert.equal(result.taskId, 'task_10194');
+    assert.deepEqual([posts, polls, downloads], [1, 1, 1]);
+    assert.equal(fs.readFileSync(result.filePath, 'utf8'), 'video fixture');
+});
+
 test('HM 301010 transports all 50 references, preserves order and supports task-ID recovery', { timeout: 15000 }, async t => {
     profile = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-hm-'));
     t.after(() => fs.rmSync(profile, { recursive: true, force: true }));

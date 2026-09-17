@@ -86,7 +86,9 @@ export function formatClientGenerationError(value) {
         504: '服务响应超时，请稍后重试'
     };
     if (httpStatus && action === '下载生成产物失败') {
-        return `生成已完成，但产物下载失败，系统已自动刷新下载地址${task ? `（任务 ${task}）` : ''}`;
+        const reason = [401, 403].includes(Number(httpStatus)) ? '下载地址已失效或无访问权限'
+            : Number(httpStatus) === 404 ? '下载文件暂不可用' : '产物下载失败';
+        return `${reason}，可在任务记录中继续拉取，无需重新生成${task ? `（任务 ${task}）` : ''}`;
     }
     if (httpStatus) return `${action}：${httpMessages[httpStatus]}${task ? `（任务 ${task}）` : ''}`;
     if (/ERR_CONNECTION|ERR_TIMED_OUT|ENOTFOUND|fetch failed|网络请求失败|连接超时/i.test(message)) {
