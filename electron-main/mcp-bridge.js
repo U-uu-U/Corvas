@@ -42,6 +42,7 @@ const { imageRequestFailure } = require('./image-request-diagnostics.cjs');
 const { namingPrompt, writeGeneratedMedia } = require('./generated-media-names.cjs');
 const { diagnostic: recordDiagnostic } = require('./diagnostics.cjs');
 const { mapLocalError, publicErrorResult, failureNode } = require('../shared/public-api-error.cjs');
+const { describeServiceRole, traceSuffix } = require('../shared/error-redaction.cjs');
 const {
     buildMiniMaxH3RequestBody,
     buildSeedance25RequestBody,
@@ -1860,7 +1861,8 @@ async function resolveGeneratedImageBuffer(image, endpoint, apiKey = '', signal 
     try {
         imageUrl = new URL(source, endpoint).toString();
     } catch (_) {
-        throw new Error(`Image API returned an invalid image URL: ${source.slice(0, 160)}`);
+        // 不回显上游返回的地址片段：它既是产物地址也可能带签名参数。
+        throw new Error('图片生成服务返回的产物地址无法解析，请稍后重试或重新生成。');
     }
     const requestHeaders = { Accept: 'image/*, application/octet-stream' };
     try {
@@ -2260,18 +2262,21 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
                 finalPayload = completed.payload;
             }
         } else if (res.status === 202) {
-            const reason = imageTaskErrorMessage(json);
+            // 上游受理了任务却没给任务 ID：这属于转发配置问题，细节只进诊断日志。
+            recordDiagnostic('error', 'generation.image_task_id_missing', {
+                endpointRef: endpointReference(endpoint), model, status: res.status,
+                upstream: imageTaskErrorMessage(json)
+            });
             return {
                 success: false,
-                error: reason
-                    ? `图片中转接受了任务，但丢失了任务 ID：${reason}`
-                    : '图片中转接受了任务，但没有返回任务 ID；请检查 NewAPI 是否正确转发异步响应的 Location 和响应体。'
+                error: `${describeServiceRole('image')}已受理任务，但没有返回可用的任务 ID，因此无法继续拉取产物。请稍后重试；如持续出现请联系管理员。`
             };
         } else if (nativeMidjourney) {
-            return {
-                success: false,
-                error: `Midjourney 提交失败：${imageTaskErrorMessage(json) || `code ${String(json?.code ?? 'unknown')}`}`
-            };
+            recordDiagnostic('error', 'generation.midjourney_submit_failed', {
+                endpointRef: endpointReference(endpoint), model,
+                upstreamCode: String(json?.code ?? ''), upstream: imageTaskErrorMessage(json)
+            });
+            return { success: false, error: imageTaskErrorMessage(json) };
         }
         const imageEntries = getGeneratedImageDataList(finalPayload);
         if (!imageEntries.length && image) imageEntries.push(image);
@@ -2343,15 +2348,40 @@ function buildOpenAiTaskEndpoint(generationEndpoint, taskId) {
     return url.toString();
 }
 
-function describeRemoteEndpoint(value) {
+/**
+ * 面向用户时只说明「哪一类服务」，不回显 origin、路径或查询参数。
+ * 真实 endpoint 只进诊断日志（diagnostics.cjs 会再脱敏一次）。
+ */
+function describeRemoteEndpoint(value, role = 'video') {
+    return describeServiceRole(remoteEndpointRole(value) || role);
+}
+
+// 从 endpoint 推断服务类别，用于挑选展示标签；识别不出时由调用方给默认值。
+// 局部变量刻意不叫 path —— 模块作用域的 path 是 node 的 path 模块。
+function remoteEndpointRole(value) {
+    let route = '';
+    try { route = new URL(value).pathname.toLowerCase(); } catch (_) { return ''; }
+    if (!route) return '';
+    if (/video/.test(route)) return 'video';
+    if (/image|mj|midjourney/.test(route)) return 'image';
+    if (/chat|completion|responses/.test(route)) return 'text';
+    return '';
+}
+
+// 诊断用的稳定引用：让运营能把多条日志归到同一个 endpoint，又不落原始地址。
+function endpointReference(value) {
     try {
         const url = new URL(value);
-        return `${url.origin}${url.pathname}`;
+        return crypto.createHash('sha256').update(`${url.origin}${url.pathname}`).digest('hex').slice(0, 12);
     } catch (_) {
-        return '\u5df2\u914d\u7f6e\u7684\u89c6\u9891\u63a5\u53e3';
+        return 'unknown';
     }
 }
 
+/**
+ * 传输层失败只输出本地判定结论，不附加未经脱敏的 error.message。
+ * Chromium / undici 的文案里常带完整 URL 和主机名，直接附上就等于绕过脱敏。
+ */
 function describeRemoteFailure(error) {
     const detail = error?.message || String(error);
     const knownErrors = [
@@ -2364,13 +2394,26 @@ function describeRemoteFailure(error) {
         [/fetch failed/i, '\u7f51\u7edc\u8bf7\u6c42\u5931\u8d25']
     ];
     const match = knownErrors.find(([pattern]) => pattern.test(detail));
-    return match ? `${match[1]}\uff08${detail}\uff09` : detail;
+    return match ? match[1] : '\u7f51\u7edc\u8bf7\u6c42\u5931\u8d25';
 }
 
 function remoteConnectionError(stage, endpoint, error, attempts = 1) {
-    const detail = describeRemoteFailure(error);
+    // 本地构造的失败（image-request-diagnostics 的 imageRequestFailure）自带请求编号、
+    // 阶段、耗时，以及「不要连续重复生成」的防重复计费告诫——这些是安全且必需的信息，
+    // 不能被压成一句「网络请求失败」。它已在源头脱敏，这里原样保留。
+    const localFailure = error?.submissionUnknown === true ? String(error.message || '').trim() : '';
+    const detail = localFailure || describeRemoteFailure(error);
     const retryText = attempts > 1 ? `\uff0c\u5df2\u91cd\u8bd5 ${attempts - 1} \u6b21` : '';
-    return new Error(`${stage}\u8fde\u63a5\u5931\u8d25\uff08${describeRemoteEndpoint(endpoint)}${retryText}\uff09\uff1a${detail}`);
+    const failure = new Error(`${stage}\u8fde\u63a5\u5931\u8d25\uff08${describeRemoteEndpoint(endpoint)}${retryText}\uff09\uff1a${detail}`);
+    // 结果未知的语义必须透传，否则渲染层会把它当成可重试的普通失败并建议重新提交。
+    if (error?.submissionUnknown === true) failure.submissionUnknown = true;
+    if (error?.timedOut === true) failure.timedOut = true;
+    // 真实 endpoint 与原始报错只写诊断日志，供运营按 endpointRef 关联排查。
+    recordDiagnostic('error', 'generation.remote_connection_failed', {
+        stage, endpointRef: endpointReference(endpoint), attempts,
+        cause: error?.message || String(error)
+    });
+    return failure;
 }
 
 async function fetchTextWithRetry(url, options, stage, attempts = 3) {
@@ -3163,7 +3206,12 @@ async function downloadGeneratedBuffer(url, {
         }
     }
     const fallbackText = http1FallbackAttempts > 0 ? `，其中 HTTP/1.1 回退 ${http1FallbackAttempts} 次` : '';
-    throw new Error(`下载生成产物失败（${describeRemoteEndpoint(url)}，已尝试 ${attemptsMade} 次${fallbackText}）：${describeRemoteFailure(lastError)}。可使用“继续下载”再次拉取产物。`);
+    // 真实产物地址（常带签名查询参数）只进诊断日志，不进面向用户的文案。
+    recordDiagnostic('error', 'generation.media_download_failed', {
+        endpointRef: endpointReference(url), attempts: attemptsMade,
+        http1FallbackAttempts, cause: lastError?.message || String(lastError)
+    });
+    throw new Error(`下载生成产物失败（${describeRemoteEndpoint(url, 'download')}，已尝试 ${attemptsMade} 次${fallbackText}）：${describeRemoteFailure(lastError)}。可使用“继续下载”再次拉取产物。`);
 }
 
 function generatedMediaDownloadHttpError(status) {
@@ -3452,9 +3500,13 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 || response.headers.get('request-id')
                 || recoveryId;
             if (isMiniMaxH3 && isMiniMaxH3UnavailableResponse(response.status, text)) {
+                // 部署侧的模型映射细节属于运维信息，只记诊断日志，凭排查编号追查。
+                recordDiagnostic('error', 'generation.video_model_unavailable', {
+                    model, endpointRef: endpointReference(endpoint), status: response.status, logId: serverTraceId
+                });
                 return {
                     success: false,
-                    error: `MiniMax H3 在当前 API 的模型列表中可见，但没有可用生成渠道（${describeRemoteEndpoint(endpoint)}）。请检查中转站模型映射是否为 minimax-h3 -> MiniMax-H3-c1；Corvas 不会绕过中转站直连其他域名。`
+                    error: `MiniMax H3 在当前 API 的模型列表中可见，但${describeRemoteEndpoint(endpoint, 'video')}没有可用的生成通道。请稍后重试，或在模型栏切换其他可用模型；如持续出现请联系管理员。${traceSuffix(serverTraceId)}`
                 };
             }
             return mapLocalError(response.status, text, { query: false, requestId: serverTraceId });

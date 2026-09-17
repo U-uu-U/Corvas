@@ -2,6 +2,7 @@
 
 const { createHash } = require('node:crypto');
 const { mapLocalError, readPublicError } = require('../shared/public-api-error.cjs');
+const { redactSensitiveText, GENERIC_FAILURE_MESSAGE } = require('../shared/error-redaction.cjs');
 
 function endpointFor(provider, anthropic) {
     const fallback = anthropic
@@ -468,6 +469,11 @@ async function callAgentProvider({ provider, messages, tools = [], signal, onDel
         let message = String(error?.message || 'Agent provider request failed');
         for (const secret of new Set([key, encodeURIComponent(key)])) {
             if (secret) message = message.split(secret).join('[REDACTED]');
+        }
+        // 传输层文案（undici / Chromium）常带完整 endpoint 与主机名，
+        // 已映射为 CATALOG 文案的错误不需要再洗，其余一律脱敏。
+        if (typeof error?.code !== 'string' || !error.code.startsWith('RH_')) {
+            message = redactSensitiveText(message, { role: 'text' }) || GENERIC_FAILURE_MESSAGE;
         }
         const safe = new Error(message.slice(0, 1200));
         safe.name = error?.name || 'Error';

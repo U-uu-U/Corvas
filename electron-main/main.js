@@ -1271,11 +1271,15 @@ async function planImageEditWithProvider(request = {}) {
         try {
             payload = JSON.parse(responseText);
         } catch (_) {
+            // 上游响应体原文不跨进程：渲染层只需要知道「解析失败」。
+            // 原文只进诊断日志（那一层会再脱敏一次），凭时间和状态码排查。
+            require('./diagnostics.cjs').diagnostic('error', 'planner.invalid_response', {
+                status: response.status, bodyLength: responseText.length
+            });
             return {
                 success: false,
                 code: 'PLANNER_INVALID_RESPONSE',
-                error: '视觉 Provider 返回了非 JSON 响应',
-                rawText: responseText.slice(0, 20000),
+                error: '视觉模型返回的内容无法解析，请稍后重试或更换模型',
                 durationMs: Date.now() - startedAt
             };
         }
