@@ -2020,8 +2020,8 @@ body.has-folders .canvas-empty {
 }
 
 .context-menu-item:hover {
-    background: var(--accent);
-    color: #fff;
+    background: var(--canvas-node-bg-subtle);
+    color: var(--text-primary);
 }
 
 .context-menu-icon {
@@ -2090,7 +2090,7 @@ body.has-folders .canvas-empty {
 }
 
 .context-menu-item:hover .context-menu-shortcut {
-    color: rgba(255, 255, 255, 0.7);
+    color: inherit;
 }
 
 .context-menu-divider {
