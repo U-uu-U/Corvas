@@ -9,9 +9,9 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-video-saver-'));
     let app;
     try {
-        const media = path.join(profile, 'media');
-        await fs.mkdir(media);
         await fs.mkdir(path.join(profile, 'data'));
+        const media = path.join(profile, 'data', 'captured');
+        await fs.mkdir(media);
         const video = path.join(media, 'sample.mp4');
         const encoded = spawnSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=10',
             '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', video], { encoding: 'utf8' });
@@ -32,11 +32,25 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         delete env.ELECTRON_RUN_AS_NODE;
         app = await electron.launch({ executablePath: require('electron'),
             args: [path.join(__dirname, 'mcp-client-smoke-entry.cjs')], env });
-        const page = await app.firstWindow();
+        let page;
+        for (let attempt = 0; attempt < 100; attempt++) {
+            page = app.windows().find(window => /dist[\\/]index\.html/.test(window.url()));
+            if (page) break;
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        assert.ok(page, 'Renderer window opened');
         const waitForFrames = async () => page.waitForFunction(() => ['generated-video', 'imported-video'].every(id => {
             const source = window.Konva?.stages?.[0]?.findOne(`#${id}`)?.findOne('.displayNode')?.image();
             return source && (source.tagName === 'VIDEO' ? source.readyState >= 2 : source.width > 0);
         }));
+        await waitForFrames();
+        await page.evaluate(filePath => {
+            localStorage.setItem('flow-canvas-generation-tasks', JSON.stringify([
+                { id: 'complete', kind: 'video', status: 'success', filePath, params: { nodeId: 'generated-video' } },
+                { id: 'other', kind: 'video', status: 'disconnected', params: { nodeId: 'other-video' } }
+            ]));
+        }, video);
+        await page.reload();
         await waitForFrames();
         const checkPixels = async () => {
             const colors = await page.evaluate(() => ['generated-video', 'imported-video'].map(id => {
@@ -51,12 +65,60 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             }));
             assert.ok(colors.every(count => count > 10), `Missing video pixels: ${colors}`);
         };
+        await page.evaluate(() => {
+            const node = window.Konva.stages[0].findOne('#generated-video').findOne('.displayNode');
+            window.__videoBeforeRefresh = node.image();
+            window.__previewBeforeRefresh = node;
+        });
+        const progress = async (id, stage, value) => {
+            await app.evaluate(({ BrowserWindow }, event) => {
+                BrowserWindow.getAllWindows().find(window => /dist[\\/]index\.html/.test(window.webContents.getURL()))
+                    .webContents.send('generation:video-progress', event);
+            }, { clientTaskId: id, stage, progress: value });
+            await page.waitForFunction(({ id, stage, value }) => {
+                const task = JSON.parse(localStorage.getItem('flow-canvas-generation-tasks')).find(task => task.id === id);
+                return task.params.syncStage === stage && task.params.progress === value;
+            }, { id, stage, value });
+        };
+        for (const id of ['other', 'complete']) {
+            for (const [index, stage] of ['processing', 'processing', 'download', 'completed'].entries()) {
+                await progress(id, stage, index * 20);
+                assert.equal(await page.evaluate(() => {
+                    const node = window.Konva.stages[0].findOne('#generated-video').findOne('.displayNode');
+                    return node === window.__previewBeforeRefresh && node.image() === window.__videoBeforeRefresh
+                        && node.image().readyState >= 2;
+                }), true, 'Task updates preserve the decoded frame and video element');
+                await checkPixels();
+            }
+        }
+        await page.evaluate(async () => {
+            const video = window.__videoBeforeRefresh;
+            video.currentTime = 0.5;
+            await video.play();
+        });
+        await progress('complete', 'reviewing', 95);
+        assert.equal(await page.evaluate(() => !window.__videoBeforeRefresh.paused
+            && window.Konva.stages[0].findOne('#generated-video').findOne('.displayNode').image() === window.__videoBeforeRefresh), true);
+        await page.evaluate(() => window.__videoBeforeRefresh.pause());
         for (let i = 0; i < 3; i++) {
             await page.locator('#resourceSaverBtn').click();
             await page.waitForFunction(() => document.querySelector('#resourceSaverBtn').getAttribute('aria-checked') === 'true');
             await page.waitForFunction(() => window.Konva.stages[0].findOne('#imported-video').findOne('.videoCover'));
             await waitForFrames();
             await checkPixels();
+            const cover = await page.evaluate(() => {
+                const group = window.Konva.stages[0].findOne('#imported-video');
+                const node = group.findOne('.displayNode');
+                const rect = node.getClientRect();
+                const container = window.Konva.stages[0].container().getBoundingClientRect();
+                return { id: node._id, x: rect.x + container.left + rect.width / 2,
+                    y: rect.y + container.top + rect.height / 2 };
+            });
+            await page.mouse.move(cover.x, cover.y);
+            await page.waitForTimeout(600);
+            assert.equal(await page.evaluate(() => window.Konva.stages[0].findOne('#imported-video').findOne('.displayNode')._id), cover.id,
+                'Hovering a cover does not reload it');
+            await page.mouse.move(10, 60);
             await page.locator('#resourceSaverBtn').click();
             await page.waitForFunction(() => window.Konva.stages[0].findOne('#imported-video').findOne('.videoControls'));
             await waitForFrames();
@@ -70,7 +132,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             await checkPixels();
             await page.screenshot({ path: path.join(output, `video-saver-${scale}.png`) });
         }
-        console.log('Video cover pixels survive saver toggles; controls hide at small sizes and return on zoom.');
+        console.log('Video previews survive task progress, redraw, playback, hover, saver toggles and zoom without losing decoded frames.');
     } finally {
         await app?.close().catch(() => {});
         await fs.rm(profile, { recursive: true, force: true });

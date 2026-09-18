@@ -25,6 +25,37 @@ try {
 const clone = value => structuredClone(value);
 const firstArgs = mock => mock.mock.calls[0].arguments;
 
+test('task progress only redraws nodes whose visual state changed, including in-place updates', () => {
+    const refreshed = [];
+    const manager = Object.assign(Object.create(CanvasManager.prototype), {
+        items: new Map(['playing', 'pending'].map(id => [id, { data: { kind: 'op', nodeType: 'video' } }])),
+        generationTaskStates: new Map(), refreshOpNode: id => refreshed.push(id)
+    });
+    const playing = { id: 'old', kind: 'video', status: 'success', params: { nodeId: 'playing' } };
+    const pending = { id: 'new', kind: 'video', status: 'running', params: { nodeId: 'pending', syncStage: 'processing' } };
+    manager.setGenerationTaskStates([pending, playing]);
+    assert.deepEqual(refreshed, ['pending', 'playing']);
+    refreshed.length = 0;
+    pending.progress = 40;
+    manager.setGenerationTaskStates([pending, playing]);
+    assert.deepEqual(refreshed, []);
+    pending.status = 'failed';
+    manager.setGenerationTaskStates([pending, playing]);
+    assert.deepEqual(refreshed, ['pending']);
+    refreshed.length = 0;
+    manager.setGenerationTaskStates([playing]);
+    assert.deepEqual(refreshed, ['pending']);
+});
+
+test('video covers do not start a quality reload merely because the pointer enters them', () => {
+    const manager = Object.assign(Object.create(CanvasManager.prototype), {
+        resourceSaverMode: true, _getItemMediaType: () => 'video'
+    });
+    const item = { data: { mediaType: 'video' }, group: { getLayer: () => ({}) } };
+    manager._scheduleResourceSaverPromote(item);
+    assert.equal(item.hoverTimer, undefined);
+});
+
 test('image and video titles use readable filenames, respect manual names and follow the visible stack result', () => {
     const manager = Object.create(CanvasManager.prototype);
     for (const mediaType of ['image', 'video']) {

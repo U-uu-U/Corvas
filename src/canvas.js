@@ -3572,6 +3572,7 @@ export class CanvasManager {
             console.log('[Canvas] drop candidates:', imageUrls, 'files:', files.length);
 
             let lastRemoteError = '';
+            let importedFileCount = 0;
             if (imageUrls.length > 0) {
                 this._showCanvasStatus('正在导入网页图片...');
                 for (const imageUrl of imageUrls.slice(0, 12)) {
@@ -3593,9 +3594,11 @@ export class CanvasManager {
                         const result = await this._archiveLocalDroppedFile(file.path, targetDir);
                         if (result?.success) {
                             this._addCapturedFile(result.filePath, dropPosition);
+                            importedFileCount += 1;
                         } else {
                             console.error('[Canvas] 归档本地文件失败:', result?.error);
                             this._addCapturedFile(file.path, dropPosition);
+                            importedFileCount += 1;
                         }
                     }
                 }
@@ -3608,12 +3611,15 @@ export class CanvasManager {
                         }, targetDir);
                         if (result?.success) {
                             this._addCapturedFile(result.filePath, dropPosition);
-                            this._showCanvasStatus('网页图片已加入画板');
-                            return;
+                            importedFileCount += 1;
                         }
                         lastRemoteError = result?.error || lastRemoteError;
                     }
                 }
+            }
+            if (importedFileCount > 0) {
+                this._showCanvasStatus(`${importedFileCount} 个素材已加入画板`);
+                return;
             }
             const typeHint = dropTypes.length > 0 ? `（${dropTypes.join(', ')}）` : '';
             this._showCanvasStatus(`网页图片导入失败${lastRemoteError ? `：${lastRemoteError}` : `：拖拽数据中没有可用图片${typeHint}`}`, 0, 'error');
@@ -5832,14 +5838,23 @@ export class CanvasManager {
     _drawGeneratorPlaceholder(group, data, width, height) {
         group.getAttr('generatorAnimation')?.stop?.();
         group.setAttr('generatorAnimation', null);
-        this._disposeGeneratorPreviewMedia(group);
+        const results = ensureGeneratorResultEntries(data);
+        const retained = (group.getAttr('generatorVideoPreviews') || []).filter(entry => {
+            const result = results[entry.isPrimary ? 0 : 1];
+            const source = this._generatorPreviewSource(result);
+            return data.nodeType === 'video' && entry.source === source;
+        });
+        retained.forEach(entry => {
+            entry.preview.remove();
+            entry.controls?.remove();
+        });
+        this._disposeGeneratorPreviewMedia(group, retained);
         group.off('.generatorStack');
         group.destroyChildren();
 
         const status = data.runStatus || 'idle';
         const recoveryTask = this.generationTaskStates.get(data.id) || null;
         const isRecovering = isGenerationRecoveryActive(recoveryTask);
-        const results = ensureGeneratorResultEntries(data);
         const resultCount = results.length;
         const isRecoverable = (!isGenerationFailureConfirmed(recoveryTask) || Boolean(recoveryTask?.filePath))
             && (['disconnected', 'failed', 'canceled'].includes(recoveryTask?.status)
@@ -6161,7 +6176,14 @@ export class CanvasManager {
             next.set(nodeId, task);
         });
         this.generationTaskStates = next;
+        const previousSignatures = this._generationTaskVisualSignatures || new Map();
+        const nextSignatures = new Map([...next].map(([id, task]) => [id, JSON.stringify([
+            task.id, task.status, task.taskId, task.filePath, task.errorCode, task.confirmedFailure,
+            task.createdAt, task.params?.syncStage, task.params?.recoveryStartedAt
+        ])]));
+        this._generationTaskVisualSignatures = nextSignatures;
         new Set([...previousNodeIds, ...next.keys()]).forEach(nodeId => {
+            if (previousSignatures.get(nodeId) === nextSignatures.get(nodeId)) return;
             const data = this.items.get(nodeId)?.data;
             if (data?.kind === 'op' && ['image', 'video'].includes(data.nodeType)) {
                 this.refreshOpNode(nodeId);
@@ -6396,13 +6418,30 @@ export class CanvasManager {
         }
     }
 
-    _addGeneratorResultPreview(ownerGroup, parent, data, result, width, height, name = '') {
-        const source = result?.filePath
+    _generatorPreviewSource(result) {
+        return result?.filePath
             ? `local-res://${encodeURIComponent(resolveCanvasFilePath(result.filePath))}`
             : result?.url || '';
+    }
+
+    _addGeneratorResultPreview(ownerGroup, parent, data, result, width, height, name = '') {
+        const source = this._generatorPreviewSource(result);
         if (!source) return null;
 
         const isPrimary = parent === ownerGroup && name === 'generatorResultPreview';
+        const retained = (ownerGroup.getAttr('generatorVideoPreviews') || []).find(entry =>
+            entry.source === source && entry.isPrimary === isPrimary && !entry.preview.getParent());
+        if (retained) {
+            retained.preview.size({ width, height });
+            parent.add(retained.preview);
+            this._coverGeneratorPreview(retained.preview, retained.video.videoWidth, retained.video.videoHeight, width, height);
+            if (isPrimary) this._styleMediaSurface(data, retained.preview);
+            if (retained.controls) {
+                ownerGroup.add(retained.controls);
+                this._layoutVideoControlGroup(retained.controls, width, height);
+            }
+            return retained.preview;
+        }
         const preview = new Konva.Image({
             name: isPrimary ? `${name} displayNode` : name,
             width,
@@ -6424,10 +6463,10 @@ export class CanvasManager {
             video.style.display = 'none';
             if (isPrimary) document.body.appendChild(video);
             const drawFrame = () => {
-                if (!ownerGroup.getLayer()) return;
-                if (isPrimary && this._syncGeneratorProductAspect(ownerGroup, data, video.videoWidth, video.videoHeight)) return;
+                if (!ownerGroup.getLayer() || !preview.getParent() || video.readyState < 2 || video.seeking) return;
                 preview.image(video);
-                this._coverGeneratorPreview(preview, video.videoWidth, video.videoHeight, width, height);
+                this._coverGeneratorPreview(preview, video.videoWidth, video.videoHeight, preview.width(), preview.height());
+                if (isPrimary) this._syncGeneratorProductAspect(ownerGroup, data, video.videoWidth, video.videoHeight);
                 ownerGroup.getLayer()?.batchDraw();
             };
             video.addEventListener('loadeddata', () => {
@@ -6443,6 +6482,10 @@ export class CanvasManager {
             videos.push(video);
             ownerGroup.setAttr('generatorPreviewVideos', videos);
             if (isPrimary) this._addGeneratorVideoControls(ownerGroup, data, preview, video, width, height);
+            const previews = ownerGroup.getAttr('generatorVideoPreviews') || [];
+            previews.push({ source, isPrimary, preview, video,
+                controls: isPrimary ? ownerGroup.findOne('.generatorVideoControls') : null });
+            ownerGroup.setAttr('generatorVideoPreviews', previews);
         } else {
             const image = new window.Image();
             image.onload = () => {
@@ -6482,15 +6525,19 @@ export class CanvasManager {
         return true;
     }
 
-    _disposeGeneratorPreviewMedia(group) {
+    _disposeGeneratorPreviewMedia(group, retained = []) {
         if (!group) return;
         group.getAttr('generatorAnimation')?.stop?.();
         group.setAttr('generatorAnimation', null);
-        group.getAttr('generatorVideoAnimation')?.stop?.();
-        group.setAttr('generatorVideoAnimation', null);
+        if (!retained.some(entry => entry.isPrimary)) {
+            group.getAttr('generatorVideoAnimation')?.stop?.();
+            group.setAttr('generatorVideoAnimation', null);
+        }
         const videos = group.getAttr('generatorPreviewVideos') || [];
-        videos.forEach(video => this._disposeVideoElement(video));
-        group.setAttr('generatorPreviewVideos', []);
+        const retainedVideos = retained.map(entry => entry.video);
+        videos.filter(video => !retainedVideos.includes(video)).forEach(video => this._disposeVideoElement(video));
+        group.setAttr('generatorPreviewVideos', retainedVideos);
+        group.setAttr('generatorVideoPreviews', retained);
     }
 
     _addGeneratorVideoControls(group, data, preview, video, width, height) {
@@ -6641,7 +6688,7 @@ export class CanvasManager {
         video.addEventListener('timeupdate', () => {
             if (!Number.isFinite(video.duration) || video.duration <= 0) return;
             progressForeground.width((video.currentTime / video.duration) * progressBackground.width());
-            if (preview.image() !== video) preview.image(video);
+            if (video.readyState >= 2 && !video.seeking && preview.image() !== video) preview.image(video);
             group.getLayer()?.batchDraw();
         });
     }
@@ -6661,7 +6708,6 @@ export class CanvasManager {
     }
 
     _drawOpNode(group, data, width, height) {
-        group.destroyChildren();
         const def = NODE_TYPES[data.nodeType] || {};
         const status = data.runStatus || 'idle';
         const isGenerator = data.nodeType === 'image' || data.nodeType === 'video';
@@ -6671,6 +6717,7 @@ export class CanvasManager {
             return;
         }
 
+        group.destroyChildren();
         this._syncExternalNodeTitle(group, data, data.nodeType);
 
         group.add(new Konva.Rect({
@@ -14338,6 +14385,8 @@ export class CanvasManager {
 
     _scheduleResourceSaverPromote(item) {
         if (this._activeCanvasPanStop || !this.resourceSaverMode || item.isResizing || !item.group.getLayer()) return;
+        // A video cover stays still on hover; decoding starts when playback is requested.
+        if (this._getItemMediaType(item.data) === 'video') return;
         clearTimeout(item.hoverTimer);
         item.hoverTimer = setTimeout(() => {
             item.hoverTimer = null;
