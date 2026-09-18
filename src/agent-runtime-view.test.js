@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
     AgentRuntimeClient, isRuntimeTerminal, mergeRuntimeSnapshot, runtimeActions,
     runtimeOutputFiles, runtimePriceText, runtimeScopeKey, settleRuntimeConversation, runtimeDisplayText, runtimeDisplayPlan,
-    runtimeTaskTitle, runtimeEstimateText, runtimeProgressText, runtimeStepSources, formatAgentElapsed
+    runtimeTaskTitle, runtimeEstimateText, runtimeProgressText, runtimeStepSources, formatAgentElapsed,
+    runtimeActivityLines
 } from './agent-runtime-view.js';
 
 const snapshot = (patch = {}) => ({
@@ -116,6 +117,20 @@ test('stream text is shown before assistant completion without duplicating accum
         ...run.events, { seq: 3, type: 'assistant', data: { text: 'hello' } },
         { seq: 4, type: 'text_delta', data: { text: 'next' } }
     ] }), 'hello\n\nnext');
+});
+
+test('runtime activity keeps tool, plan, step and review events visible as a compact stream', () => {
+    const lines = runtimeActivityLines(snapshot({ status: 'running', plan: { steps: [{ id: 'step-1', title: '生成主视图' }] }, events: [
+        { seq: 1, type: 'status', data: { status: 'planning' } },
+        { seq: 2, type: 'tool_started', data: { tool: 'flow_canvas.board.get_snapshot' } },
+        { seq: 3, type: 'plan', data: { version: 'v1' } },
+        { seq: 4, type: 'step', data: { stepId: 'step-1', status: 'submitting' } },
+        { seq: 5, type: 'review', data: { text: '等待结果' } }
+    ] }));
+    assert.deepEqual(lines.map(line => line.text), [
+        '正在规划任务', '正在调用 flow_canvas.board.get_snapshot', '执行计划已生成，等待确认',
+        '正在提交 · 生成主视图', '审阅：等待结果'
+    ]);
 });
 
 test('completed plans rehydrate from plan events without re-enabling confirmation', () => {

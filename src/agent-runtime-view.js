@@ -173,6 +173,36 @@ export function runtimeProgressText(run) {
     return [label, latest.data?.title || step?.title || latest.data?.summary].filter(Boolean).join(' · ');
 }
 
+const ACTIVITY_LABELS = {
+    planning: '正在规划任务', awaiting_confirmation: '等待确认执行', running: '开始执行任务',
+    waiting_provider: '等待生成服务返回', reviewing: '正在检查生成结果', completed: '任务完成',
+    partial_failed: '任务部分完成', failed: '任务失败', interrupted: '任务已中断', canceled: '任务已取消'
+};
+const ACTIVITY_STEP_LABELS = {
+    queued: '已排队', preparing: '正在准备', submitting: '正在提交', submitted: '已提交',
+    downloaded: '产物已下载', completed: '已完成', failed: '失败', unknown: '等待核对'
+};
+
+export function runtimeActivityLines(run, limit = 80) {
+    const steps = new Map([...(run.steps || []), ...(runtimeDisplayPlan(run)?.steps || [])].map(step => [step.id, step]));
+    const lines = [];
+    for (const event of run.events || []) {
+        const data = event.data || {};
+        let text = '';
+        if (event.type === 'status') text = ACTIVITY_LABELS[data.status] || data.status || '';
+        else if (event.type === 'plan') text = '执行计划已生成，等待确认';
+        else if (event.type === 'tool_started') text = `正在调用 ${data.tool || '画布工具'}`;
+        else if (event.type === 'tool_result') text = `${data.tool || '画布工具'} 已返回结果`;
+        else if (event.type === 'step') {
+            const step = steps.get(data.stepId);
+            text = [ACTIVITY_STEP_LABELS[data.status] || '步骤更新', step?.title || data.title].filter(Boolean).join(' · ');
+        } else if (event.type === 'review') text = data.text ? `审阅：${data.text}` : '审阅完成';
+        else if (event.type === 'assistant' && data.text) text = String(data.text);
+        if (text) lines.push({ seq: event.seq, type: event.type, text: text.slice(0, 500) });
+    }
+    return lines.slice(-limit);
+}
+
 export class AgentRuntimeClient {
     constructor(api, { onChange = () => {}, onError = () => {}, onSync = () => {}, beforeExecute } = {}) {
         this.api = api;
@@ -327,6 +357,10 @@ export function createRuntimeCard({ onAction, onLocate }) {
     const proposedText = element('pre', '');
     proposed.append(proposedLabel, proposedText);
     const progress = element('p', 'agent-runtime-progress');
+    const stream = element('details', 'agent-runtime-stream');
+    const streamLabel = element('summary', '', '执行过程');
+    const streamList = element('ol', 'agent-runtime-stream-list');
+    stream.append(streamLabel, streamList);
     const output = element('div', 'agent-runtime-output');
     const review = element('p', 'agent-runtime-review');
     const error = element('p', 'agent-runtime-error');
@@ -341,11 +375,12 @@ export function createRuntimeCard({ onAction, onLocate }) {
     const submit = element('button', '', '提交修改');
     submit.type = 'submit';
     feedback.append(input, submit);
-    root.append(elapsed, header, summary, steps, estimate, proposed, progress, output, review, error, actions, feedback);
+    root.append(elapsed, header, summary, steps, estimate, proposed, stream, progress, output, review, error, actions, feedback);
     let current;
     let localError = '';
     let renderedPlan = '';
     let renderedActions = '';
+    let renderedActivity = '';
     const invoke = async (action, instruction) => {
         localError = '';
         try {
@@ -425,6 +460,18 @@ export function createRuntimeCard({ onAction, onLocate }) {
             }
             progress.textContent = runtimeProgressText(run);
             progress.hidden = !progress.textContent;
+            const activity = runtimeActivityLines(run);
+            const activityKey = JSON.stringify(activity);
+            if (activityKey !== renderedActivity) {
+                renderedActivity = activityKey;
+                streamList.replaceChildren(...activity.map(line => {
+                    const item = element('li', `agent-runtime-stream-${line.type}`, line.text);
+                    item.dataset.seq = String(line.seq || '');
+                    return item;
+                }));
+            }
+            stream.hidden = !activity.length;
+            stream.open = !isRuntimeTerminal(run.status);
             output.textContent = saved && isRuntimeTerminal(run.status) ? '' : runtimeDisplayText(run);
             output.hidden = !output.textContent;
             review.textContent = run.review ? `审阅：${run.review}` : '';

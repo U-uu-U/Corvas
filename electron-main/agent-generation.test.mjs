@@ -734,6 +734,28 @@ describe('AgentGeneration execution', () => {
         assert.equal(h.projects.original.connections[0].kind, 'history');
     });
 
+    test('approved plans reuse an existing named empty generator node instead of creating a result child', async t => {
+        const placeholder = op('front-view', 'image', { prompt: '生成正视图' });
+        placeholder.title = '机械狗六视图 | 正视图';
+        const h = await setup(t, { items: [placeholder] });
+        const run = h.plan(['front-view']);
+        assert.equal(run.steps[0].reuseNodeId, 'front-view');
+        const result = await h.execute(run.steps[0], run);
+        assert.equal(result.nodeIds[0], 'front-view');
+        assert.equal(h.projects.original.items.length, 1);
+        assert.equal(h.projects.original.items[0].filePath, result.filePaths[0]);
+        assert.equal(h.projects.original.connections.length, 0);
+    });
+
+    test('generic source nodes keep the existing new-child generation behavior', async t => {
+        const h = await setup(t, { items: [op('image')] });
+        const run = h.plan(['image']);
+        assert.equal(run.steps[0].reuseNodeId, undefined);
+        const result = await h.execute(run.steps[0], run);
+        assert.equal(result.nodeIds[0], `result-${run.steps[0].id}`);
+        assert.equal(h.projects.original.items.length, 2);
+    });
+
     test('approved count loop submits each step once and preserves every result reference', async t => {
         const h = await setup(t, { items: [op('image', 'image', { count: 3 })] });
         const run = h.plan();

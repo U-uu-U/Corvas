@@ -222,6 +222,15 @@ export class AgentBoardService {
             const current = project(data, projectId);
             const result = applyBoardTransaction(current.snapshot, this.#retryTransaction(current.snapshot, captured));
             if (!result.duplicate) {
+                // Nodes created during an Agent board plan are execution targets.
+                // Mark empty media generators so a later graph.run fills them
+                // instead of creating a second child node beside the placeholder.
+                for (const operation of captured.operations || []) {
+                    if (operation.op !== 'node.create' || !['image', 'video'].includes(operation.nodeType)) continue;
+                    const createdId = result.operations.find(entry => entry.index === captured.operations.indexOf(operation))?.nodeId;
+                    const created = result.snapshot.items.find(item => item.id === createdId);
+                    if (created) created.metadata = { ...(created.metadata || {}), agentPrepared: true };
+                }
                 putProject(data, { ...current, snapshot: result.snapshot });
                 this.#save(data, 'apply', [projectId]);
                 const records = this.#undo.get(projectId) ?? new Map();

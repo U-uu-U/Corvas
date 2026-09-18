@@ -420,6 +420,16 @@
     background: #e6e6eb;
 }
 
+:root[data-theme='light'] .agent-runtime-stream {
+    border-color: #e5e4ea;
+    background: #fafafa;
+}
+
+:root[data-theme='light'] .agent-runtime-stream summary,
+:root[data-theme='light'] .agent-runtime-stream-list {
+    color: #666672;
+}
+
 :root[data-theme='light'] .connection-node-menu-heading,
 :root[data-theme='light'] .op-quick-menu-head,
 :root[data-theme='light'] .op-prompt-preset-head,

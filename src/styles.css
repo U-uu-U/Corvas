@@ -10423,6 +10423,12 @@ body.agent-mode .agent-task-header-controls {
 .agent-runtime-steps small { display: block; color: #aaaeb2; font-size: 11px; }
 .agent-runtime-output { white-space: pre-wrap; margin-top: 8px; }
 .agent-runtime-progress { color: #b0b5b9; margin: 8px 0; font-size: 11px; }
+.agent-runtime-stream { margin: 8px 0; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; background: rgba(0,0,0,0.16); }
+.agent-runtime-stream summary { padding: 6px 8px; cursor: pointer; color: #b0b5b9; font-size: 11px; }
+.agent-runtime-stream-list { max-height: 150px; overflow: auto; margin: 0; padding: 0 10px 7px 28px; color: #c5c8cc; font-size: 11px; }
+.agent-runtime-stream-list li { padding: 2px 0; white-space: pre-wrap; }
+.agent-runtime-stream-text_delta { color: #d9dcdf; }
+.agent-runtime-stream-tool_started { color: #c7d8d0; }
 .agent-runtime-error { color: #efaaaa; margin: 8px 0; white-space: pre-wrap; }
 .agent-runtime-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .agent-runtime-actions:empty { display: none; }

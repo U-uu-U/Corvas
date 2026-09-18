@@ -179,6 +179,16 @@ export class AgentGeneration {
                 pricingStatus: price ? 'configured_sale' : 'unknown' };
         });
     }
+    _isPreparedGenerationNode(node, kind, run) {
+        if (!node || node.kind !== 'op' || node.nodeType !== kind) return false;
+        if (node.id === run.source?.nodeId) return false;
+        if (getGeneratorResultEntries(node).length || node.filePath) return false;
+        if (node.runStatus && !['idle', 'queued', 'canceled', 'error'].includes(node.runStatus)) return false;
+        if (node.metadata?.agentRunId || node.metadata?.agentStepId || node.metadata?.agentPrepared) return true;
+        const title = String(node.title || '').trim();
+        const defaults = new Set([kind === 'video' ? '视频生成' : '图片生成', kind]);
+        return Boolean(title && !defaults.has(title) && /[|｜:：]/.test(title));
+    }
     prepare(run, input, modelConfig = this.loadModelConfig()) {
         const project = this.board.readProject(run.projectId);
         const ids = input?.nodeIds;
@@ -273,7 +283,8 @@ export class AgentGeneration {
                 title: `${node.title || node.nodeType} ${index + 1}/${prompts.length}`, model: provider.model, kind: node.nodeType,
                 count: 1, prompt, originalPrompt: config.prompt || '', config, price, references,
                 providerRef: { id: provider.id, model: provider.model, endpoint: provider.endpoint, type: provider.type }, nodeFingerprints,
-                width: node.width || 320, height: node.height || 320, x: node.x || 0, y: node.y || 0 });
+                width: node.width || 320, height: node.height || 320, x: node.x || 0, y: node.y || 0,
+                ...(this._isPreparedGenerationNode(node, node.nodeType, run) ? { reuseNodeId: node.id } : {}) });
         }
         if (!steps.length || steps.length > 20) throw error('BATCH_LIMIT', '每批次需要 1 到 20 次媒体生成');
         const currencies = new Set(steps.map(s => s.price?.currency).filter(Boolean));
@@ -295,7 +306,8 @@ export class AgentGeneration {
     async execute(step, run, { signal, resume, checkpoint }) {
         const project = this.board.readProject(run.projectId);
         this._validate(step, project);
-        const outputId = `result-${step.id}`;
+        const reusableTarget = step.reuseNodeId && project.items.find(n => n.id === step.reuseNodeId);
+        const outputId = reusableTarget ? reusableTarget.id : `result-${step.id}`;
         const existing = project.items.find(n => n.id === outputId);
         const hasExistingOutput = existing?.filePath && fs.existsSync(existing.filePath);
         const downloaded = step.filePaths?.length && step.filePaths.every(filePath => fs.existsSync(filePath));
