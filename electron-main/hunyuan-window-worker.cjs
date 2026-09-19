@@ -83,7 +83,7 @@ async function importCurrentModel(expectedToken) {
         if (!process.connected) throw new Error('Corvas 连接已断开，请重新打开混元窗口');
         process.send({ type: 'model-task', task: { worksId: current.worksId,
             generationId: current.generationId, status: 'ready', explicitImport: true } });
-        currentModelMessage = '已发送当前模型，执行进度见下方';
+        currentModelMessage = '已发送当前模型，进度请在 Agent 中查看';
     } catch (error) {
         currentModelMessage = error.message?.match(/^(请|当前|页面|混元|Corvas)/)
             ? error.message : '当前模型读取失败，请等待页面加载后重试';
