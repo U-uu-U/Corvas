@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const HUNYUAN_URL = 'https://3d.hunyuan.tencent.com/';
+const HUNYUAN_URL = 'https://3d.hunyuan.tencent.com/studio/creation/geo';
 const ACCOUNT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const partitionFor = id => {
     if (!ACCOUNT_ID.test(id || '')) throw new Error('混元账号不存在');

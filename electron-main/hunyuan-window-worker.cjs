@@ -58,8 +58,19 @@ function load() {
 function focus() {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show(); mainWindow.focus();
-    if (failed) load();
+    // Account browsers live in separate processes; raise the native window as well
+    // as focusing it so a click in the canvas brings it to the foreground on Windows.
+    const raise = process.platform === 'win32' && !mainWindow.isAlwaysOnTop();
+    if (raise) mainWindow.setAlwaysOnTop(true);
+    mainWindow.show(); mainWindow.moveTop(); mainWindow.focus();
+    mainWindow.webContents.focus();
+    if (raise) mainWindow.setAlwaysOnTop(false);
+    const current = mainWindow.webContents.getURL();
+    // Preserve in-page work (including query/hash state) when geometry is already
+    // open. An empty URL belongs to the initial navigation, which is still loading.
+    const atGeometry = current && new URL(current).origin === new URL(HUNYUAN_URL).origin
+        && new URL(current).pathname.replace(/\/$/, '') === '/studio/creation/geo';
+    if (failed || (current && current !== 'about:blank' && !atGeometry)) load();
 }
 
 async function close() {
@@ -90,7 +101,7 @@ app.whenReady().then(async () => {
             { headers: { 'content-type': 'text/html; charset=utf-8' } }
         ));
     }
-    mainWindow = new BrowserWindow({ width: 1320, height: 900, minWidth: 840, minHeight: 600,
+    mainWindow = new BrowserWindow({ width: 1320, height: 900, minWidth: 840, minHeight: 600, show: false,
         title: `混元 3D · ${name}`, backgroundColor: '#17181b', autoHideMenuBar: true,
         icon: path.join(__dirname, 'assets/app-icon.png'), webPreferences: preferences() });
     secureWindow(mainWindow);
@@ -103,4 +114,5 @@ app.whenReady().then(async () => {
     mainWindow.webContents.on('render-process-gone', () => { failed = true; notify('error'); });
     mainWindow.on('closed', () => { if (!quitting) void close(); });
     load();
+    focus();
 }).catch(() => { notify('error'); app.exit(1); });

@@ -85,6 +85,16 @@ const { _electron: electron, chromium } = require(process.env.PLAYWRIGHT_MODULE 
             console.log(await first.locator('body').innerText());
             return;
         }
+        assert.equal(new URL(first.url()).pathname, '/studio/creation/geo');
+        await first.waitForFunction(() => document.hasFocus());
+        await first.goto('https://3d.hunyuan.tencent.com/studio/creation/concept');
+        await openAccount(a.id);
+        await first.waitForURL('https://3d.hunyuan.tencent.com/studio/creation/geo');
+        await first.waitForFunction(() => document.hasFocus());
+        await first.evaluate(() => { window.geometryDraft = 'keep current work'; });
+        await openAccount(a.id);
+        await first.waitForFunction(() => document.hasFocus());
+        assert.equal(await first.evaluate(() => window.geometryDraft), 'keep current work');
         await first.evaluate(() => { localStorage.setItem('test-account', 'A'); document.cookie = 'fixture_account=A;max-age=86400;Secure;SameSite=Lax'; });
         const second = await openAccount(b.id);
         assert.equal(await second.evaluate(() => localStorage.getItem('test-account')), null);
@@ -155,7 +165,7 @@ const { _electron: electron, chromium } = require(process.env.PLAYWRIGHT_MODULE 
         assert.equal(reopenedA.isClosed(), true);
         await assert.rejects(fs.stat(path.join(profile, 'data/hunyuan-browser-profiles', a.id)), { code: 'ENOENT' });
         assert.equal(await reopenedB.evaluate(() => localStorage.getItem('test-account')), 'B');
-        console.log('Hunyuan UI smoke passed: launcher, account management, independent sessions, isolated login popups, restart persistence, removal, themes and compact sidebar.');
+        console.log('Hunyuan UI smoke passed: direct geometry entry, foreground focus, geometry draft preservation, launcher, account management, independent sessions, isolated login popups, restart persistence, removal, themes and compact sidebar.');
     } catch (error) {
         await page?.screenshot({ path: path.join(screenshotDir, 'hunyuan-accounts-failure.png') }).catch(() => {});
         throw error;
