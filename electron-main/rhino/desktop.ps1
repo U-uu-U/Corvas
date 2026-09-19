@@ -25,7 +25,7 @@ $processes = @(Get-Process Rhino -ErrorAction SilentlyContinue | Where-Object {
     $_.Path -and ((-not $Executable) -or [string]::Equals($_.Path, $Executable, [StringComparison]::OrdinalIgnoreCase))
 })
 if ($Action -eq 'running') {
-    ConvertTo-Json -InputObject @($processes | ForEach-Object { @{ pid = $_.Id; path = $_.Path } }) -Compress
+    ConvertTo-Json -InputObject @($processes | ForEach-Object { @{ pid = $_.Id; path = $_.Path; ready = ($_.MainWindowHandle -ne [IntPtr]::Zero -and $_.Responding) } }) -Compress
     exit
 }
 if ($processes.Count -ne 1) { throw 'Choose the intended Rhino instance before connecting.' }
@@ -45,6 +45,12 @@ try {
     $rhino.Visible = $true
     $command = '_-RunPythonScript "' + $ScriptPath + '"'
     $ok = $rhino.RunScript($command, 0)
-    if (-not $ok) { throw 'Rhino did not accept the connection command.' }
-    '{"ok":true}'
+    if ($ok) { '{"ok":true}' }
+    else { '{"ok":false,"retryable":true,"reason":"Rhino did not accept the command yet"}' }
+} catch {
+    $failure = $_.Exception
+    while ($failure.InnerException) { $failure = $failure.InnerException }
+    if ($failure.HResult -in @(-2147418111, -2147417846)) {
+        '{"ok":false,"retryable":true,"reason":"Rhino is busy initializing"}'
+    } else { throw }
 } finally { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($rhino) }

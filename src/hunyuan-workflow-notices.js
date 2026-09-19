@@ -10,6 +10,7 @@ export function createHunyuanWorkflowNotices() {
     const render = state => {
         revision++; root.replaceChildren();
         const labels = { awaiting_confirmation: '模型已生成，发送到 Rhino 并整理？', queued: '模型等待发送到 Rhino',
+            waiting_rhino: '等待 Rhino / Cordyceps 连接',
             downloading: '正在下载混元模型', connecting: '正在连接 Rhino', importing: '正在导入 Rhino',
             processing: '正在执行 Rhino 整理 Skill', completed: 'Rhino 整理任务已结束，请查看结果', failed: '模型传递未完成', interrupted: '模型整理已暂停' };
         for (const job of (state.jobs || []).filter(job => !job.dismissed && labels[job.status]).slice(-2)) {
@@ -28,8 +29,9 @@ export function createHunyuanWorkflowNotices() {
                 }); card.append(button);
             };
             if (job.status === 'awaiting_confirmation') action('确认发送并整理', 'confirm');
+            if (job.status === 'waiting_rhino') action('重试连接', 'confirm');
             if (job.status === 'failed' && !job.runId && !job.importStarted) action('重试', 'confirm');
-            if (['awaiting_confirmation', 'completed', 'failed', 'interrupted'].includes(job.status)) action(job.status === 'awaiting_confirmation'
+            if (['awaiting_confirmation', 'waiting_rhino', 'completed', 'failed', 'interrupted'].includes(job.status)) action(['awaiting_confirmation', 'waiting_rhino'].includes(job.status)
                 ? '暂不处理' : job.status === 'interrupted' ? '已检查，继续队列' : '收起', 'dismiss');
             root.append(card);
         }

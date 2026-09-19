@@ -113,3 +113,16 @@ test('application shutdown waits for all owned browsers and keeps saved accounts
     assert.equal(service.list().accounts.length, 2);
     assert.ok(service.list().accounts.every(account => !account.windowOpen));
 });
+
+test('cached model resumes a delayed Rhino handoff after the browser window has closed', async t => {
+    const { service, launches } = setup(t);
+    const account = (await service.save({ name: 'Rhino transfer' })).account;
+    const generationId = 'a'.repeat(32);
+    const modelKey = require('./hunyuan-model-watcher.cjs').keyFor(generationId);
+    const model = path.join(service.profilesDir, account.id, 'rhino-models', modelKey, 'model.fbx');
+    fs.mkdirSync(path.dirname(model), { recursive: true });
+    fs.writeFileSync(model, Buffer.alloc(64));
+    assert.equal(await service.downloadModel(account.id, generationId), model);
+    assert.equal(launches.length, 0);
+    assert.throws(() => service.downloadModel(account.id, '../foreign'), /任务标识无效/);
+});

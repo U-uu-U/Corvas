@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { keyFor } = require('./hunyuan-model-watcher.cjs');
 
 const HUNYUAN_URL = 'https://3d.hunyuan.tencent.com/studio/creation/geo';
 const ACCOUNT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -158,6 +159,12 @@ class HunyuanAccounts {
 
     downloadModel(accountId, worksId) {
         this.account(accountId);
+        if (!/^[a-f0-9]{32}$/.test(worksId || '')) throw new Error('模型任务标识无效');
+        const cached = path.join(this.profilesDir, accountId, 'rhino-models', keyFor(worksId), 'model.fbx');
+        try {
+            const stat = fs.statSync(cached);
+            if (stat.isFile() && stat.size > 32) return Promise.resolve(cached);
+        } catch { /* The account window downloads the model if no completed copy exists. */ }
         if (!this.windows.get(accountId)?.child?.connected) throw new Error('请先打开对应混元账号窗口');
         const requestId = crypto.randomUUID();
         return new Promise((resolve, reject) => {

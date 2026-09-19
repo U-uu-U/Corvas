@@ -22,6 +22,10 @@ class HunyuanRhinoWorkflow {
             for (const job of this.jobs) if (ACTIVE.has(job.status)) {
                 job.status = 'interrupted'; job.error = '应用退出时处理尚未完成，请先检查 Rhino 和 Agent 中的已有结果。';
             }
+            for (const job of this.jobs) if (job.status === 'failed' && !job.importStarted && !job.runId
+                && /Rhino 已打开，但还未连接/.test(job.error || '')) {
+                job.status = 'waiting_rhino'; job.error = '等待 Rhino 连接；关闭启动提示后会自动继续。';
+            }
         } catch (error) {
             if (error.code !== 'ENOENT') this.loadError = '模型传递记录读取失败，原文件已保留，自动处理已暂停';
         }
@@ -54,7 +58,7 @@ class HunyuanRhinoWorkflow {
             this.context = { projectId: projectId ?? null, conversationId };
         }
         if (this.mode === 'ask') {
-            for (const job of this.jobs) if (job.status === 'queued' && !job.approved) job.status = 'awaiting_confirmation';
+            for (const job of this.jobs) if (['queued', 'waiting_rhino'].includes(job.status) && !job.approved) job.status = 'awaiting_confirmation';
         } else {
             for (const job of this.jobs) if (job.status === 'awaiting_confirmation' && !job.dismissed) job.status = 'queued';
         }
@@ -83,7 +87,7 @@ class HunyuanRhinoWorkflow {
             // The persistent import button is itself the user's confirmation,
             // including for old results that are outside automatic tracking.
             job.dismissed = false;
-            if (['generating', 'awaiting_confirmation', 'queued'].includes(job.status)
+            if (['generating', 'awaiting_confirmation', 'queued', 'waiting_rhino'].includes(job.status)
                 || (job.status === 'failed' && !job.importStarted && !job.runId)) {
                 const context = this.context || { projectId: this.getProjectId() ?? null, conversationId: 'hunyuan-rhino' };
                 this.update(job, 'queued', { ...context, approved: true, error: '' });
@@ -99,7 +103,7 @@ class HunyuanRhinoWorkflow {
         if (!job) throw new Error('模型传递任务不存在');
         if (action === 'dismiss' && !ACTIVE.has(job.status) && job.status !== 'queued') {
             job.dismissed = true; this.changed();
-        } else if (action === 'confirm' && !job.dismissed && (job.status === 'awaiting_confirmation'
+        } else if (action === 'confirm' && !job.dismissed && (['awaiting_confirmation', 'waiting_rhino'].includes(job.status)
             || (job.status === 'failed' && !job.runId && !job.importStarted))) {
             this.update(job, 'queued', { approved: true, error: '' });
         }
@@ -123,11 +127,24 @@ class HunyuanRhinoWorkflow {
     async drain() {
         if (this.closed || this.running || this.loadError || this.jobs.some(job => job.status === 'processing'
             || (job.status === 'interrupted' && !job.dismissed))) return;
-        const job = this.jobs.find(entry => entry.status === 'queued' && !entry.dismissed);
+        const job = this.jobs.find(entry => ['queued', 'waiting_rhino'].includes(entry.status) && !entry.dismissed);
         if (!job) return;
         if (!job.approved && this.mode !== 'auto') { this.update(job, 'awaiting_confirmation'); return; }
         this.running = true;
-        try { await this.process(job); }
+        try {
+            if (job.status === 'waiting_rhino') {
+                const rhino = this.getRhino();
+                let state = await rhino.status();
+                if (!state.connected && await rhino.probe(rhino.config.endpoint)) {
+                    rhino.open({ connectOnly: true }); await rhino.pending; state = rhino.snapshot();
+                }
+                if (!state.connected) {
+                    if (state.state === 'error') this.update(job, 'failed', { error: state.message });
+                    return;
+                }
+            }
+            await this.process(job);
+        }
         catch (error) {
             if (!this.closed) this.update(job, job.importStarted ? 'interrupted' : 'failed',
                 { error: job.importStarted ? 'Rhino 操作未取得完整结果，请检查模型与 Agent 记录，不会自动重复导入。' : error.message });
@@ -151,6 +168,10 @@ class HunyuanRhinoWorkflow {
         this.update(job, 'connecting');
         const rhino = this.getRhino();
         rhino.open(); await rhino.pending;
+        if (!rhino.snapshot().connected && rhino.snapshot().state === 'waiting') {
+            this.update(job, 'waiting_rhino', { error: 'Rhino 正在等待启动完成。关闭插件提示后会自动继续，也可以点击“重试连接”。' });
+            return;
+        }
         if (!rhino.snapshot().connected) throw new Error(rhino.snapshot().message || 'Rhino 尚未连接');
         if (!this.assertProceed(job)) return;
         const mcp = rhino.mcpClient;

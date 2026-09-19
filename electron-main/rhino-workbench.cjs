@@ -24,13 +24,15 @@ const listening = endpoint => new Promise(resolve => {
 });
 
 class RhinoWorkbench {
-    constructor({ directory, desktop, mcpClient, onChange = () => {}, probe = listening, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), startupAttempts = 60 }) {
+    constructor({ directory, desktop, mcpClient, onChange = () => {}, probe = listening, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), startupAttempts = 60, now = Date.now }) {
         this.file = path.join(directory, 'rhino-workbench.json');
         this.desktop = desktop; this.mcpClient = mcpClient; this.onChange = onChange;
         this.probe = probe; this.wait = wait; this.startupAttempts = startupAttempts;
+        this.now = now; this.bootstrapRetryAfter = 0;
         this.config = { executablePath: '', endpoint: DEFAULT_RHINO_ENDPOINT, serverId: '' };
         this.applications = []; this.discovered = false; this.state = 'idle'; this.message = '';
         this.loadError = ''; this.pending = null; this.disposed = false;
+        this.bootstrapPending = null; this.bootstrapFailure = null; this.bootstrapExecutable = '';
         try {
             const saved = JSON.parse(fs.readFileSync(this.file, 'utf8'));
             if (saved.version !== 1 || typeof saved.executablePath !== 'string') throw new Error('Invalid settings');
@@ -68,6 +70,14 @@ class RhinoWorkbench {
         if (!this.pending && this.snapshot().connected && !await this.probe(this.config.endpoint)) {
             await this.mcpClient.disconnect(this.server().id);
             this.update('disconnected', 'Rhino 连接已断开，请重新连接。');
+        }
+        if (!this.pending && !this.disposed && this.state === 'waiting') {
+            if (await this.probe(this.config.endpoint)) { this.open({ connectOnly: true }); await this.pending; }
+            else {
+                await this.bootstrapWhenReady();
+                const report = this.desktop.bootstrapReport();
+                if (report?.ok === false) this.update('error', this.bootstrapError(report));
+            }
         }
         return this.snapshot();
     }
@@ -113,6 +123,32 @@ class RhinoWorkbench {
         this.update('connecting', '正在查找 Rhino…');
         return this.snapshot();
     }
+    startBootstrap(executable) {
+        if (this.bootstrapPending) return;
+        this.bootstrapExecutable = '';
+        this.bootstrapFailure = null;
+        this.bootstrapPending = Promise.resolve().then(() => this.desktop.bootstrap(executable, { endpoint: this.config.endpoint }))
+            .then(result => {
+                if (result?.retryable && !this.disposed) {
+                    this.bootstrapExecutable = executable; this.bootstrapRetryAfter = this.now() + 3000;
+                }
+            })
+            .catch(error => { this.bootstrapFailure = error; })
+            .finally(() => { this.bootstrapPending = null; });
+    }
+    bootstrapError(report) {
+        if (report.code === 'SOLVER_DISABLED') return 'Grasshopper 计算已暂停，请启用计算后重新连接。';
+        if (report.code === 'PLUGIN_MISSING') return 'Rhino 未加载 Cordyceps，请安装或启用与 Rhino 兼容的插件。';
+        return 'Rhino 连接脚本执行失败，请查看 Rhino 命令栏的错误提示后重试。';
+    }
+    async bootstrapWhenReady() {
+        const executable = this.bootstrapExecutable;
+        if (!executable || this.disposed || this.bootstrapPending || this.now() < this.bootstrapRetryAfter) return false;
+        const candidates = (await this.desktop.running()).filter(app => executableKey(app.path) === executableKey(executable));
+        if (candidates.length > 1) throw new Error('检测到多个 Rhino 实例，请在目标窗口启动 Cordyceps 后点击“仅连接”。');
+        if (candidates.length !== 1 || candidates[0].ready === false) return false;
+        this.startBootstrap(executable); return true;
+    }
     async start(connectOnly) {
         await this.status();
         if (this.loadError) throw new Error(this.loadError);
@@ -131,24 +167,31 @@ class RhinoWorkbench {
         const matching = running.filter(app => executableKey(app.path) === executableKey(executable));
         if (matching.length > 1) throw new Error('检测到多个 Rhino 实例，请在目标窗口启动 Cordyceps 后点击“仅连接”。');
         if (matching.length) {
-            await this.desktop.focus(executable).catch(() => { throw new Error('Rhino 尚未进入可操作状态，请先处理软件中的启动提示。'); });
+            await this.desktop.focus(executable).catch(() => {});
             this.update('connecting', '正在启动 Rhino 中的 Cordyceps…');
-            await this.desktop.bootstrap(executable, { endpoint: this.config.endpoint }).catch(() => { throw new Error('Rhino 已打开，请复制连接命令到 Rhino 执行，再点击“仅连接”。'); });
+            if (matching[0].ready !== false) this.startBootstrap(executable);
+            else this.bootstrapExecutable = executable;
         } else {
             this.update('launching', '正在打开 Rhino 并启动 Cordyceps…');
-            await this.desktop.launch(executable, { endpoint: this.config.endpoint }).catch(() => { throw new Error('无法启动所选 Rhino，请检查程序路径后重试。'); });
+            const launch = await this.desktop.launch(executable, { endpoint: this.config.endpoint })
+                .catch(() => { throw new Error('无法启动所选 Rhino，请检查程序路径后重试。'); });
+            this.bootstrapExecutable = launch?.bootstrapOnReady === true ? executable : '';
         }
         for (let attempt = 0; attempt < this.startupAttempts && !this.disposed; attempt++) {
             if (await this.probe(this.config.endpoint)) { await this.ensureServer(); return; }
+            if (await this.bootstrapWhenReady()) this.update('connecting', 'Rhino 已就绪，正在执行 Cordyceps 启动脚本…');
             const report = this.desktop.bootstrapReport();
             if (report?.ok === false) {
-                if (report.code === 'SOLVER_DISABLED') throw new Error('Grasshopper 计算已暂停，请启用计算后重新连接。');
-                if (report.code === 'PLUGIN_MISSING') throw new Error('Rhino 未加载 Cordyceps，请安装或启用与 Rhino 兼容的插件。');
-                throw new Error('Rhino 连接脚本执行失败，请查看 Rhino 命令栏的错误提示后重试。');
+                throw new Error(this.bootstrapError(report));
+            }
+            if (report?.pending && report.status === 'loading_grasshopper' && this.state !== 'waiting') {
+                this.update('waiting', '正在加载 Grasshopper 和 Cordyceps；如有插件启动提示，请关闭提示后等待自动连接。');
             }
             await this.wait(1000);
         }
-        if (!this.disposed) throw new Error('Rhino 已打开，但还未连接。请处理软件内的启动提示，再点击“仅连接”，或复制连接命令运行。');
+        if (!this.disposed) this.update('waiting', this.bootstrapFailure
+            ? 'Rhino 正等待可执行命令的状态。关闭启动提示后可重试连接；Cordyceps 就绪后会自动继续。'
+            : '等待 Rhino / Cordyceps 启动。请关闭软件内的启动提示，连接就绪后会自动继续。');
     }
     connectionCommand() { return this.desktop.connectionCommand(this.config.endpoint); }
     close() { this.disposed = true; }

@@ -58,13 +58,16 @@ class RhinoDesktop {
         fs.rmSync(path.join(this.directory, 'connect.json'), { force: true });
         const command = `_-RunPythonScript "${scriptPath}"`;
         const file = this.platform === 'darwin' ? '/usr/bin/open' : executable;
+        // Windows Rhino parses /runscript itself; Node's escaped nested quotes can
+        // leave the script undispatched. Bootstrap through COM once its window is ready.
         const args = this.platform === 'darwin' ? ['-a', executable, '--args', `-runscript=${command}`]
-            : ['/nosplash', `/runscript=${command}`];
+            : ['/nosplash'];
         await new Promise((resolve, reject) => {
             const child = spawn(file, args, { windowsHide: false, detached: true, stdio: 'ignore' });
             child.once('error', reject);
             child.once('spawn', () => { child.unref(); resolve(); });
         });
+        return { bootstrapOnReady: this.platform === 'win32' };
     }
     async bootstrap(executable, { endpoint } = {}) {
         const scriptPath = path.join(this.materialize(), 'connect.py');

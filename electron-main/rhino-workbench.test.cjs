@@ -34,7 +34,7 @@ function setup(t, options = {}) {
     };
     let probes = 0;
     const service = new RhinoWorkbench({ directory, desktop, mcpClient,
-        probe: options.probe || (async () => ++probes > 1), wait: async () => {}, startupAttempts: 3,
+        probe: options.probe || (async () => ++probes > 1), wait: options.wait || (async () => {}), startupAttempts: 3, now: options.now,
         onChange: data => events.push(data) });
     return { service, desktop, mcpClient, directory, actions, servers, executable, events };
 }
@@ -53,6 +53,69 @@ test('cold launch starts Rhino once then publishes Cordyceps tools through the e
     assert.ok(events.some(state => state.state === 'launching'));
     assert.equal(service.snapshot().applications.length, 1);
     assert.equal(service.snapshot().busy, false);
+});
+
+test('Windows cold launch dispatches the startup script only after the Rhino window is ready', async t => {
+    let listening = false, queries = 0;
+    const { service, desktop, executable, actions } = setup(t, { probe: async () => listening });
+    desktop.running = async () => ++queries === 1 ? [] : [{ path: executable, pid: 42, ready: queries > 2 }];
+    desktop.launch = async file => { actions.push(['launch', file]); return { bootstrapOnReady: true }; };
+    desktop.bootstrap = async file => { assert.ok(queries > 2); actions.push(['bootstrap', file]); listening = true; };
+    service.open(); await service.pending;
+    assert.equal(service.snapshot().connected, true);
+    assert.equal(actions.filter(action => action[0] === 'launch').length, 1);
+    assert.equal(actions.filter(action => action[0] === 'bootstrap').length, 1);
+});
+
+test('a plugin dialog keeps connection waiting and closing it reconnects without replaying the startup script', async t => {
+    let listening = false, release;
+    const { service, desktop, executable, actions } = setup(t, { probe: async () => listening });
+    desktop.running = async () => [{ path: executable, pid: 42, ready: true }];
+    desktop.bootstrap = async file => { actions.push(['bootstrap', file]); await new Promise(resolve => { release = resolve; }); };
+    desktop.bootstrapReport = () => ({ ok: null, pending: true, status: 'loading_grasshopper' });
+    service.open(); await service.pending;
+    assert.equal(service.snapshot().state, 'waiting');
+    service.open(); await service.pending;
+    assert.equal(actions.filter(action => action[0] === 'bootstrap').length, 1);
+    listening = true;
+    const status = await service.status();
+    assert.equal(status.connected, true);
+    assert.equal(actions.filter(action => action[0] === 'bootstrap').length, 1);
+    release(); await service.bootstrapPending;
+});
+
+test('late Rhino readiness still dispatches the pending script after the initial wait window', async t => {
+    let listening = false, ready = false, launched = false;
+    const { service, desktop, executable, actions } = setup(t, { probe: async () => listening });
+    desktop.running = async () => launched ? [{ path: executable, pid: 42, ready }] : [];
+    desktop.launch = async () => { launched = true; return { bootstrapOnReady: true }; };
+    desktop.bootstrap = async file => { actions.push(['bootstrap', file]); listening = true; };
+    service.open(); await service.pending;
+    assert.equal(service.snapshot().state, 'waiting');
+    assert.equal(actions.length, 0);
+    ready = true;
+    await service.status();
+    await service.status();
+    assert.equal(service.snapshot().connected, true);
+    assert.equal(actions.filter(action => action[0] === 'bootstrap').length, 1);
+});
+
+test('a confirmed busy rejection retries with a delay after the startup dialog closes', async t => {
+    let time = 0, listening = false, calls = 0;
+    const { service, desktop, executable } = setup(t, { probe: async () => listening, now: () => time, wait: async () => { time += 1000; } });
+    desktop.running = async () => [{ path: executable, pid: 42, ready: true }];
+    desktop.bootstrap = async () => {
+        calls++;
+        if (calls === 1) return { ok: false, retryable: true };
+        listening = true; return { ok: true };
+    };
+    service.open(); await service.pending;
+    assert.equal(service.snapshot().state, 'waiting');
+    assert.equal(calls, 1);
+    time = 5000;
+    await service.status(); await service.status();
+    assert.equal(service.snapshot().connected, true);
+    assert.equal(calls, 2);
 });
 
 test('an already configured running service is reused without changing credentials or duplicating Rhino', async t => {

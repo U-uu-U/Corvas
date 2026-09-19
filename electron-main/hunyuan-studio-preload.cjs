@@ -22,7 +22,7 @@ if (location.origin === 'https://3d.hunyuan.tencent.com' && process.isMainFrame)
         root.append(style);
         const current = state.currentModel || {};
         const currentJob = (state.jobs || []).findLast(job => job.generationId === current.generationId);
-        const active = currentJob && ['queued', 'downloading', 'connecting', 'importing', 'processing'].includes(currentJob.status);
+        const active = currentJob && !currentJob.dismissed && ['queued', 'downloading', 'connecting', 'waiting_rhino', 'importing', 'processing'].includes(currentJob.status);
         const pinned = document.createElement('section'); pinned.className = 'pinned';
         pinned.setAttribute('aria-label', '将当前模型导入到 Rhino');
         const copy = document.createElement('div');
@@ -42,6 +42,7 @@ if (location.origin === 'https://3d.hunyuan.tencent.com' && process.isMainFrame)
         });
         pinned.append(copy, importButton); root.append(pinned);
         const labels = { awaiting_confirmation: '模型已生成，发送到 Rhino 并整理？', queued: '等待发送到 Rhino', downloading: '正在下载模型',
+            waiting_rhino: '等待 Rhino / Cordyceps 连接',
             connecting: '正在连接 Rhino', importing: '正在导入 Rhino', processing: 'Rhino 正在整理模型', completed: 'Rhino 整理任务已结束，请查看结果',
             failed: '自动处理未完成', interrupted: '处理已暂停，请检查 Rhino 和 Agent 任务' };
         const jobs = (state.jobs || []).filter(job => !job.dismissed && labels[job.status]).slice(-2);
@@ -60,8 +61,9 @@ if (location.origin === 'https://3d.hunyuan.tencent.com' && process.isMainFrame)
                 }); card.append(element);
             };
             if (job.status === 'awaiting_confirmation') button('确认发送并整理', 'confirm', true);
+            if (job.status === 'waiting_rhino') button('重试连接', 'confirm', true);
             if (job.status === 'failed' && !job.runId && !job.importStarted) button('重试', 'confirm', true);
-            if (['awaiting_confirmation', 'completed', 'failed', 'interrupted'].includes(job.status)) button(job.status === 'awaiting_confirmation'
+            if (['awaiting_confirmation', 'waiting_rhino', 'completed', 'failed', 'interrupted'].includes(job.status)) button(['awaiting_confirmation', 'waiting_rhino'].includes(job.status)
                 ? '暂不处理' : job.status === 'interrupted' ? '已检查，继续队列' : '收起', 'dismiss');
             root.append(card);
         }

@@ -31,7 +31,7 @@ export function createRhinoPanel({ onClose, onAgent }) {
     const render = next => {
         state = next;
         root.dataset.state = state.state;
-        root.querySelector('[data-state]').textContent = ({ idle: '未连接', connecting: '正在连接', launching: '正在启动 Rhino', connected: '已连接', disconnected: '连接已断开', error: '需要处理' })[state.state] || '未连接';
+        root.querySelector('[data-state]').textContent = ({ idle: '未连接', connecting: '正在连接', launching: '正在启动 Rhino', waiting: '等待软件就绪', connected: '已连接', disconnected: '连接已断开', error: '需要处理' })[state.state] || '未连接';
         root.querySelector('[data-tools]').textContent = state.connected ? `${state.toolCount} 个工具` : '';
         message.textContent = state.message || '点击“打开并连接”开始使用。';
         root.querySelector('[data-action="open"]').textContent = state.connected ? '切换到 Rhino' : '打开并连接';
