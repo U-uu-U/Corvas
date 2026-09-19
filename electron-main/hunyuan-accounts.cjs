@@ -10,12 +10,15 @@ const partitionFor = id => {
 };
 
 class HunyuanAccounts {
-    constructor({ dataDir, launchBrowser, clearLegacySession = async () => {}, onChange = () => {} }) {
+    constructor({ dataDir, launchBrowser, clearLegacySession = async () => {}, onChange = () => {},
+        onModelTask = () => {}, onWorkflowAction = () => {}, workflowState = () => ({ mode: 'ask', jobs: [] }) }) {
         this.file = path.join(dataDir, 'hunyuan-accounts.json');
         this.profilesDir = path.join(dataDir, 'hunyuan-browser-profiles');
         this.launchBrowser = launchBrowser;
         this.clearLegacySession = clearLegacySession;
         this.onChange = onChange;
+        Object.assign(this, { onModelTask, onWorkflowAction, workflowState });
+        this.downloadRequests = new Map();
         this.windows = new Map();
         this.states = new Map();
         this.removing = new Set();
@@ -106,6 +109,9 @@ class HunyuanAccounts {
         this.windows.set(id, record);
         record.closed = new Promise(resolve => {
             const finish = code => {
+                for (const [requestId, pending] of this.downloadRequests) if (pending.child === child) {
+                    clearTimeout(pending.timer); pending.reject(new Error('混元窗口已关闭，请重新打开后重试')); this.downloadRequests.delete(requestId);
+                }
                 if (this.windows.get(id) === record) {
                     this.windows.delete(id);
                     if (code && !record.closing) this.states.set(id, 'error');
@@ -118,13 +124,47 @@ class HunyuanAccounts {
             child.once('error', () => finish(1));
         });
         child.on('message', message => {
-            if (this.windows.get(id) !== record || record.closing || message?.type !== 'status'
+            if (this.windows.get(id) !== record || record.closing) return;
+            if (message?.type === 'model-task') return this.onModelTask(id, message.task);
+            if (message?.type === 'workflow-action') return this.onWorkflowAction(id, message);
+            if (message?.type === 'model-downloaded') {
+                const pending = this.downloadRequests.get(message.requestId);
+                if (!pending || pending.accountId !== id) return;
+                clearTimeout(pending.timer); this.downloadRequests.delete(message.requestId);
+                if (message.error) pending.reject(new Error(message.error));
+                else {
+                    const root = path.resolve(this.profilesDir, id, 'rhino-models');
+                    const filePath = path.resolve(String(message.filePath || ''));
+                    const relative = path.relative(root, filePath);
+                    if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || path.extname(filePath) !== '.fbx') {
+                        pending.reject(new Error('模型文件路径无效'));
+                    } else pending.resolve(filePath);
+                }
+                return;
+            }
+            if (message?.type !== 'status'
                 || !['loading', 'open', 'error'].includes(message.status)) return;
             this.states.set(id, message.status); this.notify();
         });
+        this.send(id, { type: 'workflow-state', state: this.workflowState(id) });
         this.states.set(id, 'loading');
         this.notify();
         return this.list();
+    }
+
+    syncWorkflow() {
+        for (const id of this.windows.keys()) this.send(id, { type: 'workflow-state', state: this.workflowState(id) });
+    }
+
+    downloadModel(accountId, worksId) {
+        this.account(accountId);
+        if (!this.windows.get(accountId)?.child?.connected) throw new Error('请先打开对应混元账号窗口');
+        const requestId = crypto.randomUUID();
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => { this.downloadRequests.delete(requestId); reject(new Error('模型下载等待超时，请稍后重试')); }, 360000);
+            this.downloadRequests.set(requestId, { accountId, child: this.windows.get(accountId).child, resolve, reject, timer });
+            this.send(accountId, { type: 'download-model', worksId, requestId });
+        });
     }
 
     async close(id) {

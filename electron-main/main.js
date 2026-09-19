@@ -22,6 +22,7 @@ const { HunyuanAccounts, partitionFor } = require('./hunyuan-accounts.cjs');
 const { launchHunyuanBrowser } = require('./hunyuan-browser-process.cjs');
 const { RhinoDesktop } = require('./rhino-desktop.cjs');
 const { RhinoWorkbench } = require('./rhino-workbench.cjs');
+const { HunyuanRhinoWorkflow } = require('./hunyuan-rhino-workflow.cjs');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -50,6 +51,7 @@ let browserSyncService = null;
 let apiConfigStore = null;
 let agentServices = null;
 let hunyuanAccounts = null;
+let hunyuanRhinoWorkflow = null;
 let rhinoWorkbench = null;
 let mediaPreviewWasFullScreen = null;
 // 文件移动会让 chokidar 先后报告旧路径 unlink、新路径 add。
@@ -1464,13 +1466,35 @@ for (const action of ['list', 'save', 'remove', 'test']) {
     });
 }
 
-for (const action of ['list', 'save', 'remove', 'open']) {
-    ipcMain.handle(`hunyuan:${action}`, (event, request) => {
-        if (!isCurrentMainWindowSender(event) || event.senderFrame !== mainWindow.webContents.mainFrame) {
-            throw new Error('混元账号请求来源无效');
-        }
-        hunyuanAccounts ||= new HunyuanAccounts({ dataDir: path.join(app.getPath('userData'), 'data'),
+function getRhinoWorkbench() {
+    if (!agentServices) throw new Error('Agent 服务尚未初始化');
+    rhinoWorkbench ||= new RhinoWorkbench({ directory: path.join(app.getPath('userData'), 'data'),
+        desktop: new RhinoDesktop(), mcpClient: agentServices.mcpClient,
+        onChange: data => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('rhino:changed', data); } });
+    return rhinoWorkbench;
+}
+
+function getHunyuanAccounts() {
+    if (!agentServices) throw new Error('Agent 服务尚未初始化');
+    hunyuanRhinoWorkflow ||= new HunyuanRhinoWorkflow({ directory: path.join(app.getPath('userData'), 'data'),
+        getAccounts: () => hunyuanAccounts, getRhino: getRhinoWorkbench, getRuntime: () => agentServices.runtime,
+        getProjectId: () => store.load().activeGroupId,
+        readMode: () => apiConfigStore.load().config?.globalConfig?.agentExecutionMode,
+        onChange: state => {
+            hunyuanAccounts?.syncWorkflow();
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hunyuan:workflow-changed', state);
+        } });
+    hunyuanAccounts ||= new HunyuanAccounts({ dataDir: path.join(app.getPath('userData'), 'data'),
             launchBrowser: launchHunyuanBrowser,
+            workflowState: id => hunyuanRhinoWorkflow.snapshot(id),
+            onModelTask: (id, task) => {
+                try { hunyuanRhinoWorkflow.observe(id, task); }
+                catch (error) { console.error('[Hunyuan] 模型传递记录失败:', error.message); }
+            },
+            onWorkflowAction: (id, action) => {
+                try { hunyuanRhinoWorkflow.action(action, id); }
+                catch (error) { console.error('[Hunyuan] 模型传递操作失败:', error.message); }
+            },
             clearLegacySession: async id => {
                 const legacy = session.fromPartition(partitionFor(id));
                 await legacy.closeAllConnections();
@@ -1481,7 +1505,25 @@ for (const action of ['list', 'save', 'remove', 'open']) {
             onChange: data => {
                 if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hunyuan:changed', data);
             } });
-        return hunyuanAccounts[action](request || {});
+    return hunyuanAccounts;
+}
+
+for (const action of ['list', 'save', 'remove', 'open']) {
+    ipcMain.handle(`hunyuan:${action}`, (event, request) => {
+        if (!isCurrentMainWindowSender(event) || event.senderFrame !== mainWindow.webContents.mainFrame) {
+            throw new Error('混元账号请求来源无效');
+        }
+        return getHunyuanAccounts()[action](request || {});
+    });
+}
+
+for (const action of ['workflowState', 'configureWorkflow', 'workflowAction']) {
+    ipcMain.handle(`hunyuan:${action}`, (event, request) => {
+        if (!isCurrentMainWindowSender(event) || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('模型传递请求来源无效');
+        getHunyuanAccounts();
+        if (action === 'configureWorkflow') return hunyuanRhinoWorkflow.configure(request || {});
+        if (action === 'workflowAction') return hunyuanRhinoWorkflow.action(request || {});
+        return hunyuanRhinoWorkflow.snapshot();
     });
 }
 
@@ -1489,9 +1531,7 @@ for (const action of ['status', 'save', 'open', 'choose', 'copyCommand']) {
     ipcMain.handle(`rhino:${action}`, async (event, request) => {
         if (!isCurrentMainWindowSender(event) || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('Rhino 请求来源无效');
         if (!agentServices) throw new Error('Agent 服务尚未初始化');
-        rhinoWorkbench ||= new RhinoWorkbench({ directory: path.join(app.getPath('userData'), 'data'),
-            desktop: new RhinoDesktop(), mcpClient: agentServices.mcpClient,
-            onChange: data => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('rhino:changed', data); } });
+        getRhinoWorkbench();
         if (action === 'choose') {
             const result = await dialog.showOpenDialog(mainWindow, { title: '选择 Rhino 程序', properties: ['openFile'],
                 filters: [{ name: 'Rhino', extensions: IS_MAC ? ['app'] : ['exe'] }] });
@@ -3328,6 +3368,7 @@ let agentShutdownPromise = null;
 let agentShutdownComplete = false;
 app.on('before-quit', event => {
     isQuitting = true;
+    hunyuanRhinoWorkflow?.close();
     rhinoWorkbench?.close();
     if ((agentServices || hunyuanAccounts) && !agentShutdownComplete) {
         event.preventDefault();

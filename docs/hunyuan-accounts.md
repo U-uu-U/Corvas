@@ -19,9 +19,24 @@
 
 升级后保留原账号名称，新环境第一次需要重新登录。旧 partition 数据不会自动复制，以免继承已经串用的登录状态；旧数据先保留，在用户明确移除相应账号时一并清理。
 
-入口固定为 `https://3d.hunyuan.tencent.com/studio/creation/geo`。网页和登录弹窗使用所属账号的同一会话，开启 sandbox/contextIsolation，关闭 Node 集成，不载入画布 preload。账号 IPC 只接受 Corvas 主窗口的主框架请求。
+入口固定为 `https://3d.hunyuan.tencent.com/studio/creation/geo`。网页和登录弹窗使用所属账号的同一会话，开启 sandbox/contextIsolation，关闭 Node 集成，不载入画布 preload。混元主窗口使用独立的通知 preload，仅在官网主框架显示模型传递状态，不向网页暴露文件或 Rhino API。账号 IPC 只接受 Corvas 主窗口的主框架请求。
 
-当前阶段只提供账号选择和网页入口。图片自动上传、混元任务同步、模型下载回传、Rhino 与 Blender 启动和 MCP 连接属于后续阶段。
+## 模型生成后发送到 Rhino
+
+复用 Agent 输入框右下角的「自动 / 手动」模式，无需设置第二个开关。旧配置值 `ask` 对应现在的「手动」。
+
+- 自动：几何生成完成后下载 FBX，打开并连接 Rhino，导入新图层，随后运行现有「Rhino 模型编辑」Skill。
+- 手动：在混元页面和 Corvas 上方显示非模态确认卡片，可以继续操作页面；点击「确认发送并整理」后执行同一流程。「暂不处理」会跳过该次结果。
+- 切换成手动会拦住尚未开始导入、且没有明确确认的任务；已经开始的 Rhino 操作继续执行。多个模型依次处理。
+- 首次连接只观察已有历史，不自动导入已完成的旧模型。连接期间新提交的任务、或观察到的待处理任务完成后会进入队列。账号、作品 ID 和提交时间共同区分一次生成，重开页面不会重复导入。
+- Rhino 导入保留当前文档、原有对象和选择，记录实际新增的网格 ID；整理 Skill 只处理这些网格，并保留原件，在副本上清理、统一法线和 QuadRemesh。默认不转 NURBS，也不清空 Grasshopper。
+- 执行过程记录在检测到任务时绑定的原项目、原 Agent 对话。此类自动整理任务只获得目标 Rhino MCP 的工具。应用退出、导入超时或整理中断后不会盲目重放，需要查看已有结果；点击「已检查，继续队列」只放行后续模型，不重跑该任务。
+
+需要对应混元窗口保持打开并登录、可用的文字模型配置，以及已安装且可连接的 Rhino/Cordyceps。内置 Skill、导入脚本和浏览器适配器随安装包分发，不依赖用户的 Codex Skill 目录。
+
+`hunyuan-model-watcher.cjs` 使用官网当前任务协议轮询几何生成状态：`/api/game3d/general_info/get_works_list`，`worksPipeline=2`，`pipelineStatus=2` 为完成，模型地址来自 `modelInfo.geometryGenerationRsp.fbxUrl`。每次请求附带 `requestId`。若返回 GLB，使用官网 `/api/game3d/resource/format_conversions` 转为 FBX。协议来源为 2026-09-19 官网静态脚本；官网接口改变时可能需要更新适配器。
+
+文件保存在各账号独立目录下的 `rhino-models`，传递状态保存在 `data/hunyuan-rhino-jobs.json`。这一功能未运行自动化测试或实机联调，按用户要求由用户测试。
 
 ## 验证
 

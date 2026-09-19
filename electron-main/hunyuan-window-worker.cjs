@@ -1,7 +1,8 @@
-const { app, BrowserWindow, session } = require('electron');
+const { app, BrowserWindow, session, net, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { HUNYUAN_URL, partitionFor } = require('./hunyuan-accounts.cjs');
+const { HunyuanModelWatcher } = require('./hunyuan-model-watcher.cjs');
 
 const argument = key => process.argv[process.argv.indexOf(key) + 1];
 const id = argument('--account-id');
@@ -23,12 +24,27 @@ const notify = status => { if (process.connected) process.send({ type: 'status',
 let mainWindow;
 let failed = false;
 let quitting = false;
+let modelWatcher;
+let workflowState = { mode: 'ask', jobs: [] };
+let watchError = '';
 const windows = new Set();
 const webUrl = value => {
     try { return ['http:', 'https:'].includes(new URL(value).protocol); } catch { return false; }
 };
 const preferences = () => ({ session: session.defaultSession,
     sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true });
+
+function updateWorkflowBanner() {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hunyuan:workflow-state', { ...workflowState, error: watchError || workflowState.error });
+}
+const validStudioSender = event => mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents
+    && event.senderFrame === mainWindow.webContents.mainFrame && event.senderFrame.url.startsWith('https://3d.hunyuan.tencent.com/');
+ipcMain.on('hunyuan:workflow-ready', event => { if (validStudioSender(event)) updateWorkflowBanner(); });
+ipcMain.on('hunyuan:workflow-action', (event, action) => {
+    if (validStudioSender(event) && ['confirm', 'dismiss'].includes(action?.action) && typeof action.id === 'string' && process.connected) {
+        process.send({ type: 'workflow-action', ...action });
+    }
+});
 
 function secureWindow(window) {
     windows.add(window);
@@ -76,6 +92,7 @@ function focus() {
 async function close() {
     if (quitting) return;
     quitting = true;
+    modelWatcher?.close();
     for (const window of [...windows]) if (!window.isDestroyed()) window.destroy();
     try { await session.defaultSession.cookies.flushStore(); session.defaultSession.flushStorageData(); }
     finally { app.quit(); }
@@ -88,6 +105,18 @@ process.on('message', message => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setTitle(`混元 3D · ${name}`);
     }
     if (message?.type === 'close') void close();
+    if (message?.type === 'workflow-state') { workflowState = message.state; updateWorkflowBanner(); }
+    if (message?.type === 'download-model' && typeof message.worksId === 'string') {
+        void Promise.resolve().then(() => {
+            if (!modelWatcher) throw new Error('混元窗口尚未就绪');
+            return modelWatcher.download(message.worksId);
+        }).then(filePath => {
+            if (process.connected) process.send({ type: 'model-downloaded', requestId: message.requestId, filePath });
+        }).catch(() => {
+            if (process.connected) process.send({ type: 'model-downloaded', requestId: message.requestId,
+                error: '模型下载未完成，请保持混元窗口登录并稍后重试' });
+        });
+    }
 });
 process.on('disconnect', () => { if (app.isReady()) void close(); else app.quit(); });
 app.on('window-all-closed', () => { if (!quitting) void close(); });
@@ -103,7 +132,8 @@ app.whenReady().then(async () => {
     }
     mainWindow = new BrowserWindow({ width: 1320, height: 900, minWidth: 840, minHeight: 600, show: false,
         title: `混元 3D · ${name}`, backgroundColor: '#17181b', autoHideMenuBar: true,
-        icon: path.join(__dirname, 'assets/app-icon.png'), webPreferences: preferences() });
+        icon: path.join(__dirname, 'assets/app-icon.png'), webPreferences: { ...preferences(),
+            preload: path.join(__dirname, 'hunyuan-studio-preload.cjs') } });
     secureWindow(mainWindow);
     mainWindow.on('page-title-updated', event => { event.preventDefault(); mainWindow.setTitle(`混元 3D · ${name}`); });
     mainWindow.webContents.on('did-start-loading', () => { failed = false; notify('loading'); });
@@ -113,6 +143,13 @@ app.whenReady().then(async () => {
     });
     mainWindow.webContents.on('render-process-gone', () => { failed = true; notify('error'); });
     mainWindow.on('closed', () => { if (!quitting) void close(); });
+    if (!smoke) {
+        modelWatcher = new HunyuanModelWatcher({ directory: profileDir, fetch: (...args) => net.fetch(...args),
+            canPoll: () => !mainWindow.isDestroyed() && mainWindow.webContents.getURL().startsWith('https://3d.hunyuan.tencent.com/studio/'),
+            onTask: task => { if (process.connected) process.send({ type: 'model-task', task }); },
+            onError: message => { if (watchError !== message) { watchError = message; updateWorkflowBanner(); } } });
+        modelWatcher.start();
+    }
     load();
     focus();
 }).catch(() => { notify('error'); app.exit(1); });

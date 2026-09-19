@@ -18,7 +18,9 @@ Rhino 保持独立的软件窗口。关闭侧栏或退出 Corvas 不会关闭 Rh
 
 设置保存在应用数据目录的 `data/rhino-workbench.json`。MCP 连接复用现有加密配置和工具调用循环，默认给建模工具保留 300 秒调用超时。已有相同本机地址的 MCP 配置、凭据和自定义超时不会被覆盖。
 
-「Rhino 模型编辑」Skill 提供原 rhino-mesh-to-nurbs 流程的清理和 QuadRemesh 指引：先读取场景和选择，复制后清理并四边面重拓扑，保留原件与材质，按模型确定密度和对称轴。默认不转 NURBS、不清空 Grasshopper。此阶段没有自动导入混元模型或自动回传渲染文件，产物接收是后续工作。
+「Rhino 模型编辑」Skill 提供原 rhino-mesh-to-nurbs 流程的清理和 QuadRemesh 指引：先读取场景和选择，复制后清理并四边面重拓扑，保留原件与材质，按模型确定密度和对称轴。默认不转 NURBS、不清空 Grasshopper。该 Skill 定义在 `shared/rhino-model-skill.mjs`，供面板入口和混元模型自动传递共同使用。
+
+混元窗口的新几何生成任务可按 Agent 的「自动 / 手动」模式发送到 Rhino，详见 [混元账号说明](hunyuan-accounts.md)。自动模式生成完成即下载、导入并启动整理；手动模式先在顶部非模态卡片确认。导入脚本记录新增网格 ID，整理任务不依赖当前选择。截图进入 Agent 工具结果，不代表已经创建了画布素材节点。
 
 ## 验证与边界
 

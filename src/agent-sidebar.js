@@ -40,6 +40,7 @@ import { canRecoverGenerationTask, generationFailureError, formatClientGeneratio
 import { showStatusNotification } from './status-notification.js';
 import { createApplicationLauncher, createHunyuanPanel } from './hunyuan-accounts.js';
 import { createRhinoPanel, RHINO_EDIT_SKILL } from './rhino-workbench.js';
+import { createHunyuanWorkflowNotices } from './hunyuan-workflow-notices.js';
 import { getVideoModelProfile, describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
 import { getModelPresentation, describeModelPresentation } from '../shared/model-presentation.mjs';
 import { modelConfigStore } from './model-config.js';
@@ -364,6 +365,8 @@ export class AgentSidebar {
         this._restoreAgentConversation(this.activeProjectCacheKey);
         this._restorePendingAgentAttachments();
         this._connectAgentRuntime();
+        createHunyuanWorkflowNotices();
+        void this.apiConfigReady.then(() => { this.hunyuanWorkflowReady = true; this._syncHunyuanWorkflowContext(); });
         this.runtimePageHide = () => this.runtimeClient?.dispose();
         this.runtimePageShow = () => this._connectAgentRuntime();
         window.addEventListener('pagehide', this.runtimePageHide);
@@ -1443,11 +1446,26 @@ export class AgentSidebar {
 
     _renderAgentExecutionMode() {
         const mode = this.globalConfig.agentExecutionMode === 'ask' ? 'ask' : 'auto';
-        if (this.agentExecutionModeLabel) this.agentExecutionModeLabel.textContent = mode === 'ask' ? '询问' : '自动';
+        if (this.agentExecutionModeLabel) this.agentExecutionModeLabel.textContent = mode === 'ask' ? '手动' : '自动';
         this.agentExecutionPopover?.querySelectorAll('[data-agent-execution-mode]').forEach(button => {
             const selected = button.dataset.agentExecutionMode === mode;
             button.classList.toggle('selected', selected);
             button.setAttribute('aria-pressed', String(selected));
+        });
+        this._syncHunyuanWorkflowContext();
+    }
+
+    _syncHunyuanWorkflowContext() {
+        const api = window.flowCanvas?.hunyuan;
+        if (!this.hunyuanWorkflowReady || !api?.configureWorkflow || !this.activeConversationId) return;
+        const context = { mode: this.globalConfig.agentExecutionMode === 'ask' ? 'ask' : 'auto',
+            projectId: this.activeRuntimeProjectId ?? null, conversationId: this.activeConversationId };
+        const key = JSON.stringify(context);
+        if (this.hunyuanWorkflowContextKey === key) return;
+        this.hunyuanWorkflowContextKey = key;
+        void api.configureWorkflow(context).catch(error => {
+            if (this.hunyuanWorkflowContextKey === key) this.hunyuanWorkflowContextKey = null;
+            console.warn('[Hunyuan] 模型传递设置未同步:', error.message);
         });
     }
 
@@ -1612,6 +1630,7 @@ export class AgentSidebar {
     }
 
     _renderAgentRuntimeCards() {
+        this._syncHunyuanWorkflowContext();
         if (!this.messagesEl || !this.runtimeCards) return;
         this.messagesEl.querySelector('.agent-runtime-external-notice')?.remove();
         const externalPending = [...(this.runtimeClient?.runs.values() || [])].find(run => run.external

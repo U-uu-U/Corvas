@@ -86,6 +86,7 @@ class AgentRuntime {
             selectedItemIds: (request.selectedItemIds || []).filter(id => typeof id === 'string'),
             providerRef: { id: provider.sourceProviderId || provider.id, model: provider.model, endpoint: provider.endpoint, type: provider.type },
             mode: request.mode === 'ask' ? 'ask' : 'auto', skillInstructions: request.skillInstructions || [],
+            ...(Array.isArray(request.toolAllowlist) ? { toolAllowlist: [...new Set(request.toolAllowlist.filter(name => typeof name === 'string'))].slice(0, 512) } : {}),
             createdAt: Date.now(), updatedAt: Date.now(), turns: 0, steps: [], results: [], plan: null, pendingCalls: [] };
         this.providerSessions.set(run.id, provider);
         this.runs.set(run.id, run);
@@ -204,8 +205,9 @@ class AgentRuntime {
         this._status(run, 'awaiting_confirmation');
         return this.snapshot(run);
     }
-    tools() {
-        return [...this.boardDefinitions, ...AGENT_TOOL_DEFINITIONS, ...(this.mcpClient?.definitions() || [])].map(tool => ({ type: 'function', function: {
+    tools(run) {
+        return [...this.boardDefinitions, ...AGENT_TOOL_DEFINITIONS, ...(this.mcpClient?.definitions() || [])]
+            .filter(tool => !run?.toolAllowlist || run.toolAllowlist.includes(tool.name)).map(tool => ({ type: 'function', function: {
             name: tool.name, description: tool.description, parameters: tool.inputSchema } }));
     }
     _system(run) {
@@ -260,7 +262,7 @@ class AgentRuntime {
             ] });
             this.visuals.delete(run.id);
             run.mcpBindings = Object.fromEntries((this.mcpClient?.definitions() || []).map(tool => [tool.name, this.mcpClient.binding(tool.name)]));
-            const result = await this.callProvider({ provider, messages, tools: this.tools(), signal: this._signal(run),
+            const result = await this.callProvider({ provider, messages, tools: this.tools(run), signal: this._signal(run),
                 onDelta: text => { this._check(run); this._event(run, 'text_delta', { text }); } });
             this._check(run);
             if (result.text) result.text = this._redact(result.text);
@@ -306,6 +308,7 @@ class AgentRuntime {
             }
             this._event(run, 'tool_started', { tool: call.name });
             try {
+                if (run.toolAllowlist && !run.toolAllowlist.includes(call.name)) throw fail('TOOL_NOT_FOUND', '此任务只允许使用指定的软件工具');
                 const validate = this.validators.get(call.name);
                 if (validate && !validate(call.arguments)) throw fail('INVALID_ARGUMENTS',
                     `工具参数无效：${validate.errors.map(e => `${e.dataPath} ${e.message}`).join('; ')}`);
@@ -354,6 +357,7 @@ class AgentRuntime {
         return true;
     }
     async executeTool(run, name, input = {}) {
+        if (run.toolAllowlist && !run.toolAllowlist.includes(name)) throw fail('TOOL_NOT_FOUND', '此任务只允许使用指定的软件工具');
         if (this.mcpClient?.isExternal(name)) {
             if (run.external) throw fail('TOOL_NOT_FOUND', '外部 Harness 不能转发调用本地 MCP 客户端');
             const callId = run.pendingCalls?.[0]?.id;

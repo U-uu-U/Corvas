@@ -58,6 +58,14 @@ contextBridge.exposeInMainWorld('flowCanvas', {
         save: account => ipcRenderer.invoke('hunyuan:save', account),
         remove: request => ipcRenderer.invoke('hunyuan:remove', request),
         open: request => ipcRenderer.invoke('hunyuan:open', request),
+        workflowState: () => ipcRenderer.invoke('hunyuan:workflowState'),
+        configureWorkflow: request => ipcRenderer.invoke('hunyuan:configureWorkflow', request),
+        workflowAction: request => ipcRenderer.invoke('hunyuan:workflowAction', request),
+        onWorkflowChanged: callback => {
+            const listener = (_, data) => callback(data);
+            ipcRenderer.on('hunyuan:workflow-changed', listener);
+            return () => ipcRenderer.removeListener('hunyuan:workflow-changed', listener);
+        },
         onChanged: callback => {
             const listener = (_, data) => callback(data);
             ipcRenderer.on('hunyuan:changed', listener);
