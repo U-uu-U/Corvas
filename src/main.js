@@ -491,7 +491,7 @@ async function bootstrap() {
             commitHistory('captured-file');
         });
 
-        // 监听 Ctrl+拖拽复制产生的新卡片
+        // 监听复制操作产生的新卡片
         canvasManager.on('clonedItems', (clonedDataList) => {
             clonedDataList.forEach(data => storeData.items.push(data));
             saveStoreThrottled();

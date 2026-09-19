@@ -3292,7 +3292,6 @@ export class CanvasManager {
         this.stage.on('dragend', (e) => {
             if (e.target.name() === 'nodeGroup') {
                 const group = e.target;
-                group.setAttr('copyDragActive', false);
                 const entry = this._getNodeEntry(group.attrs.id);
                 if (!entry) return;
                 const data = entry.data;
@@ -3384,21 +3383,26 @@ export class CanvasManager {
                     return;
                 }
 
-                // Keep the original identity and connections in place; drag a full copy.
-                if (e.evt && (e.evt.ctrlKey || e.evt.metaKey) && !this._isAltDragModifier(e.evt)
-                    && !group.getAttr('copyDragActive')) {
-                    const sourceIds = [...this.selectedItems].filter(id => this.items.has(id));
-                    const draggedIndex = sourceIds.indexOf(group.attrs.id);
-                    if (draggedIndex >= 0) {
-                        group.stopDrag();
-                        const copies = this.duplicateItems(sourceIds, { offset: 0 });
-                        const draggedCopy = this.items.get(copies[draggedIndex]?.id)?.group;
-                        if (draggedCopy) {
-                            draggedCopy.setAttr('copyDragActive', true);
-                            draggedCopy.startDrag(e);
-                        }
+                // Hand the gesture to the OS before Konva moves any canvas nodes.
+                // Export copies give web upload fields real Files while retaining originals.
+                if (e.evt && (e.evt.ctrlKey || e.evt.metaKey)) {
+                    group.stopDrag();
+                    const item = this.items.get(group.attrs.id);
+                    const filePaths = this._copyableFilePath(item?.data)
+                        ? this._getSelectedFilePathsForExternalDrag(group) : [];
+                    if (!filePaths.length) {
+                        this._showCanvasStatus('当前节点没有可拖出的本地素材', 2800);
                         return;
                     }
+                    if (!window.flowCanvas?.drag?.startExportCopy) {
+                        this._showCanvasStatus('请在 Corvas 桌面应用中拖出素材', 3200);
+                        return;
+                    }
+                    this._showCanvasStatus(filePaths.length > 1
+                        ? `拖到上传框：上传 ${filePaths.length} 个素材`
+                        : '拖到 3D Studio 等网页的图片上传框后松手', 4200);
+                    window.flowCanvas.drag.startExportCopy(filePaths);
+                    return;
                 }
 
                 this.selectedItems.forEach(id => {
@@ -15609,7 +15613,7 @@ export class CanvasManager {
     }
 
     removeFile(filePath) {
-        // 移除所有与此 filePath 关联的条目（可能有 Ctrl+拖拽的副本）
+        // 移除所有与此 filePath 关联的条目（可能有复制产生的副本）
         const idsToRemove = [];
         const targetPath = normalizePathForCompare(resolveCanvasFilePath(filePath));
         if (!targetPath) return;
