@@ -28,6 +28,33 @@ class HunyuanModelWatcher {
         fs.writeFileSync(`${this.file}.tmp`, JSON.stringify({ seen: this.seen }));
         fs.renameSync(`${this.file}.tmp`, this.file);
     }
+    currentModel(selection, { remember = false } = {}) {
+        if (selection?.error) throw new Error(selection.error);
+        const worksId = String(selection?.worksId || '');
+        if (!worksId || worksId.length > 200 || selection.status !== 2) throw new Error('请选择已生成完成的模型');
+        const url = modelUrl(selection.modelUrl);
+        if (!/\.(fbx|glb)(?:\?|$)/i.test(url)) throw new Error('当前预览不是可导入的 FBX / GLB 模型');
+        const identity = value => {
+            const parsed = new URL(value); parsed.hash = '';
+            // Ignore expiring COS signatures, while retaining versionId and other
+            // content selectors so two revisions at one path stay distinct.
+            for (const key of [...parsed.searchParams.keys()]) if (/^(q-(sign-.*|ak|key-time|header-list|url-param-list)|x-cos-security-token|x-amz-.*)$/i.test(key)) {
+                parsed.searchParams.delete(key);
+            }
+            parsed.searchParams.sort(); return parsed.href;
+        };
+        const original = selection.assetModelUrl ? modelUrl(selection.assetModelUrl) : '';
+        const version = `${worksId}:${selection.submittedAt || ''}${selection.pipeline === 2 ? '' : `:${selection.pipeline}`}`;
+        // A selected history version can have a different URL than the asset's
+        // latest result. Pin that displayed version instead of silently importing latest.
+        const generationId = keyFor(original && identity(original) === identity(url) ? version : `${version}:${identity(url)}`);
+        const token = keyFor(`${generationId}:${identity(url)}`);
+        if (remember) {
+            this.seen[generationId] = { ...this.seen[generationId], status: 2, url, updatedAt: Date.now() };
+            this.persist();
+        }
+        return { ready: true, worksId, generationId, token, label: String(selection.label || '当前页面模型').slice(0, 60) };
+    }
     async request(url, options = {}) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 300000);

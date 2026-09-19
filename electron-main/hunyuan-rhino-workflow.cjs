@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { randomUUID } = require('node:crypto');
 const { keyFor } = require('./hunyuan-model-watcher.cjs');
 const { toolId } = require('./mcp-client.cjs');
 
@@ -64,12 +65,30 @@ class HunyuanRhinoWorkflow {
         if (this.closed || this.loadError || typeof task?.worksId !== 'string' || task.worksId.length > 200
             || !['generating', 'ready', 'generation_failed'].includes(task.status)) return;
         if (!/^[a-f0-9]{32}$/.test(task.generationId || '')) return;
-        const id = keyFor(`${accountId}:${task.generationId}`);
-        let job = this.jobs.find(entry => entry.id === id);
+        let id = keyFor(`${accountId}:${task.generationId}`);
+        let job = task.explicitImport === true
+            ? this.jobs.findLast(entry => entry.accountId === accountId && entry.generationId === task.generationId)
+            : this.jobs.find(entry => entry.id === id);
+        if (task.explicitImport === true && job?.status === 'completed') {
+            // A later explicit click is a new requested pass; keep the earlier
+            // result and automatic-delivery key, while coalescing clicks during a run.
+            id = keyFor(`${id}:${randomUUID()}`); job = null;
+        }
         if (!job) {
             job = { id, accountId, worksId: task.worksId, generationId: task.generationId, status: 'generating', createdAt: Date.now(),
                 ...(this.context || { projectId: this.getProjectId() ?? null, conversationId: 'hunyuan-rhino' }) };
             this.jobs.push(job); this.changed();
+        }
+        if (task.explicitImport === true && task.status === 'ready') {
+            // The persistent import button is itself the user's confirmation,
+            // including for old results that are outside automatic tracking.
+            job.dismissed = false;
+            if (['generating', 'awaiting_confirmation', 'queued'].includes(job.status)
+                || (job.status === 'failed' && !job.importStarted && !job.runId)) {
+                const context = this.context || { projectId: this.getProjectId() ?? null, conversationId: 'hunyuan-rhino' };
+                this.update(job, 'queued', { ...context, approved: true, error: '' });
+            } else this.changed();
+            return;
         }
         if (job.status !== 'generating') return;
         if (task.status === 'ready') this.update(job, this.mode === 'auto' ? 'queued' : 'awaiting_confirmation');
@@ -138,24 +157,31 @@ class HunyuanRhinoWorkflow {
         const sceneTool = toolId(rhino.server().id, 'rhino_scene');
         const scriptDir = path.join(os.tmpdir(), 'corvas-hunyuan-rhino', job.id);
         fs.mkdirSync(scriptDir, { recursive: true });
+        const resultDirectory = path.join(this.directory, 'rhino-model-results', job.id);
+        fs.mkdirSync(resultDirectory, { recursive: true });
         const script = path.join(scriptDir, 'import-hunyuan.py');
-        const report = path.join(scriptDir, 'import-result.json');
+        const report = path.join(resultDirectory, 'import-result.json');
         fs.copyFileSync(path.join(__dirname, 'rhino', 'import-hunyuan.py'), script);
-        fs.writeFileSync(path.join(scriptDir, 'import-options.json'), JSON.stringify({ jobId: job.id, filePath: job.filePath }));
+        fs.writeFileSync(path.join(scriptDir, 'import-options.json'), JSON.stringify({ jobId: job.id, filePath: job.filePath, resultDirectory }));
         this.update(job, 'importing', { importStarted: true });
         await mcp.call(sceneTool, { action: 'script', cmd: `_-RunPythonScript "${script}"` });
         const imported = JSON.parse(fs.readFileSync(report, 'utf8'));
         if (!imported.ok || imported.jobId !== job.id || !imported.meshIds?.length) throw new Error('Rhino 导入结果不完整');
         job.importResult = imported;
         const { RHINO_EDIT_SKILL } = await import('../shared/rhino-model-skill.mjs');
+        const sourceDescription = imported.meshIds.length <= 128 ? JSON.stringify(imported.meshIds)
+            : `共有 ${imported.meshIds.length} 个网格，完整 meshIds 数组见 ${JSON.stringify(report)}，请通过 Rhino 脚本读取该数组后按批处理，不要枚举整个场景代替它`;
+        const importSummary = { totalMeshes: imported.meshIds.length, totalFaces: imported.faceCount,
+            meshes: (imported.meshStats || []).slice(0, 80), omittedMeshes: Math.max(0, imported.meshIds.length - 80) };
         const request = {
             projectId: job.projectId, conversationId: job.conversationId, provider, mode: 'auto',
-            source: { hunyuanJobId: job.id }, selectedItemIds: [], attachments: [],
+            source: { hunyuanJobId: job.id, rhinoSkillVersion: RHINO_EDIT_SKILL.version }, selectedItemIds: [], attachments: [],
             skillInstructions: [RHINO_EDIT_SKILL.instruction],
             toolAllowlist: mcp.definitions().filter(tool => mcp.tools.get(tool.name)?.serverId === rhino.server().id).map(tool => tool.name),
             messages: [{ role: 'user', content: `将刚从混元导入 Rhino 的模型按“Rhino 模型编辑”Skill 整理四边面。此次发送和整理已获授权。\n`
                 + `只使用已连接服务 ${rhino.server().name}，先核对当前文档序号 ${imported.documentId}；若文档不同就停止，不切换或覆盖文档。\n`
-                + `只处理这些网格对象 ID：${JSON.stringify(imported.meshIds)}。它们已导入，禁止重新导入文件，不要使用当前选择代替这些 ID。\n`
+                + `只处理这些网格对象 ID：${sourceDescription}。它们已导入，禁止重新导入文件，不要使用当前选择代替这些 ID。\n`
+                + `任务标签：${job.id}。阶段报告目录：${JSON.stringify(resultDirectory)}。导入统计摘要：${JSON.stringify(importSummary)}。完整统计见 import-result.json。\n`
                 + '保留原模型和材质，在独立图层的副本上清理、统一法线并执行一次适当密度的 QuadRemesh。根据本模型决定密度与对称轴，不套用固定产品模板。不自动转 NURBS 或清空 Grasshopper。分阶段记录对象 ID 和统计，超时先检查结果，不重复重计算。完成后读取 Rhino 视口截图并总结。' }]
         };
         // Record the launch boundary before starting: recovery searches source.hunyuanJobId.

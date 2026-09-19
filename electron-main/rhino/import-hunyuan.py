@@ -11,7 +11,7 @@ import rhinoscriptsyntax as rs
 directory = os.path.dirname(os.path.abspath(__file__))
 with io.open(os.path.join(directory, 'import-options.json'), 'r', encoding='utf-8') as handle:
     options = json.load(handle)
-report_file = os.path.join(directory, 'import-result.json')
+report_file = os.path.join(options.get('resultDirectory', directory), 'import-result.json')
 result = {'ok': False, 'jobId': options['jobId'], 'objectIds': []}
 doc = sc.doc
 previous_layer = doc.Layers.CurrentLayerIndex
@@ -44,10 +44,21 @@ try:
         if not ok or not imported:
             raise Exception('Rhino did not finish importing the FBX model')
     meshes = [obj for obj in imported if isinstance(obj.Geometry, Rhino.Geometry.Mesh)]
+    mesh_stats = []
+    for obj in meshes:
+        mesh = obj.Geometry
+        bbox = mesh.GetBoundingBox(True)
+        mesh_stats.append({'id': str(obj.Id), 'vertexCount': mesh.Vertices.Count,
+                           'faceCount': mesh.Faces.Count, 'triangleCount': mesh.Faces.TriangleCount,
+                           'quadCount': mesh.Faces.QuadCount, 'isValid': mesh.IsValid, 'isClosed': mesh.IsClosed,
+                           'layer': doc.Layers[obj.Attributes.LayerIndex].FullPath,
+                           'materialIndex': obj.Attributes.MaterialIndex,
+                           'bounds': {'min': [bbox.Min.X, bbox.Min.Y, bbox.Min.Z],
+                                      'max': [bbox.Max.X, bbox.Max.Y, bbox.Max.Z]}})
     result.update({'ok': bool(meshes), 'objectIds': [str(obj.Id) for obj in imported],
                    'meshIds': [str(obj.Id) for obj in meshes],
                    'documentId': str(doc.RuntimeSerialNumber), 'units': str(doc.ModelUnitSystem),
-                   'faceCount': sum(obj.Geometry.Faces.Count for obj in meshes)})
+                   'faceCount': sum(obj.Geometry.Faces.Count for obj in meshes), 'meshStats': mesh_stats})
     if not meshes:
         result['error'] = 'Imported model has no editable meshes'
 except Exception:

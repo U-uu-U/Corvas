@@ -3,6 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { HUNYUAN_URL, partitionFor } = require('./hunyuan-accounts.cjs');
 const { HunyuanModelWatcher } = require('./hunyuan-model-watcher.cjs');
+const { readCurrentStudioModel } = require('./hunyuan-current-model.cjs');
 
 const argument = key => process.argv[process.argv.indexOf(key) + 1];
 const id = argument('--account-id');
@@ -27,6 +28,12 @@ let quitting = false;
 let modelWatcher;
 let workflowState = { mode: 'ask', jobs: [] };
 let watchError = '';
+let currentModel = { ready: false, error: '正在读取当前页面模型…' };
+let selectionTimer;
+let readingSelection = false;
+let selectionRevision = 0;
+let importingSelection = false;
+let currentModelMessage = '';
 const windows = new Set();
 const webUrl = value => {
     try { return ['http:', 'https:'].includes(new URL(value).protocol); } catch { return false; }
@@ -35,12 +42,60 @@ const preferences = () => ({ session: session.defaultSession,
     sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true });
 
 function updateWorkflowBanner() {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hunyuan:workflow-state', { ...workflowState, error: watchError || workflowState.error });
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hunyuan:workflow-state', {
+        ...workflowState, error: watchError || workflowState.error, workflowError: workflowState.error || '',
+        currentModel: { ...currentModel, busy: importingSelection, message: currentModelMessage }
+    });
+}
+async function readCurrentModel() {
+    if (!mainWindow || mainWindow.isDestroyed() || !modelWatcher) throw new Error('混元窗口尚未就绪');
+    let timer;
+    try {
+        return await Promise.race([mainWindow.webContents.executeJavaScript(`(${readCurrentStudioModel.toString()})()`),
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('当前页面仍在加载，请稍后重试')), 10000); })]);
+    } finally { clearTimeout(timer); }
+}
+async function refreshCurrentModel() {
+    if (readingSelection || importingSelection || quitting) return;
+    readingSelection = true;
+    const revision = ++selectionRevision;
+    try {
+        const next = modelWatcher.currentModel(await readCurrentModel());
+        if (revision !== selectionRevision) return;
+        if (currentModel.token !== next.token) currentModelMessage = '';
+        currentModel = next;
+    } catch (error) {
+        if (revision !== selectionRevision) return;
+        currentModel = { ready: false, error: error.message?.match(/^(请|当前|尚未|混元)/)
+            ? error.message : '暂时无法读取当前模型，请等待页面加载后重试' };
+    } finally { readingSelection = false; updateWorkflowBanner(); }
+}
+async function importCurrentModel(expectedToken) {
+    if (importingSelection || quitting) return;
+    selectionRevision++;
+    importingSelection = true; currentModelMessage = '正在读取当前模型…'; updateWorkflowBanner();
+    try {
+        const selection = await readCurrentModel();
+        const current = modelWatcher.currentModel(selection);
+        currentModel = current;
+        if (current.token !== expectedToken) throw new Error('页面模型已切换，请核对后再点一次“导入到 Rhino”');
+        modelWatcher.currentModel(selection, { remember: true });
+        if (!process.connected) throw new Error('Corvas 连接已断开，请重新打开混元窗口');
+        process.send({ type: 'model-task', task: { worksId: current.worksId,
+            generationId: current.generationId, status: 'ready', explicitImport: true } });
+        currentModelMessage = '已发送当前模型，执行进度见下方';
+    } catch (error) {
+        currentModelMessage = error.message?.match(/^(请|当前|页面|混元|Corvas)/)
+            ? error.message : '当前模型读取失败，请等待页面加载后重试';
+    } finally { importingSelection = false; updateWorkflowBanner(); }
 }
 const validStudioSender = event => mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents
     && event.senderFrame === mainWindow.webContents.mainFrame && event.senderFrame.url.startsWith('https://3d.hunyuan.tencent.com/');
 ipcMain.on('hunyuan:workflow-ready', event => { if (validStudioSender(event)) updateWorkflowBanner(); });
 ipcMain.on('hunyuan:workflow-action', (event, action) => {
+    if (validStudioSender(event) && action?.action === 'import-current' && /^[a-f0-9]{32}$/.test(action.token || '')) {
+        void importCurrentModel(action.token); return;
+    }
     if (validStudioSender(event) && ['confirm', 'dismiss'].includes(action?.action) && typeof action.id === 'string' && process.connected) {
         process.send({ type: 'workflow-action', ...action });
     }
@@ -93,6 +148,7 @@ async function close() {
     if (quitting) return;
     quitting = true;
     modelWatcher?.close();
+    clearInterval(selectionTimer);
     for (const window of [...windows]) if (!window.isDestroyed()) window.destroy();
     try { await session.defaultSession.cookies.flushStore(); session.defaultSession.flushStorageData(); }
     finally { app.quit(); }
@@ -105,7 +161,12 @@ process.on('message', message => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setTitle(`混元 3D · ${name}`);
     }
     if (message?.type === 'close') void close();
-    if (message?.type === 'workflow-state') { workflowState = message.state; updateWorkflowBanner(); }
+    if (message?.type === 'workflow-state') {
+        workflowState = message.state;
+        if (currentModelMessage.startsWith('已发送') && workflowState.jobs?.some(job =>
+            job.generationId === currentModel.generationId && job.status !== 'generating')) currentModelMessage = '';
+        updateWorkflowBanner();
+    }
     if (message?.type === 'download-model' && typeof message.worksId === 'string') {
         void Promise.resolve().then(() => {
             if (!modelWatcher) throw new Error('混元窗口尚未就绪');
@@ -137,7 +198,13 @@ app.whenReady().then(async () => {
     secureWindow(mainWindow);
     mainWindow.on('page-title-updated', event => { event.preventDefault(); mainWindow.setTitle(`混元 3D · ${name}`); });
     mainWindow.webContents.on('did-start-loading', () => { failed = false; notify('loading'); });
-    mainWindow.webContents.on('did-finish-load', () => { if (!failed) notify('open'); });
+    mainWindow.webContents.on('did-finish-load', () => { if (!failed) notify('open'); void refreshCurrentModel(); });
+    mainWindow.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+        if (isMainFrame && !isInPlace) {
+            selectionRevision++; currentModelMessage = '';
+            currentModel = { ready: false, error: '正在读取当前页面模型…' }; updateWorkflowBanner();
+        }
+    });
     mainWindow.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
         if (isMainFrame && code !== -3) { failed = true; notify('error'); }
     });
@@ -149,6 +216,7 @@ app.whenReady().then(async () => {
             onTask: task => { if (process.connected) process.send({ type: 'model-task', task }); },
             onError: message => { if (watchError !== message) { watchError = message; updateWorkflowBanner(); } } });
         modelWatcher.start();
+        selectionTimer = setInterval(() => { void refreshCurrentModel(); }, 1800);
     }
     load();
     focus();
