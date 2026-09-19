@@ -24,6 +24,10 @@ if ($Action -eq 'discover') {
 $processes = @(Get-Process Rhino -ErrorAction SilentlyContinue | Where-Object {
     $_.Path -and ((-not $Executable) -or [string]::Equals($_.Path, $Executable, [StringComparison]::OrdinalIgnoreCase))
 })
+# COM may leave a windowless activation host behind. It is not a user Rhino
+# window and must not prevent opening or selecting the intended visible instance.
+$activationHosts = @(Get-CimInstance Win32_Process -Filter "Name = 'Rhino.exe'" | Where-Object { $_.CommandLine -match '(?i)(?:^|\s)-Embedding(?:\s|$)' } | Select-Object -ExpandProperty ProcessId)
+$processes = @($processes | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero -or $_.Id -notin $activationHosts })
 if ($Action -eq 'running') {
     ConvertTo-Json -InputObject @($processes | ForEach-Object { @{ pid = $_.Id; path = $_.Path; ready = ($_.MainWindowHandle -ne [IntPtr]::Zero -and $_.Responding) } }) -Compress
     exit

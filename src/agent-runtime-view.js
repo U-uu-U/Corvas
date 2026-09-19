@@ -24,7 +24,9 @@ export function runtimeActions(run) {
     if (['partial_failed', 'failed'].includes(run.status)) {
         const unresolved = (run.steps || []).some(step => ['submitting', 'submitted', 'unknown'].includes(step.status)
             || (step.remoteTaskId && step.status !== 'completed' && step.confirmedFailure !== true));
-        return unresolved ? ['resume'] : ['resume', 'retry'];
+        const generation = run.plan && (!run.plan.kind || run.plan.kind === 'generation')
+            && (run.steps || []).some(step => step.status !== 'completed');
+        return unresolved || !generation ? ['resume'] : ['resume', 'retry'];
     }
     if (run.status === 'interrupted') return ['resume'];
     return isRuntimeTerminal(run.status) ? [] : ['cancel'];
@@ -134,7 +136,8 @@ export function runtimePriceText(price) {
 export function runtimeTaskTitle(run) {
     const plan = runtimeDisplayPlan(run);
     const kinds = new Set((plan?.steps || []).map(step => step.kind));
-    let title = { memory: '保存项目记忆', board: '修改画板', generation: '生成素材', external: '操作外部软件' }[plan?.kind];
+    let title = run.taskKind === 'rhino' ? '整理 Rhino 模型'
+        : { memory: '保存项目记忆', board: '修改画板', generation: '生成素材', external: '操作外部软件' }[plan?.kind];
     if (plan?.kind === 'generation') {
         if (kinds.has('image') && kinds.has('video')) title = '生成图片与视频';
         else if (kinds.has('image')) title = '生成图片';
@@ -160,10 +163,14 @@ export function runtimeStepSources(step) {
     });
 }
 
+const RHINO_STAGES = { inspect: '检查源模型', clean: '清理网格', quad: '四边面重拓扑', validate: '校验整理结果' };
 export function runtimeProgressText(run) {
     const latest = [...(run.events || [])].reverse().find(event =>
         ['tool_started', 'tool_result', 'review', 'step'].includes(event.type));
     if (!latest) return '';
+    if (latest.data?.tool === 'flow_canvas.rhino.cleanup' && RHINO_STAGES[latest.data.stage]) {
+        return `${RHINO_STAGES[latest.data.stage]} · ${latest.type === 'tool_started' ? '正在执行' : latest.data.result?.reused ? '复用已有结果' : '已完成'}`;
+    }
     const eventLabels = { tool_started: '正在执行', tool_result: '执行结果已返回', review: '正在检查结果' };
     const stepLabels = { queued: '步骤待执行', preparing: '正在准备步骤', submitting: '正在提交步骤',
         submitted: '步骤已提交', downloaded: '产出已下载', completed: '步骤已完成', failed: '步骤失败', unknown: '步骤状态待核对' };
@@ -191,8 +198,10 @@ export function runtimeActivityLines(run, limit = 80) {
         let text = '';
         if (event.type === 'status') text = ACTIVITY_LABELS[data.status] || data.status || '';
         else if (event.type === 'plan') text = '执行计划已生成，等待确认';
-        else if (event.type === 'tool_started') text = `正在调用 ${data.tool || '画布工具'}`;
-        else if (event.type === 'tool_result') text = `${data.tool || '画布工具'} 已返回结果`;
+        else if (event.type === 'tool_started') text = data.tool === 'flow_canvas.rhino.cleanup'
+            ? `正在${RHINO_STAGES[data.stage] || '整理 Rhino 模型'}` : `正在调用 ${data.tool || '画布工具'}`;
+        else if (event.type === 'tool_result') text = data.tool === 'flow_canvas.rhino.cleanup'
+            ? `${RHINO_STAGES[data.stage] || '整理 Rhino 模型'}：${data.result?.reused ? '复用已有结果' : '已完成'}` : `${data.tool || '画布工具'} 已返回结果`;
         else if (event.type === 'step') {
             const step = steps.get(data.stepId);
             text = [ACTIVITY_STEP_LABELS[data.status] || '步骤更新', step?.title || data.title].filter(Boolean).join(' · ');
@@ -481,11 +490,12 @@ export function createRuntimeCard({ onAction, onLocate }) {
             submit.disabled = busy;
             if (!runtimeActions(run).includes('revise')) feedback.hidden = true;
             const outputFiles = onLocate ? runtimeOutputFiles(run).filter(file => file.filePath) : [];
-            const actionKey = JSON.stringify([run.id, runtimeActions(run), busy, confirmed, outputFiles]);
+            const resumeLabel = run.taskKind === 'rhino' ? '继续整理' : run.plan?.approved ? '继续已确认计划' : '继续任务';
+            const actionKey = JSON.stringify([run.id, runtimeActions(run), resumeLabel, busy, confirmed, outputFiles]);
             if (actionKey === renderedActions) return;
             renderedActions = actionKey;
             actions.replaceChildren();
-            const labels = { confirm: '确认执行', revise: '修改计划', cancel: '取消任务', resume: '继续已确认计划', retry: '重试失败项' };
+            const labels = { confirm: '确认执行', revise: '修改计划', cancel: '取消任务', resume: resumeLabel, retry: '重试失败项' };
             for (const action of runtimeActions(run)) {
                 const button = element('button', '', labels[action]);
                 button.type = 'button';

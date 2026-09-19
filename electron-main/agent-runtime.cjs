@@ -34,7 +34,7 @@ class AgentRuntime {
     snapshot(run, afterSeq = 0) {
         if (!run) throw fail('RUN_NOT_FOUND', 'Agent 任务不存在');
         const { messages, archivedMessages, pendingCalls, source, attachments, providerRef, skillInstructions, ...safe } = run;
-        return redact({ ...safe, events: run.events.filter(event => event.seq > afterSeq) });
+        return redact({ ...safe, ...(run.source?.hunyuanJobId ? { taskKind: 'rhino' } : {}), events: run.events.filter(event => event.seq > afterSeq) });
     }
     _assertProject(run, projectId) {
         if (run && projectId !== undefined && run.projectId !== projectId) throw fail('PROJECT_MISMATCH', '任务不属于指定项目');
@@ -78,20 +78,22 @@ class AgentRuntime {
         const messages = (request.messages || []).filter(m => ['user', 'assistant'].includes(m.role)
             && typeof m.content === 'string' && m.content.trim()).map(m => ({ role: m.role, content: m.content }));
         if (!messages.some(m => m.role === 'user')) throw fail('INVALID_ARGUMENTS', '请输入任务要求');
-        const provider = request.provider || this.resolveProvider({ id: request.providerId, model: request.model }, 'text');
-        if (!provider?.apiKey || !provider.endpoint || !provider.model) throw fail('PROVIDER_REQUIRED', '请先配置支持工具调用的文字模型');
+        const boundRhino = request.execution === 'rhino_cleanup' && request.source?.hunyuanJobId && this.rhinoCleanup;
+        const provider = boundRhino ? null : request.provider || this.resolveProvider({ id: request.providerId, model: request.model }, 'text');
+        if (!boundRhino && (!provider?.apiKey || !provider.endpoint || !provider.model)) throw fail('PROVIDER_REQUIRED', '请先配置支持工具调用的文字模型');
         const run = { id: `agent-${crypto.randomUUID()}`, projectId: request.projectId ?? null,
             conversationId: request.conversationId, status: 'planning', outputText: '', events: [], lastSeq: 0,
             messages: redact(messages), attachments: redact(request.attachments || []), source: redact(request.source || null),
             selectedItemIds: (request.selectedItemIds || []).filter(id => typeof id === 'string'),
-            providerRef: { id: provider.sourceProviderId || provider.id, model: provider.model, endpoint: provider.endpoint, type: provider.type },
+            providerRef: provider ? { id: provider.sourceProviderId || provider.id, model: provider.model, endpoint: provider.endpoint, type: provider.type } : null,
+            ...(boundRhino ? { execution: 'rhino_cleanup' } : {}),
             mode: request.mode === 'ask' ? 'ask' : 'auto', skillInstructions: request.skillInstructions || [],
             ...(Array.isArray(request.toolAllowlist) ? { toolAllowlist: [...new Set(request.toolAllowlist.filter(name => typeof name === 'string'))].slice(0, 512) } : {}),
             createdAt: Date.now(), updatedAt: Date.now(), turns: 0, steps: [], results: [], plan: null, pendingCalls: [] };
-        this.providerSessions.set(run.id, provider);
+        if (provider) this.providerSessions.set(run.id, provider);
         this.runs.set(run.id, run);
         this._status(run, 'planning');
-        this._launch(run, () => this._loop(run));
+        this._launch(run, () => boundRhino ? this._runRhinoCleanup(run) : this._loop(run));
         return this.snapshot(run);
     }
     async propose({ projectId, conversationId = 'external-harness', toolName, input }) {
@@ -182,14 +184,41 @@ class AgentRuntime {
         run.turns = 0;
         this._status(run, 'running');
         this._launch(run, async () => {
+            if (run.source?.hunyuanJobId && this.prepareRhinoResume) await this.prepareRhinoResume(run);
+            if (run.execution === 'rhino_cleanup') return this._runRhinoCleanup(run);
             if (run.plan?.approved) await this._applyPlan(run, true);
             await this._loop(run);
         });
         return this.snapshot(run);
     }
+    async _runRhinoCleanup(run) {
+        this._status(run, 'running');
+        for (const stage of ['inspect', 'clean', 'quad', 'validate']) {
+            this._check(run);
+            this._event(run, 'tool_started', { tool: 'flow_canvas.rhino.cleanup', stage });
+            const result = await this.executeTool(run, 'flow_canvas.rhino.cleanup', { stage });
+            this._check(run);
+            if (!result?.ok) throw fail('RHINO_STAGE_FAILED', `Rhino ${stage} 阶段没有返回完成结果`);
+            run.rhinoStages ||= {};
+            run.rhinoStages[stage] = result;
+            this._event(run, 'tool_result', { tool: 'flow_canvas.rhino.cleanup', stage, result });
+        }
+        const results = run.rhinoStages.validate.outputs || [];
+        if (!results.length) throw fail('RHINO_STAGE_FAILED', 'Rhino 没有返回可交付的网格');
+        const before = results.reduce((sum, entry) => sum + (entry.source?.faces || 0), 0);
+        const after = results.reduce((sum, entry) => sum + (entry.mesh?.faces || 0), 0);
+        run.outputText = `Rhino 四边面整理已完成，共 ${results.length} 个网格，面数 ${before.toLocaleString()} → ${after.toLocaleString()}。原模型保留，结果位于 Corvas quad 图层。已核查网格有效性与面型，轮廓、孔洞和关节细节请在视口查看。`;
+        this._event(run, 'assistant', { text: run.outputText });
+        this._status(run, 'completed');
+    }
     retry({ runId, projectId }) {
         const run = this.runs.get(runId);
         this._assertProject(run, projectId);
+        // Older task cards sent retry for every failure. Tool-only tasks have no
+        // generation batch; resume their provider/tool loop with its replay guards.
+        if (run && ['failed', 'partial_failed'].includes(run.status) && (!run.plan || (run.plan.kind && run.plan.kind !== 'generation'))) {
+            return this.resume({ runId, projectId });
+        }
         if (!run || !['failed', 'partial_failed'].includes(run.status) || !run.plan || this.controllers.has(runId))
             throw fail('INVALID_STATE', '当前任务没有可以重新确认的失败批次');
         if (run.steps.some(step => ['submitted', 'submitting', 'unknown'].includes(step.status)
@@ -207,6 +236,7 @@ class AgentRuntime {
     }
     tools(run) {
         return [...this.boardDefinitions, ...AGENT_TOOL_DEFINITIONS, ...(this.mcpClient?.definitions() || [])]
+            .filter(tool => tool.name !== 'flow_canvas.rhino.cleanup' || run?.source?.hunyuanJobId)
             .filter(tool => !run?.toolAllowlist || run.toolAllowlist.includes(tool.name)).map(tool => ({ type: 'function', function: {
             name: tool.name, description: tool.description, parameters: tool.inputSchema } }));
     }
@@ -358,7 +388,15 @@ class AgentRuntime {
     }
     async executeTool(run, name, input = {}) {
         if (run.toolAllowlist && !run.toolAllowlist.includes(name)) throw fail('TOOL_NOT_FOUND', '此任务只允许使用指定的软件工具');
+        if (name === 'flow_canvas.rhino.cleanup') {
+            if (!this.rhinoCleanup || !run.source?.hunyuanJobId) throw fail('TOOL_UNAVAILABLE', '此整理工具需要绑定已导入的混元模型');
+            return this.rhinoCleanup(run, input);
+        }
         if (this.mcpClient?.isExternal(name)) {
+            if (run.source?.hunyuanJobId && input.action === 'script'
+                && this.mcpClient.tools?.get(name)?.remoteName === 'rhino_scene') {
+                throw fail('USE_BOUND_RHINO_TOOL', '此模型的整理请调用 flow_canvas.rhino.cleanup，它会保存并执行真实脚本文件；不要发送内联 Python。');
+            }
             if (run.external) throw fail('TOOL_NOT_FOUND', '外部 Harness 不能转发调用本地 MCP 客户端');
             const callId = run.pendingCalls?.[0]?.id;
             if (!callId) throw fail('INVALID_STATE', '外部 MCP 调用缺少运行上下文');
@@ -387,7 +425,11 @@ class AgentRuntime {
                     else if (block.type === 'resource_link') content.push({ type: block.type, name: block.name, uri: block.uri, mimeType: block.mimeType });
                     else if (block.type === 'resource' && block.resource?.text) content.push({ type: 'text', text: block.resource.text.slice(0, 24000) });
                 }
-                const safe = this._redact({ isError: result.isError === true, content: content.slice(0, 20),
+                const reportedFailure = content.some(block => {
+                    if (block.type !== 'text') return false;
+                    try { return JSON.parse(block.text)?.success === false; } catch { return false; }
+                });
+                const safe = this._redact({ isError: result.isError === true || reportedFailure, content: content.slice(0, 20),
                     structuredContent: JSON.stringify(result.structuredContent || {}).slice(0, 24000) });
                 run.externalCalls[key] = { tool: name, status: 'completed', readOnly, result: safe };
                 this.runStore.save(run);

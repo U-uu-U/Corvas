@@ -39,11 +39,15 @@
 - Rhino 导入保留当前文档、原有对象和选择，记录实际新增的网格 ID；整理 Skill 只处理这些网格，并保留原件，在副本上清理、统一法线和 QuadRemesh。默认不转 NURBS，也不清空 Grasshopper。
 - 执行过程记录在检测到任务时绑定的原项目、原 Agent 对话。此类自动整理任务只获得目标 Rhino MCP 的工具。应用退出、导入超时或整理中断后不会盲目重放，需要查看已有结果；点击「已检查，继续队列」只放行后续模型，不重跑该任务。
 
-需要对应混元窗口保持打开并登录、可用的文字模型配置，以及已安装且可连接的 Rhino/Cordyceps。内置 Skill、导入脚本和浏览器适配器随安装包分发，不依赖用户的 Codex Skill 目录。
+新模型下载需要对应混元窗口保持打开并登录，以及已安装且可连接的 Rhino/Cordyceps。这条固定整理流程由内置脚本执行，不再依赖文字模型在线生成 Python；普通 Agent 对话仍按原配置运行。内置 Skill、导入脚本和浏览器适配器随安装包分发，不依赖用户的 Codex Skill 目录。
+
+整理任务卡使用「继续整理」恢复；旧版卡片误发 `retry` 时，后台也会转入恢复流程，而不是要求一个并不存在的图片生成批次。恢复时先检查报告和源对象；若 Rhino 已重开且当前文档完全为空，可用本任务已下载模型恢复源对象，旧阶段报告另存保留。有其他模型的文档不会自动覆盖或导入。
+
+实际整理按 `inspect → clean → quad → validate` 执行，调用 `flow_canvas.rhino.cleanup`。每个阶段先保存真实 Python 文件及派发记录，再通过 Cordyceps 执行。已完成阶段会核对实际对象后复用；响应不明或重拓扑仍在执行时不重复派发。Rhino 的 `RunPythonScript` 只接受文件路径，不接受 Python 源码字符串。
 
 `hunyuan-model-watcher.cjs` 使用官网当前任务协议轮询几何生成状态：`/api/game3d/general_info/get_works_list`，`worksPipeline=2`，`pipelineStatus=2` 为完成，模型地址来自 `modelInfo.geometryGenerationRsp.fbxUrl`。每次请求附带 `requestId`。若返回 GLB，使用官网 `/api/game3d/resource/format_conversions` 转为 FBX。协议来源为 2026-09-19 官网静态脚本；官网接口改变时可能需要更新适配器。
 
-文件保存在各账号独立目录下的 `rhino-models`，传递状态保存在 `data/hunyuan-rhino-jobs.json`。导入统计和整理阶段报告存放在 `data/rhino-model-results/<job-id>`，报告按任务隔离。当前生成任务使用内置 Skill v2：明确对象绑定、逐零件处理、大网格先清理、按复杂度分配面数预算，并记录阶段报告；不沿用特定旧产品的面数或对称轴。2026-09-19 按用户授权完成本功能范围的 17 项回归，以及 Rhino 连接和实际 FBX 导入检查；完整重拓扑没有列入本轮实机检查。
+文件保存在各账号独立目录下的 `rhino-models`，传递状态保存在 `data/hunyuan-rhino-jobs.json`。导入统计和整理阶段报告存放在 `data/rhino-model-results/<job-id>`，报告按任务隔离。当前混元任务使用内置 Skill v3 的分阶段执行器，不依赖文字模型现场编写 Python。2026-09-19 已实机完成该模型的检查、清理、QuadRemesh 与校验：1,499,668 面输入得到 79,340 面输出（79,290 个四边面、50 个三角面），网格有效且闭合，原件保留；重拓扑约用时 143 秒。恢复入口、脚本落盘、重复执行保护及项目绑定的相关回归通过，未跑全仓库测试。
 
 ## 验证
 

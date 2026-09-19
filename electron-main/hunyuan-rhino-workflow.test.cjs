@@ -22,7 +22,7 @@ function setup(t, initialJobs) {
             const options = JSON.parse(fs.readFileSync(path.join(path.dirname(script), 'import-options.json'), 'utf8'));
             actions.push({ type: 'import', options });
             fs.writeFileSync(path.join(options.resultDirectory, 'import-result.json'), JSON.stringify({ ok: true,
-                jobId: options.jobId, documentId: '42', meshIds: ['fixture-mesh-id'], meshStats: [], faceCount: 100 }));
+                jobId: options.jobId, invocationId: options.invocationId, documentId: '42', meshIds: ['fixture-mesh-id'], meshStats: [], faceCount: 100 }));
         }
     };
     const rhino = { config: { endpoint: 'http://127.0.0.1:26929/mcp' }, mcpClient,
@@ -68,7 +68,8 @@ test('handoff waits through a Rhino startup dialog then imports and starts the S
     assert.equal(runs.length, 1);
     assert.match(runs[0].request.messages[0].content, /fixture-mesh-id/);
     assert.equal(runs[0].request.skillInstructions.length, 1);
-    assert.deepEqual(runs[0].request.toolAllowlist, [toolId('rhino-fixture', 'rhino_scene')]);
+    assert.deepEqual(runs[0].request.toolAllowlist, ['flow_canvas.rhino.cleanup', toolId('rhino-fixture', 'rhino_scene')]);
+    assert.equal(runs[0].request.execution, 'rhino_cleanup');
     runtime.runs.get(job.runId).status = 'completed'; service.syncRuns();
     assert.equal(job.status, 'completed');
 });
@@ -92,4 +93,26 @@ test('old connection-timeout failures can wait again, but imports with unknown r
     const { service } = setup(t, [job, unsafe]);
     assert.equal(service.jobs[0].status, 'waiting_rhino');
     assert.equal(service.jobs[1].status, 'failed');
+});
+
+test('legacy Rhino recovery upgrades its execution path without importing an existing source again', async t => {
+    const h = setup(t); h.connect(); h.service.observe(h.accountId, h.task); await h.service.drain();
+    const job = h.service.jobs[0], run = h.runtime.runs.get(job.runId);
+    const originalCall = h.rhino.mcpClient.call;
+    h.rhino.mcpClient.call = async (name, args) => args.action === 'objects'
+        ? { content: [{ type: 'text', text: JSON.stringify({ success: true, objects: [{ id: 'fixture-mesh-id' }] }) }] }
+        : originalCall(name, args);
+    await h.service.prepareResume(run);
+    assert.equal(run.execution, 'rhino_cleanup');
+    assert.ok(run.toolAllowlist.includes('flow_canvas.rhino.cleanup'));
+    assert.equal(h.actions.filter(action => action.type === 'import').length, 1);
+});
+
+test('legacy Rhino recovery does not import into a different nonempty document', async t => {
+    const h = setup(t); h.connect(); h.service.observe(h.accountId, h.task); await h.service.drain();
+    const job = h.service.jobs[0], run = h.runtime.runs.get(job.runId);
+    h.rhino.mcpClient.call = async (_name, args) => ({ content: [{ type: 'text', text: JSON.stringify({ success: true,
+        objects: args.ids ? [] : [{ id: 'other-user-model' }] }) }] });
+    await assert.rejects(h.service.prepareResume(run), /不会覆盖其他模型/);
+    assert.equal(h.actions.filter(action => action.type === 'import').length, 1);
 });

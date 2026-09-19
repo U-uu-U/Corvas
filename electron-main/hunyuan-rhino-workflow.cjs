@@ -4,6 +4,8 @@ const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { keyFor } = require('./hunyuan-model-watcher.cjs');
 const { toolId } = require('./mcp-client.cjs');
+const { RhinoCleanup } = require('./rhino-cleanup.cjs');
+const CLEANUP_TOOL = 'flow_canvas.rhino.cleanup';
 
 const ACTIVE = new Set(['downloading', 'connecting', 'importing', 'processing']);
 const TERMINAL = new Set(['completed', 'failed', 'partial_failed', 'canceled', 'interrupted']);
@@ -13,6 +15,9 @@ class HunyuanRhinoWorkflow {
         this.file = path.join(directory, 'hunyuan-rhino-jobs.json');
         this.mode = readMode() === 'ask' ? 'ask' : 'auto'; this.context = null; this.jobs = [];
         this.running = false; this.closed = false;
+        this.cleanup = new RhinoCleanup(directory);
+        getRuntime().rhinoCleanup = (run, input) => this.executeCleanup(run, input);
+        getRuntime().prepareRhinoResume = run => this.prepareResume(run);
         try {
             const saved = JSON.parse(fs.readFileSync(this.file, 'utf8'));
             if (saved.version !== 1 || !Array.isArray(saved.jobs) || saved.jobs.some(job =>
@@ -157,11 +162,77 @@ class HunyuanRhinoWorkflow {
         }
         return true;
     }
+    jobForRun(run) {
+        const job = this.jobs.find(entry => entry.id === run.source?.hunyuanJobId && entry.projectId === run.projectId);
+        if (!job) throw new Error('找不到这条 Rhino 整理任务的绑定模型');
+        return job;
+    }
+    async connectedRhino() {
+        const rhino = this.getRhino();
+        await rhino.status();
+        if (!rhino.snapshot().connected) { rhino.open(); await rhino.pending; }
+        if (!rhino.snapshot().connected) throw new Error(rhino.snapshot().message || 'Rhino 尚未连接，请等待启动完成再继续');
+        return rhino;
+    }
+    async executeCleanup(run, input) {
+        const job = this.jobForRun(run);
+        const rhino = await this.connectedRhino();
+        return this.cleanup.execute(job, input, rhino.mcpClient, rhino.server().id);
+    }
+    async prepareResume(run) {
+        const job = this.jobForRun(run);
+        const rhino = await this.connectedRhino();
+        await this.restoreSourceIfEmpty(job, rhino);
+        const { RHINO_EDIT_SKILL } = await import('../shared/rhino-model-skill.mjs');
+        run.skillInstructions = [RHINO_EDIT_SKILL.instruction];
+        run.source.rhinoSkillVersion = RHINO_EDIT_SKILL.version;
+        run.execution = 'rhino_cleanup';
+        run.toolAllowlist = [CLEANUP_TOOL, ...rhino.mcpClient.definitions()
+            .filter(tool => rhino.mcpClient.tools.get(tool.name)?.serverId === rhino.server().id).map(tool => tool.name)];
+        run.messages.push({ role: 'user', content: '继续这条 Rhino 整理任务。先用 flow_canvas.rhino.cleanup 的 status 查看阶段报告，再按 inspect、clean、quad、validate 执行缺少的阶段。该工具会写入真实脚本文件并复用已完成结果。不要重新导入模型，也不要把 Python 源码放进 RunPythonScript 命令字符串。' });
+        this.getRuntime().runStore?.save(run);
+        this.update(job, 'processing', { runId: run.id, dismissed: false, error: '' });
+    }
+    async restoreSourceIfEmpty(job, rhino) {
+        const directory = path.join(this.directory, 'rhino-model-results', job.id);
+        const imported = JSON.parse(fs.readFileSync(path.join(directory, 'import-result.json'), 'utf8'));
+        const scene = async input => {
+            const result = await rhino.mcpClient.call(toolId(rhino.server().id, 'rhino_scene'), { action: 'objects', includeHidden: 'true', ...input });
+            const data = (result.content || []).flatMap(block => { try { return [JSON.parse(block.text)]; } catch { return []; } })
+                .find(value => Array.isArray(value?.objects));
+            if (result.isError || !data || data.success === false) throw new Error('无法核对 Rhino 当前文档，请检查连接后继续');
+            return data.objects;
+        };
+        const objects = await scene({ ids: JSON.stringify(imported.meshIds), limit: imported.meshIds.length });
+        if (imported.meshIds.every(id => objects.some(object => object.id === id))) return;
+        if ((await scene({ limit: 1 })).length) throw new Error('当前 Rhino 文档里找不到此任务的原模型。请打开原文档，或新建空白文档后继续，不会覆盖其他模型。');
+        const archive = path.join(directory, `previous-session-${Date.now()}`);
+        fs.mkdirSync(archive, { recursive: true });
+        for (const file of ['cleanup-inspect.json', 'cleanup-clean.json', 'cleanup-quad.json', 'cleanup-validate.json', 'cleanup-dispatch.json']) {
+            if (fs.existsSync(path.join(directory, file))) fs.renameSync(path.join(directory, file), path.join(archive, file));
+        }
+        job.filePath = await this.getAccounts().downloadModel(job.accountId, job.generationId);
+        await this.importModel(job, rhino);
+    }
+    async importModel(job, rhino) {
+        const scriptDir = path.join(os.tmpdir(), 'corvas-hunyuan-rhino', job.id);
+        const resultDirectory = path.join(this.directory, 'rhino-model-results', job.id);
+        fs.mkdirSync(scriptDir, { recursive: true }); fs.mkdirSync(resultDirectory, { recursive: true });
+        const script = path.join(scriptDir, 'import-hunyuan.py');
+        const report = path.join(resultDirectory, 'import-result.json');
+        const invocationId = randomUUID();
+        fs.copyFileSync(path.join(__dirname, 'rhino', 'import-hunyuan.py'), script);
+        fs.writeFileSync(path.join(scriptDir, 'import-options.json'), JSON.stringify({ jobId: job.id, filePath: job.filePath, resultDirectory, invocationId }));
+        this.update(job, 'importing', { importStarted: true });
+        await rhino.mcpClient.call(toolId(rhino.server().id, 'rhino_scene'), { action: 'script', cmd: `_-RunPythonScript "${script}"` });
+        const imported = JSON.parse(fs.readFileSync(report, 'utf8'));
+        if (!imported.ok || imported.jobId !== job.id || imported.invocationId !== invocationId || !imported.meshIds?.length) throw new Error('Rhino 导入结果不完整');
+        job.importResult = imported;
+        return { imported, resultDirectory, report };
+    }
     async process(job) {
         const runtime = this.getRuntime();
         runtime.board.readProject(job.projectId);
-        // Fail before touching Rhino when no tool-capable text provider is configured.
-        const provider = runtime.resolveProvider({}, 'text');
         this.update(job, 'downloading', { error: '' });
         job.filePath = await this.getAccounts().downloadModel(job.accountId, job.generationId);
         if (!this.assertProceed(job)) return;
@@ -175,34 +246,22 @@ class HunyuanRhinoWorkflow {
         if (!rhino.snapshot().connected) throw new Error(rhino.snapshot().message || 'Rhino 尚未连接');
         if (!this.assertProceed(job)) return;
         const mcp = rhino.mcpClient;
-        const sceneTool = toolId(rhino.server().id, 'rhino_scene');
-        const scriptDir = path.join(os.tmpdir(), 'corvas-hunyuan-rhino', job.id);
-        fs.mkdirSync(scriptDir, { recursive: true });
-        const resultDirectory = path.join(this.directory, 'rhino-model-results', job.id);
-        fs.mkdirSync(resultDirectory, { recursive: true });
-        const script = path.join(scriptDir, 'import-hunyuan.py');
-        const report = path.join(resultDirectory, 'import-result.json');
-        fs.copyFileSync(path.join(__dirname, 'rhino', 'import-hunyuan.py'), script);
-        fs.writeFileSync(path.join(scriptDir, 'import-options.json'), JSON.stringify({ jobId: job.id, filePath: job.filePath, resultDirectory }));
-        this.update(job, 'importing', { importStarted: true });
-        await mcp.call(sceneTool, { action: 'script', cmd: `_-RunPythonScript "${script}"` });
-        const imported = JSON.parse(fs.readFileSync(report, 'utf8'));
-        if (!imported.ok || imported.jobId !== job.id || !imported.meshIds?.length) throw new Error('Rhino 导入结果不完整');
-        job.importResult = imported;
+        const { imported, resultDirectory, report } = await this.importModel(job, rhino);
         const { RHINO_EDIT_SKILL } = await import('../shared/rhino-model-skill.mjs');
         const sourceDescription = imported.meshIds.length <= 128 ? JSON.stringify(imported.meshIds)
             : `共有 ${imported.meshIds.length} 个网格，完整 meshIds 数组见 ${JSON.stringify(report)}，请通过 Rhino 脚本读取该数组后按批处理，不要枚举整个场景代替它`;
         const importSummary = { totalMeshes: imported.meshIds.length, totalFaces: imported.faceCount,
             meshes: (imported.meshStats || []).slice(0, 80), omittedMeshes: Math.max(0, imported.meshIds.length - 80) };
         const request = {
-            projectId: job.projectId, conversationId: job.conversationId, provider, mode: 'auto',
+            projectId: job.projectId, conversationId: job.conversationId, mode: 'auto', execution: 'rhino_cleanup',
             source: { hunyuanJobId: job.id, rhinoSkillVersion: RHINO_EDIT_SKILL.version }, selectedItemIds: [], attachments: [],
             skillInstructions: [RHINO_EDIT_SKILL.instruction],
-            toolAllowlist: mcp.definitions().filter(tool => mcp.tools.get(tool.name)?.serverId === rhino.server().id).map(tool => tool.name),
+            toolAllowlist: [CLEANUP_TOOL, ...mcp.definitions().filter(tool => mcp.tools.get(tool.name)?.serverId === rhino.server().id).map(tool => tool.name)],
             messages: [{ role: 'user', content: `将刚从混元导入 Rhino 的模型按“Rhino 模型编辑”Skill 整理四边面。此次发送和整理已获授权。\n`
                 + `只使用已连接服务 ${rhino.server().name}，先核对当前文档序号 ${imported.documentId}；若文档不同就停止，不切换或覆盖文档。\n`
                 + `只处理这些网格对象 ID：${sourceDescription}。它们已导入，禁止重新导入文件，不要使用当前选择代替这些 ID。\n`
                 + `任务标签：${job.id}。阶段报告目录：${JSON.stringify(resultDirectory)}。导入统计摘要：${JSON.stringify(importSummary)}。完整统计见 import-result.json。\n`
+                + '必须调用 flow_canvas.rhino.cleanup，依次完成 inspect、clean、quad、validate；status 用于检查已有报告。该工具已绑定本次源模型并自动保存实际脚本，不要自行拼接 Python 命令或尝试写入脚本文件。\n'
                 + '保留原模型和材质，在独立图层的副本上清理、统一法线并执行一次适当密度的 QuadRemesh。根据本模型决定密度与对称轴，不套用固定产品模板。不自动转 NURBS 或清空 Grasshopper。分阶段记录对象 ID 和统计，超时先检查结果，不重复重计算。完成后读取 Rhino 视口截图并总结。' }]
         };
         // Record the launch boundary before starting: recovery searches source.hunyuanJobId.

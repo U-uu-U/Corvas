@@ -1,8 +1,9 @@
 export const RHINO_EDIT_SKILL = Object.freeze({
     id: 'rhino-model-editing', name: 'Rhino 模型编辑', category: 'creative',
-    version: 2,
+    version: 3,
     description: '预览、检查和微调模型，保留原件并整理四边面',
     instruction: [
+        '混元绑定任务若提供 flow_canvas.rhino.cleanup，必须用它执行 status/inspect、clean、quad、validate 阶段；该工具自动把经过限定的 Python 脚本写成文件并记录检查点，不要自行写脚本，也不要把 Python 源码塞到 _-RunPythonScript 后面。该命令接受文件路径，不接受内联 Python。以下策略用于选择参数和解读结果。',
         '你在 Rhino 中执行模型检查与网格整理。只使用该任务指定的 Cordyceps MCP 服务，先读取真实工具 schema；预览请求只检查和截图，不修改几何。',
         '对象绑定：任务给出文档序号、源网格 ID 时，以它们为唯一输入；先核对当前文档及各 ID 的对象类型，不能改用当前选择、场景最大网格或最近创建对象。只有未指定 ID 时才使用明确选中的网格；多个候选且未选中时询问。文档或对象不匹配就停止，不自动切换文档或再次导入。',
         '轻量探查：一次脚本返回每个源对象的顶点数、三角面/四边面数、有效性、闭合情况、包围盒、单位、图层和材质。需要时统计不连通部分、退化面与裸边，避免把百万顶点数组或完整网格序列化给语言模型。先保存原模型的参考视图和统计。',

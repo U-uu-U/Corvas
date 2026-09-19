@@ -28,9 +28,17 @@ test('status controls expose one plan confirmation and recovery', () => {
     }
     for (const status of ['partial_failed', 'failed', 'interrupted']) {
         assert.equal(isRuntimeTerminal(status), true);
-        assert.deepEqual(runtimeActions(snapshot({ status })), status === 'interrupted' ? ['resume'] : ['resume', 'retry']);
+        assert.deepEqual(runtimeActions(snapshot({ status })), ['resume']);
     }
     for (const status of ['completed', 'canceled']) assert.deepEqual(runtimeActions(snapshot({ status })), []);
+});
+
+test('Rhino tool-only failures offer resume instead of retrying a nonexistent generation batch', () => {
+    const run = snapshot({ status: 'failed', taskKind: 'rhino', plan: null, steps: [] });
+    assert.deepEqual(runtimeActions(run), ['resume']);
+    assert.equal(runtimeTaskTitle(run), '整理 Rhino 模型');
+    assert.equal(runtimeProgressText(snapshot({ events: [{ type: 'tool_started', data: { tool: 'flow_canvas.rhino.cleanup', stage: 'quad' } }] })), '四边面重拓扑 · 正在执行');
+    assert.deepEqual(runtimeActions(snapshot({ status: 'failed', plan: { kind: 'generation' }, steps: [{ status: 'failed' }] })), ['resume', 'retry']);
 });
 
 test('snapshot merge rejects stale and cross-conversation data; events are deduplicated', () => {
