@@ -19,6 +19,12 @@ function setup(t, initialJobs) {
         call: async (name, input) => {
             assert.equal(name, sceneTool); assert.equal(input.action, 'script');
             const script = /"([^"]+)"/.exec(input.cmd)[1];
+            if (path.basename(script) === 'verify-hunyuan.py') {
+                const options = JSON.parse(fs.readFileSync(path.join(path.dirname(script), 'verify-options.json'), 'utf8'));
+                fs.writeFileSync(options.resultFile, JSON.stringify({ ok: true, jobId: options.jobId, invocationId: options.invocationId,
+                    ...(mcpClient.verifyResponse?.(options) || { foundIds: options.expectedIds, documentEmpty: false }) }));
+                return;
+            }
             const options = JSON.parse(fs.readFileSync(path.join(path.dirname(script), 'import-options.json'), 'utf8'));
             actions.push({ type: 'import', options });
             fs.writeFileSync(path.join(options.resultDirectory, 'import-result.json'), JSON.stringify({ ok: true,
@@ -98,10 +104,6 @@ test('old connection-timeout failures can wait again, but imports with unknown r
 test('legacy Rhino recovery upgrades its execution path without importing an existing source again', async t => {
     const h = setup(t); h.connect(); h.service.observe(h.accountId, h.task); await h.service.drain();
     const job = h.service.jobs[0], run = h.runtime.runs.get(job.runId);
-    const originalCall = h.rhino.mcpClient.call;
-    h.rhino.mcpClient.call = async (name, args) => args.action === 'objects'
-        ? { content: [{ type: 'text', text: JSON.stringify({ success: true, objects: [{ id: 'fixture-mesh-id' }] }) }] }
-        : originalCall(name, args);
     await h.service.prepareResume(run);
     assert.equal(run.execution, 'rhino_cleanup');
     assert.ok(run.toolAllowlist.includes('flow_canvas.rhino.cleanup'));
@@ -111,8 +113,7 @@ test('legacy Rhino recovery upgrades its execution path without importing an exi
 test('legacy Rhino recovery does not import into a different nonempty document', async t => {
     const h = setup(t); h.connect(); h.service.observe(h.accountId, h.task); await h.service.drain();
     const job = h.service.jobs[0], run = h.runtime.runs.get(job.runId);
-    h.rhino.mcpClient.call = async (_name, args) => ({ content: [{ type: 'text', text: JSON.stringify({ success: true,
-        objects: args.ids ? [] : [{ id: 'other-user-model' }] }) }] });
+    h.rhino.mcpClient.verifyResponse = () => ({ foundIds: [], documentEmpty: false });
     await assert.rejects(h.service.prepareResume(run), /不会覆盖其他模型/);
     assert.equal(h.actions.filter(action => action.type === 'import').length, 1);
 });

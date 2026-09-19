@@ -16,10 +16,16 @@ function setup(t) {
     let calls = 0;
     const mcp = { call: async (_name, input) => {
         if (input.action === 'objects') return { content: [{ type: 'text', text: JSON.stringify({ success: true, objects: [{ id: 'output-id' }] }) }] };
-        calls++;
-        assert.match(input.cmd, /^_-RunPythonScript "[^"\r\n]+cleanup-hunyuan\.py"$/);
         const script = /"([^"]+)"/.exec(input.cmd)[1];
         assert.ok(fs.existsSync(script));
+        if (path.basename(script) === 'verify-hunyuan.py') {
+            const options = JSON.parse(fs.readFileSync(path.join(path.dirname(script), 'verify-options.json'), 'utf8'));
+            fs.writeFileSync(options.resultFile, JSON.stringify({ ok: true, jobId: job.id,
+                invocationId: options.invocationId, foundIds: options.expectedIds, documentEmpty: false }));
+            return;
+        }
+        calls++;
+        assert.match(input.cmd, /^_-RunPythonScript "[^"\r\n]+cleanup-hunyuan\.py"$/);
         const options = JSON.parse(fs.readFileSync(path.join(path.dirname(script), 'cleanup-options.json'), 'utf8'));
         const result = { ok: true, jobId: job.id, invocationId: options.invocationId, stage: options.stage,
             status: 'completed', outputs: [{ mesh: { id: 'output-id' } }] };

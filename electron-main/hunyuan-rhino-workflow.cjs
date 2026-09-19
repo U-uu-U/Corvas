@@ -4,7 +4,7 @@ const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { keyFor } = require('./hunyuan-model-watcher.cjs');
 const { toolId } = require('./mcp-client.cjs');
-const { RhinoCleanup } = require('./rhino-cleanup.cjs');
+const { RhinoCleanup, verifyRhinoObjects } = require('./rhino-cleanup.cjs');
 const CLEANUP_TOOL = 'flow_canvas.rhino.cleanup';
 
 const ACTIVE = new Set(['downloading', 'connecting', 'importing', 'processing']);
@@ -196,16 +196,9 @@ class HunyuanRhinoWorkflow {
     async restoreSourceIfEmpty(job, rhino) {
         const directory = path.join(this.directory, 'rhino-model-results', job.id);
         const imported = JSON.parse(fs.readFileSync(path.join(directory, 'import-result.json'), 'utf8'));
-        const scene = async input => {
-            const result = await rhino.mcpClient.call(toolId(rhino.server().id, 'rhino_scene'), { action: 'objects', includeHidden: 'true', ...input });
-            const data = (result.content || []).flatMap(block => { try { return [JSON.parse(block.text)]; } catch { return []; } })
-                .find(value => Array.isArray(value?.objects));
-            if (result.isError || !data || data.success === false) throw new Error('无法核对 Rhino 当前文档，请检查连接后继续');
-            return data.objects;
-        };
-        const objects = await scene({ ids: JSON.stringify(imported.meshIds), limit: imported.meshIds.length });
-        if (imported.meshIds.every(id => objects.some(object => object.id === id))) return;
-        if ((await scene({ limit: 1 })).length) throw new Error('当前 Rhino 文档里找不到此任务的原模型。请打开原文档，或新建空白文档后继续，不会覆盖其他模型。');
+        const scene = await verifyRhinoObjects(job.id, imported.meshIds, rhino.mcpClient, rhino.server().id);
+        if (imported.meshIds.every(id => scene.foundIds.includes(id))) return;
+        if (!scene.documentEmpty) throw new Error('当前 Rhino 文档里找不到此任务的原模型。请打开原文档，或新建空白文档后继续，不会覆盖其他模型。');
         const archive = path.join(directory, `previous-session-${Date.now()}`);
         fs.mkdirSync(archive, { recursive: true });
         for (const file of ['cleanup-inspect.json', 'cleanup-clean.json', 'cleanup-quad.json', 'cleanup-validate.json', 'cleanup-dispatch.json']) {

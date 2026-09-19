@@ -7,6 +7,24 @@ const STAGES = ['inspect', 'clean', 'quad', 'validate'];
 const read = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 const unknown = () => Object.assign(new Error('Rhino 整理阶段的结果尚未确定，请先读取 status 检查报告，不会重复重计算。'), { code: 'MCP_RESULT_UNKNOWN' });
 
+async function verifyRhinoObjects(jobId, expectedIds, mcp, serverId) {
+    if (!/^[a-f0-9]{32}$/.test(jobId) || !Array.isArray(expectedIds)) throw new Error('模型核对参数无效');
+    const invocationId = randomUUID();
+    const directory = path.join(os.tmpdir(), 'corvas-hunyuan-rhino', jobId, `verify-${invocationId}`);
+    fs.mkdirSync(directory, { recursive: true });
+    const script = path.join(directory, 'verify-hunyuan.py');
+    const options = path.join(directory, 'verify-options.json');
+    const resultFile = path.join(directory, 'result.json');
+    fs.copyFileSync(path.join(__dirname, 'rhino', 'verify-hunyuan.py'), script);
+    fs.writeFileSync(options, JSON.stringify({ jobId, invocationId, expectedIds, resultFile }));
+    await mcp.call(toolId(serverId, 'rhino_scene'), { action: 'script', cmd: `_-RunPythonScript "${script}"` });
+    const result = read(resultFile);
+    if (!result?.ok || result.jobId !== jobId || result.invocationId !== invocationId) throw new Error('Rhino 对象核对未完成，请检查连接或原文档');
+    for (const file of [script, options, resultFile]) fs.unlinkSync(file);
+    fs.rmdirSync(directory);
+    return result;
+}
+
 class RhinoCleanup {
     constructor(directory) { this.directory = directory; this.pending = new Map(); }
     async execute(job, input, mcp, serverId) {
@@ -30,11 +48,8 @@ class RhinoCleanup {
         if (input.stage !== 'inspect' && previous?.ok && previous.jobId === job.id) {
             if (input.stage === 'quad' && input.targetQuads && input.targetQuads !== previous.targetQuads) throw new Error('该任务已有其他密度的结果，请明确创建新一轮整理');
             const expected = (previous.outputs || []).map(entry => entry.mesh?.id).filter(Boolean);
-            const response = await mcp.call(toolId(serverId, 'rhino_scene'), { action: 'objects', ids: JSON.stringify(expected), includeHidden: 'true', limit: expected.length });
-            const scene = (response.content || []).filter(block => block.type === 'text').map(block => {
-                try { return JSON.parse(block.text); } catch { return null; }
-            }).find(value => Array.isArray(value?.objects));
-            if (response.isError || !expected.length || !scene || scene.success === false || expected.some(id => !scene.objects.some(object => object.id === id))) {
+            const scene = await verifyRhinoObjects(job.id, expected, mcp, serverId);
+            if (!expected.length || expected.some(id => !scene.foundIds.includes(id))) {
                 throw new Error('已有阶段结果不在当前 Rhino 文档中，请打开原文档后继续');
             }
             return { ...previous, reused: true };
@@ -68,4 +83,4 @@ class RhinoCleanup {
         try { return await work; } finally { this.pending.delete(job.id); }
     }
 }
-module.exports = { RhinoCleanup };
+module.exports = { RhinoCleanup, verifyRhinoObjects };
