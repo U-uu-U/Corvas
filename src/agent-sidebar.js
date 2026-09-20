@@ -40,7 +40,6 @@ import { canRecoverGenerationTask, generationFailureError, formatClientGeneratio
 import { showStatusNotification } from './status-notification.js';
 import { createApplicationLauncher, createHunyuanPanel } from './hunyuan-accounts.js';
 import { createRhinoPanel, RHINO_EDIT_SKILL } from './rhino-workbench.js';
-import { createHunyuanWorkflowNotices } from './hunyuan-workflow-notices.js';
 import { getVideoModelProfile, describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
 import { getModelPresentation, describeModelPresentation } from '../shared/model-presentation.mjs';
 import { modelConfigStore } from './model-config.js';
@@ -365,7 +364,6 @@ export class AgentSidebar {
         this._restoreAgentConversation(this.activeProjectCacheKey);
         this._restorePendingAgentAttachments();
         this._connectAgentRuntime();
-        createHunyuanWorkflowNotices();
         void this.apiConfigReady.then(() => { this.hunyuanWorkflowReady = true; this._syncHunyuanWorkflowContext(); });
         this.runtimePageHide = () => this.runtimeClient?.dispose();
         this.runtimePageShow = () => this._connectAgentRuntime();

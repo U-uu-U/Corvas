@@ -96,7 +96,7 @@ test('workflow schemas require scoped IDs and reject unsupported inputs', () => 
         { parameters: { targetQuads: 500.5 } }, { parameters: { script: 'arbitrary' } },
         { script: 'arbitrary' }
     ]) assert.equal(validators.run({ ...run, ...patch }), false, JSON.stringify(patch));
-    for (const action of ['status', 'resume', 'cancel']) {
+    for (const action of ['status', 'confirm', 'resume', 'cancel']) {
         assert.equal(validators[action]({ projectId: 'project-1', jobId: 'f'.repeat(32) }), true);
         assert.equal(validators[action]({ jobId: 'f'.repeat(32) }), false);
         assert.equal(validators[action]({ projectId: null, jobId: '../job' }), false);
@@ -138,6 +138,7 @@ test('stdio MCP exposes workflows and forwards them directly to workflow routes'
             requestId: 'request-1', source: { accountId: 'account-1', generationId: 'a'.repeat(32) } },
         status: { projectId: null, jobId: 'b'.repeat(32) },
         history: { projectId: null, limit: 20 },
+        confirm: { projectId: null, jobId: 'b'.repeat(32) },
         resume: { projectId: null, jobId: 'b'.repeat(32) },
         cancel: { projectId: null, jobId: 'b'.repeat(32) }
     };
@@ -149,7 +150,7 @@ test('stdio MCP exposes workflows and forwards them directly to workflow routes'
     }
     const obsolete = await client.request('tools/call', { name: 'flow_canvas.rhino.cleanup', arguments: { stage: 'quad' } });
     assert.equal(obsolete.error.code, -32602);
-    assert.equal(requests.length, 8);
+    assert.equal(requests.length, 9);
 });
 
 test('stdio MCP preserves workflow recovery errors', async t => {

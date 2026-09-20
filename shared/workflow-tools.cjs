@@ -59,7 +59,7 @@ const WORKFLOW_TOOL_DEFINITIONS = [
     },
     {
         name: 'flow_canvas.workflow.status',
-        description: 'Read a persisted workflow job, step progress, results, and recovery information. Poll this after run or resume, including after the MCP client reconnects.',
+        description: 'Read a persisted workflow job, step progress, results, availableActions, nextAction, and blockedBy. Poll only when nextAction is poll; ask for confirmation in the external assistant when it is confirm. Inspect a blockedBy job using its own projectId before deciding to resume or cancel it.',
         inputSchema: jobInput,
         annotations: { readOnlyHint: true }
     },
@@ -72,6 +72,11 @@ const WORKFLOW_TOOL_DEFINITIONS = [
             limit: { type: 'integer', minimum: 1, maximum: 100 }
         }, ['projectId']),
         annotations: { readOnlyHint: true }
+    },
+    {
+        name: 'flow_canvas.workflow.confirm',
+        description: 'Confirm an existing awaiting_confirmation job after the user agrees in the external assistant conversation, or manually retry connection for a waiting_rhino job. Previously authorized jobs normally keep waiting and polling without another approval. Queues the same job without changing its source or parameters. Repeated confirmations of approved active jobs only return their state. Interrupted or unknown recovery results require status inspection and resume instead; they cannot be confirmed blindly.',
+        inputSchema: jobInput
     },
     {
         name: 'flow_canvas.workflow.resume',

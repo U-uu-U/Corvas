@@ -22,7 +22,7 @@ class WorkflowService {
         if (!validate) throw fail('TOOL_NOT_FOUND', '工作流工具不存在');
         if (!validate(input)) throw fail('INVALID_ARGUMENTS', `工作流参数无效：${validate.errors.map(error => `${error.dataPath} ${error.message}`).join('; ')}`);
         const action = name.slice('flow_canvas.workflow.'.length);
-        if (['run', 'status', 'history', 'resume', 'cancel'].includes(action)) this.getRuntime().board.readProject(input.projectId);
+        if (['run', 'status', 'history', 'confirm', 'resume', 'cancel'].includes(action)) this.getRuntime().board.readProject(input.projectId);
         return this[action](input);
     }
     list() { return { workflows: [clone(HUNYUAN_RHINO_WORKFLOW)], execution: 'local-script', requiresTextProvider: false }; }
@@ -112,6 +112,24 @@ class WorkflowService {
         return { total: jobs.length, offset, nextOffset: offset + limit < jobs.length ? offset + limit : null,
             jobs: jobs.slice(offset, offset + limit).map(job => this.describe(job)) };
     }
+    confirm(input) {
+        const workflow = this.getWorkflow();
+        const job = this.find(input);
+        if (workflow.closed) throw fail('WORKFLOW_UNAVAILABLE', '工作流执行器已关闭');
+        const current = this.describe(job);
+        if (job.approved && ['queued', 'downloading', 'connecting', 'importing', 'processing', 'completed'].includes(job.status)) {
+            return { ...current, reused: true };
+        }
+        if (current.recoveryReason) throw fail('CONFIRMATION_BLOCKED', current.recoveryReason);
+        if (!current.canConfirm) throw fail('CONFIRMATION_BLOCKED', '当前任务不能确认，请根据 status 返回的可用操作继续或取消任务');
+        const previous = { ...job };
+        try { workflow.update(job, 'queued', { approved: true, dismissed: false, error: '' }); }
+        catch (error) {
+            for (const key of Object.keys(job)) delete job[key];
+            Object.assign(job, previous); throw error;
+        }
+        return { ...this.describe(job), reused: false };
+    }
     resume(input) {
         const job = this.find(input);
         const current = this.describe(job);
@@ -130,6 +148,7 @@ class WorkflowService {
             message: '已停止后续阶段；已派发的 Rhino 命令可能仍在运行，已生成文件和对象会保留。' };
     }
     describe(job) {
+        const workflow = this.getWorkflow();
         const directory = path.join(this.directory, 'rhino-model-results', job.id);
         const dispatch = read(path.join(directory, 'cleanup-dispatch.json'));
         const reports = STAGES.map(stage => ({ stage, report: read(path.join(directory, `cleanup-${stage}.json`)) }));
@@ -140,11 +159,23 @@ class WorkflowService {
         const runtime = this.getRuntime();
         const run = job.runId ? runtime.runs.get(job.runId) : null;
         const mutationUnknown = Object.values(run?.externalCalls || {}).some(call => !call.readOnly && ['dispatching', 'unknown'].includes(call.status));
-        const busy = this.getWorkflow().runningJobId === job.id || (job.runId && runtime.controllers?.has(job.runId));
+        const busy = workflow.runningJobId === job.id || (job.runId && runtime.controllers?.has(job.runId));
         const imported = read(path.join(directory, 'import-result.json'));
         const missingImport = job.importStarted && !job.runId && (!imported?.ok || imported.jobId !== job.id
             || !imported.meshIds?.length || (job.importInvocationId && imported.invocationId !== job.importInvocationId));
-        const canResume = ['failed', 'interrupted'].includes(job.status) && !busy && !unknown && !mutationUnknown && !missingImport;
+        const recoveryUnknown = unknown || mutationUnknown || missingImport;
+        const canResume = ['failed', 'interrupted'].includes(job.status) && !busy && !recoveryUnknown;
+        const canConfirm = ['awaiting_confirmation', 'waiting_rhino'].includes(job.status)
+            && !job.cancelRequested && !job.importStarted && !job.runId && !recoveryUnknown;
+        const availableActions = [...(canConfirm ? ['confirm'] : []), ...(canResume ? ['resume'] : []),
+            ...(!['completed', 'canceled'].includes(job.status) ? ['cancel'] : [])];
+        const blocker = ['queued', 'waiting_rhino'].includes(job.status)
+            ? workflow.jobs.find(entry => entry.id !== job.id && entry.status === 'interrupted' && !entry.dismissed) : null;
+        const blockedBy = blocker ? { jobId: blocker.id, projectId: blocker.projectId, status: blocker.status } : null;
+        const nextAction = job.status === 'completed' ? 'done' : job.status === 'canceled' ? 'stopped'
+            : blockedBy ? 'resolve_blocker' : job.status === 'awaiting_confirmation' && canConfirm ? 'confirm' : canResume ? 'resume'
+                : job.status === 'waiting_rhino' && canConfirm ? 'poll'
+                : ['awaiting_confirmation', 'waiting_rhino'].includes(job.status) ? 'inspect' : ACTIVE.has(job.status) ? 'poll' : 'inspect';
         const validated = reports.find(entry => entry.stage === 'validate')?.report;
         return { id: job.id, jobId: job.id, workflowId: job.workflowId || HUNYUAN_RHINO_WORKFLOW.id,
             version: job.workflowVersion || 1, projectId: job.projectId, runId: job.runId || null,
@@ -155,10 +186,9 @@ class WorkflowService {
             outputs: validated?.ok ? (validated.outputs || []).map(entry => ({ objectId: entry.mesh?.id, sourceId: entry.source?.id,
                 faces: entry.mesh?.faces, quads: entry.mesh?.quads, valid: entry.mesh?.valid, closed: entry.mesh?.closed })) : [],
             reportDirectory: fs.existsSync(directory) ? directory : null,
-            canResume, recoveryReason: unknown || mutationUnknown || missingImport ? '外部操作结果尚未确定，请先核对 Rhino 场景和报告，不能盲目重新提交' : null,
-            nextAction: job.status === 'completed' ? 'done' : job.status === 'canceled' ? 'stopped'
-                : canResume ? 'resume' : ACTIVE.has(job.status) ? 'poll' : 'inspect',
-            pollAfterMs: ACTIVE.has(job.status) ? 3000 : null };
+            canConfirm, canResume, availableActions, blockedBy,
+            recoveryReason: recoveryUnknown ? '外部操作结果尚未确定，请先核对 Rhino 场景和报告，不能盲目重新提交' : null,
+            nextAction, pollAfterMs: nextAction === 'poll' ? 3000 : null };
     }
 }
 module.exports = { WorkflowService };

@@ -7,6 +7,8 @@ description: Use Corvas MCP to import an existing Hunyuan model into Rhino, run 
 
 Corvas owns the executable workflow and its local job records. The external Agent selects inputs, submits work, and reports progress through `flow_canvas.workflow.*`. Use these tools directly; do not call `flow_canvas.agent.start` or reconstruct the workflow with ad hoc Rhino scripts.
 
+Keep workflow decisions in the external Codex conversation or MCP client. Corvas no longer injects workflow panels into the canvas or Hunyuan webpage. Do not redirect the user to the Corvas built-in Agent sidebar for confirmation or recovery.
+
 ## Connection and reuse
 
 Corvas must be running with its local MCP bridge enabled. Rhino and the Corvas Rhino/Cordyceps connection must be configured; the selected Hunyuan account must be logged in and its model already generated.
@@ -38,6 +40,14 @@ An explicit request to import and clean up the chosen model authorizes submissio
 The response immediately returns a job snapshot. Its `id` is the `jobId` for subsequent calls. Keep `jobId`, `projectId`, and `requestId`; an optional `runId` belongs to the desktop task card and is not the workflow recovery ID.
 
 Poll `flow_canvas.workflow.status` with `{ projectId, jobId }`, following `pollAfterMs` and `nextAction`. Use returned `stages`, `outputs`, `reportDirectory`, and `canResume` to explain progress or recovery. Report success only when job status and validation outputs confirm completion.
+
+## Decisions in Codex
+
+- Read `availableActions` and `nextAction` from status. When user input is needed, use Codex's native question/choice UI if available; otherwise ask a concise question in the conversation. Do not ask again for work already authorized in this conversation.
+- For `nextAction: confirm`, the manual-mode job is waiting for authorization. Once authorized, call `flow_canvas.workflow.confirm` with its original `{ projectId, jobId }`. Use `workflow.cancel` when the user declines. Do not poll indefinitely or create a new run to confirm the existing job.
+- For `nextAction: resolve_blocker`, inspect the job identified by `blockedBy.jobId` and `blockedBy.projectId`. Explain why it blocks the queue and offer the actions its status permits. Resume or cancel that job only within the user's intent; removing a popup does not authorize either action.
+- Present model/account choice and optional mesh density in Codex when the requested input is ambiguous. Continue directly when the user has already selected them.
+- These are tool responses handled during an active Codex task. Connecting MCP alone does not push a native Codex dialog or wake an idle conversation; do not claim proactive delivery is installed.
 
 ## Recover without duplicating work
 

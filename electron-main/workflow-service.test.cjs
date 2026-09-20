@@ -189,3 +189,121 @@ test('a repeated failure after resume returns to interrupted instead of leaving 
     assert.equal(repeated.canResume, true);
     assert.equal(repeated.nextAction, 'resume');
 });
+
+test('confirmation queues the original manual job, persists approval, and is idempotent', t => {
+    const h = setup(t);
+    h.workflow().configure({ mode: 'ask' });
+    h.workflow().observe(h.request.source.accountId, { worksId: 'old-work', generationId: h.request.source.generationId, status: 'ready' });
+    const job = h.workflow().jobs[0], input = { projectId: job.projectId, jobId: job.id };
+    const waiting = h.call('status', input);
+    assert.equal(waiting.status, 'awaiting_confirmation');
+    assert.equal(waiting.nextAction, 'confirm');
+    assert.equal(waiting.pollAfterMs, null);
+    assert.equal(waiting.canConfirm, true);
+    assert.deepEqual(waiting.availableActions, ['confirm', 'cancel']);
+    assert.equal(h.call('history', { projectId: job.projectId }).jobs[0].nextAction, 'confirm');
+    const confirmed = h.call('confirm', input);
+    assert.equal(confirmed.id, job.id);
+    assert.equal(confirmed.status, 'queued');
+    assert.equal(confirmed.nextAction, 'poll');
+    assert.equal(confirmed.reused, false);
+    assert.deepEqual(confirmed.availableActions, ['cancel']);
+    assert.deepEqual(confirmed.source, waiting.source);
+    assert.deepEqual(confirmed.parameters, waiting.parameters);
+    assert.equal(h.call('confirm', input).reused, true);
+    h.reload();
+    assert.equal(h.call('confirm', input).reused, true);
+    assert.equal(h.workflow().jobs.length, 1);
+    for (const state of ['downloading', 'connecting', 'importing', 'processing', 'completed']) {
+        h.workflow().update(h.workflow().jobs[0], state);
+        assert.equal(h.call('confirm', input).reused, true);
+    }
+    assert.deepEqual(h.calls, []);
+});
+
+test('waiting Rhino confirmation is project scoped and cannot override immutable workflow parameters', t => {
+    const h = setup(t), first = h.call('run', h.request), job = h.workflow().jobs[0];
+    h.workflow().update(job, 'waiting_rhino');
+    const input = { projectId: job.projectId, jobId: job.id };
+    const waiting = h.call('status', input);
+    assert.equal(waiting.nextAction, 'poll');
+    assert.equal(waiting.pollAfterMs, 3000);
+    assert.deepEqual(waiting.availableActions, ['confirm', 'cancel']);
+    assert.throws(() => h.call('confirm', { ...input, projectId: 'project-b' }), { code: 'PROJECT_MISMATCH' });
+    assert.throws(() => h.call('confirm', { ...input, parameters: { targetQuads: 2000 } }), { code: 'INVALID_ARGUMENTS' });
+    assert.throws(() => h.call('confirm', { jobId: job.id }), { code: 'INVALID_ARGUMENTS' });
+    const confirmed = h.call('confirm', input);
+    assert.equal(confirmed.id, first.id);
+    assert.equal(confirmed.status, 'queued');
+    assert.deepEqual(confirmed.parameters, { targetQuads: 1000 });
+});
+
+test('reconfirming an approved importing or processing job returns it without redispatch', t => {
+    const h = setup(t), first = h.call('run', h.request), job = h.workflow().jobs[0];
+    const input = { projectId: job.projectId, jobId: first.id };
+    const writes = [];
+    const update = h.workflow().update.bind(h.workflow());
+    h.workflow().update = (...args) => { writes.push(args); return update(...args); };
+    job.status = 'importing'; job.importStarted = true; job.importInvocationId = 'pending';
+    const importing = h.call('confirm', input);
+    assert.equal(importing.reused, true);
+    assert.equal(importing.status, 'importing');
+    assert.equal(importing.nextAction, 'poll');
+    job.status = 'processing'; job.runId = 'agent-fixture';
+    h.runtime.runs.set(job.runId, { id: job.runId, status: 'running', externalCalls: { cleanup: { readOnly: false, status: 'dispatching' } } });
+    const processing = h.call('confirm', input);
+    assert.equal(processing.reused, true);
+    assert.equal(processing.status, 'processing');
+    assert.equal(processing.nextAction, 'poll');
+    assert.deepEqual(writes, []);
+    assert.deepEqual(h.calls, []);
+});
+
+test('confirmation cannot restart interrupted, canceled, or unknown result jobs', t => {
+    const h = setup(t), first = h.call('run', h.request), job = h.workflow().jobs[0];
+    const input = { projectId: job.projectId, jobId: first.id };
+    for (const state of ['interrupted', 'failed', 'canceled', 'generating']) {
+        h.workflow().update(job, state);
+        assert.throws(() => h.call('confirm', input), { code: 'CONFIRMATION_BLOCKED' });
+        assert.equal(job.status, state);
+    }
+    h.workflow().update(job, 'waiting_rhino', { importStarted: true, importInvocationId: 'missing' });
+    const unknown = h.call('status', input);
+    assert.equal(unknown.canConfirm, false);
+    assert.equal(unknown.nextAction, 'inspect');
+    assert.equal(unknown.pollAfterMs, null);
+    assert.deepEqual(unknown.availableActions, ['cancel']);
+    assert.throws(() => h.call('confirm', input), { code: 'CONFIRMATION_BLOCKED' });
+    assert.equal(job.status, 'waiting_rhino');
+});
+
+test('failed confirmation persistence does not approve the task in memory', t => {
+    const h = setup(t), first = h.call('run', h.request), job = h.workflow().jobs[0];
+    h.workflow().update(job, 'awaiting_confirmation', { approved: false });
+    h.workflow().changed = () => { throw new Error('disk unavailable'); };
+    assert.throws(() => h.call('confirm', { projectId: job.projectId, jobId: first.id }), /disk unavailable/);
+    assert.equal(job.status, 'awaiting_confirmation');
+    assert.equal(job.approved, false);
+});
+
+test('status and history identify a cross-project interrupted blocker and cancel releases the queue', async t => {
+    const h = setup(t), first = h.call('run', h.request), blocker = h.workflow().jobs[0];
+    h.workflow().update(blocker, 'interrupted');
+    const second = h.call('run', { ...h.request, projectId: 'project-b', requestId: 'request-b' });
+    const input = { projectId: 'project-b', jobId: second.id };
+    const blocked = h.call('status', input);
+    assert.deepEqual(blocked.blockedBy, { jobId: first.id, projectId: 'project-a', status: 'interrupted' });
+    assert.equal(blocked.nextAction, 'resolve_blocker');
+    assert.equal(blocked.pollAfterMs, null);
+    assert.deepEqual(blocked.availableActions, ['cancel']);
+    assert.deepEqual(h.call('history', { projectId: 'project-b' }).jobs[0].blockedBy, blocked.blockedBy);
+    assert.deepEqual(h.call('status', { projectId: 'project-a', jobId: first.id }).availableActions, ['resume', 'cancel']);
+    await h.workflow().drain();
+    assert.deepEqual(h.calls, []);
+    assert.equal(h.call('cancel', { projectId: 'project-a', jobId: first.id }).nextAction, 'stopped');
+    const unblocked = h.call('status', input);
+    assert.equal(unblocked.blockedBy, null);
+    assert.equal(unblocked.nextAction, 'poll');
+    await h.workflow().drain();
+    assert.deepEqual(h.calls, ['download', 'open']);
+});

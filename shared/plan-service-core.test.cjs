@@ -47,3 +47,15 @@ test('current workflow config keeps all explicitly disabled tools disabled', () 
     });
     assert.deepEqual(configured.allowedTools, []);
 });
+
+test('workflow version one migrates only confirm without restoring disabled workflow or unrelated tools', () => {
+    const configured = normalizeMcpConfig({
+        boardToolsVersion: MCP_BOARD_TOOLS_VERSION,
+        workflowToolsVersion: 1,
+        allowedTools: ['flow_canvas.workflow.status', 'flow_canvas.plan.list']
+    });
+    assert.equal(configured.workflowToolsVersion, 2);
+    assert.deepEqual(configured.allowedTools, ['flow_canvas.workflow.status', 'flow_canvas.plan.list', 'flow_canvas.workflow.confirm']);
+    assert.deepEqual(normalizeMcpConfig(configured), configured);
+    assert.deepEqual(normalizeMcpConfig({ ...configured, allowedTools: [] }).allowedTools, []);
+});

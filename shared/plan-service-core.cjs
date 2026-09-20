@@ -17,7 +17,7 @@ const DEFAULT_PLAN_STATUSES = ['未开始', '进行中', '待确认', '已完成
 const { AGENT_TOOL_DEFINITIONS, AGENT_RUN_TOOLS } = require('./agent-tools.cjs');
 const { WORKFLOW_TOOL_DEFINITIONS } = require('./workflow-tools.cjs');
 const MCP_BOARD_TOOLS_VERSION = 3;
-const MCP_WORKFLOW_TOOLS_VERSION = 1;
+const MCP_WORKFLOW_TOOLS_VERSION = 2;
 const WORKFLOW_MCP_TOOLS = WORKFLOW_TOOL_DEFINITIONS.map(tool => tool.name);
 const BOARD_TRANSACTION_MCP_TOOLS = [
     'flow_canvas.board.get_snapshot',
@@ -69,8 +69,8 @@ function normalizeMcpConfig(config = {}) {
     const shouldMigrateBoardTools = !Number.isInteger(currentBoardToolsVersion)
         || currentBoardToolsVersion < MCP_BOARD_TOOLS_VERSION;
     const currentWorkflowToolsVersion = Number(source.workflowToolsVersion);
-    const shouldMigrateWorkflowTools = !Number.isInteger(currentWorkflowToolsVersion)
-        || currentWorkflowToolsVersion < MCP_WORKFLOW_TOOLS_VERSION;
+    const workflowToolAdditions = !Number.isInteger(currentWorkflowToolsVersion) || currentWorkflowToolsVersion < 1
+        ? WORKFLOW_MCP_TOOLS : currentWorkflowToolsVersion < 2 ? ['flow_canvas.workflow.confirm'] : [];
     return {
         ...DEFAULT_MCP_CONFIG,
         ...source,
@@ -79,7 +79,7 @@ function normalizeMcpConfig(config = {}) {
         allowedTools: [...new Set([
             ...configuredTools.filter(tool => tool !== 'flow_canvas.rhino.cleanup'),
             ...(shouldMigrateBoardTools ? BOARD_TRANSACTION_MCP_TOOLS : []),
-            ...(shouldMigrateWorkflowTools ? WORKFLOW_MCP_TOOLS : [])
+            ...workflowToolAdditions
         ])]
     };
 }
