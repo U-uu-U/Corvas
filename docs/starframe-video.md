@@ -10,7 +10,7 @@
 - 单个素材使用 `references.image/video/audio`，两个及以上使用 `references.images/videos/audios`；不发送空数组或单元素数组。
 - 固定 720p，4-30 秒整数；最多 30 图、10 视频、10 音频，合计最多 50。仅使用公网 URL，沿用现有临时上传服务，不回退 Base64。
 - `client_task_id` 来自持久化客户端任务 ID；不合规格的本地 ID 使用稳定哈希转换，不在重试时随机变更。客户端 ID 与供应商返回的 `task_id` 分开保存和使用。
-- `GET /v1/videos/{task_id}` 查询任务；完成后解析同源同任务的 `metadata.url`，带 Bearer Key 下载 `/content`。失败读取 `metadata.fail_reason`。
+- `GET /v1/videos/{task_id}` 查询任务；完成后校验任务 ID。实际响应可能包含 StarFrame 对象存储签名链接（`starframe-sh.tos-s3-cn-shanghai.volces.com`），识别到时直接下载且不携带 API Key；其他情况使用配置 API 的 `/v1/videos/{task_id}/content` 鉴权下载。签名过期时重新查询原任务获取新链接。失败读取 `metadata.fail_reason`。
 - 任务恢复只查询、下载原任务；提交断线或供应商 409/410 返回需要核对的状态，不用客户端 ID 冒充上游任务 ID，不自动生成新订单。
 - 下载发生跨源 CDN 重定向时不转发 API Key，包括 HTTP/1.1 兼容回退路径。
 

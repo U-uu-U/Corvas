@@ -8,7 +8,7 @@ const { app, net } = require('electron');
 const { PlanService, DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
 const { WORKFLOW_TOOL_DEFINITIONS } = require('../shared/workflow-tools.cjs');
 const { isGlobalAiOpcModel, buildGlobalAiOpcBody, GlobalAiOpcAssets, LIMITS: GLOBALAIOPC_LIMITS } = require('./globalaiopc-video.cjs');
-const { isStarFrameModel, buildStarFrameBody, starFrameContentUrl, STARFRAME_LIMITS } = require('./starframe-video.cjs');
+const { isStarFrameModel, buildStarFrameBody, starFrameContentUrl, starFrameDownloadRequest, STARFRAME_LIMITS } = require('./starframe-video.cjs');
 const {
     appendMidjourneyParameters,
     buildImageEditMultipart,
@@ -2916,7 +2916,7 @@ function sleep(ms, signal = null) {
 
 async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialResponse, options = {}) {
     const resultUrl = payload => isStarFrameModel(options.model)
-        ? starFrameContentUrl(generationEndpoint, getVideoTaskId(payload) || taskId, payload)
+        ? starFrameContentUrl(generationEndpoint, taskId || getVideoTaskId(payload), payload)
         : isGlobalAiOpcModel(options.model) && getVideoTaskStatus(payload).toLowerCase() !== 'completed' ? '' : getVideoResultUrl(payload);
     const directUrl = resultUrl(initialResponse);
     if (directUrl) {
@@ -3030,6 +3030,7 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
         }
         const resolvedTaskId = getVideoTaskId(payload);
         if (resolvedTaskId && resolvedTaskId !== currentTaskId) {
+            if (isStarFrameModel(options.model)) throw new Error('StarFrame 查询响应与原任务 ID 不符，未改绑任务');
             currentTaskId = resolvedTaskId;
             taskUrls = buildTaskUrls(currentTaskId);
             taskUrlIndex = 0;
@@ -3094,11 +3095,12 @@ async function downloadVideoWithAutoRefresh(completed, targetDir, prompt, option
     while (true) {
         try {
             const starFrame = isStarFrameModel(options.model);
-            const url = starFrame ? starFrameContentUrl(options.generationEndpoint, taskId,
-                current.payload || { status: 'completed', metadata: { url: current.url } }) : current.url;
+            const request = starFrame ? starFrameDownloadRequest(options.generationEndpoint, taskId,
+                current.payload || { status: 'completed', metadata: { url: current.url } }) : { url: current.url };
+            const { url } = request;
             if (!url) throw new Error('视频尚未完成，不能下载');
             return await download(url, targetDir, prompt, options.signal,
-                starFrame ? { Authorization: `Bearer ${options.apiKey}` } : undefined);
+                request.requiresAuth ? { Authorization: `Bearer ${options.apiKey}` } : undefined);
         } catch (error) {
             const status = Number(error?.status);
             if (!taskId || !GENERATED_MEDIA_AUTO_REFRESH_STATUSES.has(status)

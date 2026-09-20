@@ -41,6 +41,11 @@ test('StarFrame persists task IDs, queries native status and authenticates conte
     let mode = 'success', posts = 0, downloads = 0, polls = 0;
     const submittedIds = [];
     fetchFixture = async (url, options = {}) => {
+        if (new URL(url).hostname === 'starframe-sh.tos-s3-cn-shanghai.volces.com') {
+            downloads++;
+            assert.equal(options.headers?.Authorization, undefined, 'Storage must not receive the API key');
+            return new Response('fixture video', { headers: { 'content-type': 'video/mp4' } });
+        }
         assert.equal(new URL(url).hostname, 'starframe.test');
         if (url.endsWith('/storage')) {
             const form = await new Response(options.body, { headers: options.headers }).formData();
@@ -65,7 +70,7 @@ test('StarFrame persists task IDs, queries native status and authenticates conte
         polls++; assert.equal(url, `${endpoint}/task-real-1`);
         assert.equal(bridge.recoveryStore.get('stable-1').taskId, 'task-real-1');
         return json(mode === 'failed' ? { id: 'task-real-1', status: 'failed', metadata: { fail_reason: 'reference rejected' } }
-            : { id: 'task-real-1', status: 'completed', metadata: { url: '/v1/videos/task-real-1/content' } });
+            : { id: 'task-real-1', status: 'completed', metadata: { url: 'https://starframe-sh.tos-s3-cn-shanghai.volces.com/videos/result.mp4?X-Amz-Signature=fixture' } });
     };
     const output = await bridge.generateVideoFromRenderer(request);
     assert.equal(output.taskId, 'task-real-1');
@@ -80,6 +85,16 @@ test('StarFrame persists task IDs, queries native status and authenticates conte
     }
     assert.deepEqual(submittedIds, ['stable-1', 'stable-1', 'stable-1']);
     assert.equal(polls, 3, 'No attempt to poll the client id as an upstream task');
+});
+
+test('StarFrame mismatched query IDs cannot overwrite the original recovery binding', async () => {
+    let rebound = false;
+    await assert.rejects(Bridge.pollOpenAiVideoTask('https://starframe.test/v1/videos', 'fixture-key', 'task-original', {}, {
+        model: STARFRAME_MODEL, wait: async () => {}, onTaskIdResolved: () => { rebound = true; },
+        fetchTask: async () => ({ response: { ok: true, status: 200 }, text: JSON.stringify({ id: 'task-other', status: 'completed',
+            metadata: { url: 'https://storage.test/result.mp4' } }) })
+    }), /未改绑任务/);
+    assert.equal(rebound, false);
 });
 
 test('authenticated content download strips API credentials from a CDN redirect during HTTP/1 fallback', async t => {

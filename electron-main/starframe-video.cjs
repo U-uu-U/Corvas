@@ -58,14 +58,26 @@ function buildStarFrameBody({ model = STARFRAME_MODEL, clientTaskId, prompt, dur
 
 function starFrameContentUrl(endpoint, taskId, payload) {
     if (payload?.status !== 'completed') return '';
-    if (!taskId) throw new Error('StarFrame 完成响应缺少任务 ID');
+    if (typeof taskId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(taskId)) throw new Error('StarFrame 完成响应缺少有效任务 ID');
+    if (payload.id && payload.id !== taskId) throw new Error('StarFrame 完成响应与原任务 ID 不符');
     const base = starFrameEndpoint(endpoint);
-    const expected = new URL(`${base}/${encodeURIComponent(taskId)}/content`);
-    const url = new URL(payload.metadata?.url || expected.href, base);
-    if (url.origin !== expected.origin || url.pathname !== expected.pathname || url.username || url.password || url.search || url.hash) {
-        throw new Error('StarFrame 产物路径与当前任务不符，未发送鉴权信息');
-    }
-    return url.href;
+    // Live responses may contain a signed storage URL. Always use the documented
+    // task content endpoint so credentials stay bound to the configured API.
+    return `${base}/${encodeURIComponent(taskId)}/content`;
 }
 
-module.exports = { STARFRAME_MODEL, STARFRAME_LIMITS, isStarFrameModel, starFrameEndpoint, starFrameClientId, buildStarFrameBody, starFrameContentUrl };
+function starFrameDownloadRequest(endpoint, taskId, payload) {
+    const canonical = starFrameContentUrl(endpoint, taskId, payload);
+    if (!canonical) return { url: '', requiresAuth: false };
+    let candidate;
+    try { candidate = new URL(payload.metadata?.url); } catch { /* Relative URLs use the API endpoint. */ }
+    // Verified live StarFrame storage host. Its signed URLs authorize themselves;
+    // API credentials must never be attached to storage downloads.
+    if (candidate?.protocol === 'https:' && candidate.hostname === 'starframe-sh.tos-s3-cn-shanghai.volces.com'
+        && !candidate.username && !candidate.password && candidate.searchParams.has('X-Amz-Signature')) {
+        return { url: candidate.href, requiresAuth: false };
+    }
+    return { url: canonical, requiresAuth: true };
+}
+
+module.exports = { STARFRAME_MODEL, STARFRAME_LIMITS, isStarFrameModel, starFrameEndpoint, starFrameClientId, buildStarFrameBody, starFrameContentUrl, starFrameDownloadRequest };
