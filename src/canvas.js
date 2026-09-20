@@ -9391,6 +9391,7 @@ export class CanvasManager {
             const providers = this.options.getGenerationProviders?.(data.nodeType) || [];
             const rows = [];
             const groups = new Map();
+            let openRoute = null;
             for (const provider of providers) {
                 const sourceId = provider.sourceProviderId;
                 const key = sourceId && provider.routeGroup && provider.routeLabel
@@ -9403,11 +9404,12 @@ export class CanvasManager {
                 }
                 row.push(provider);
             }
-            rows.forEach(row => row.sort((a, b) => (a.routeLabel || '') < (b.routeLabel || '') ? -1
-                : (a.routeLabel || '') > (b.routeLabel || '') ? 1 : 0));
+            rows.forEach(row => row.sort((a, b) => (a.routeOrder ?? 0) - (b.routeOrder ?? 0)
+                || ((a.routeLabel || '') < (b.routeLabel || '') ? -1 : (a.routeLabel || '') > (b.routeLabel || '') ? 1 : 0)));
+            rows.sort((a, b) => (a[0].routeGroupOrder ?? 0) - (b[0].routeGroupOrder ?? 0));
             const query = search.value.trim().toLowerCase();
             const matches = rows.filter(row => row.some(provider => !query
-                || `${provider.routeLabel || ''} ${provider.model || ''} ${provider.modelLabel || ''} ${provider.description || ''} ${provider.name || ''}`.toLowerCase().includes(query)));
+                || `${provider.routeLabel || ''} ${provider.routeGroupLabel || ''} ${provider.routeGroupDescription || ''} ${provider.model || ''} ${provider.modelLabel || ''} ${provider.description || ''} ${provider.name || ''}`.toLowerCase().includes(query)));
             list.replaceChildren();
             if (!matches.length) {
                 const empty = document.createElement('div');
@@ -9419,7 +9421,7 @@ export class CanvasManager {
                 return;
             }
             matches.forEach(row => {
-                const split = row.length > 1 && row.every(provider => provider.routeGroup && provider.routeLabel);
+                const split = (row.length > 1 || row[0].routeGroupAlways) && row.every(provider => provider.routeGroup && provider.routeLabel);
                 let container = list;
                 if (split) {
                     const group = document.createElement('div');
@@ -9435,7 +9437,7 @@ export class CanvasManager {
                     trigger.classList.toggle('selected', !!current);
                     trigger.innerHTML = '<span><strong></strong><small></small></span><svg class="flow-icon" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-arrow-up"></use></svg>';
                     trigger.querySelector('strong').textContent = groupLabel;
-                    trigger.querySelector('small').textContent = (current || row[0]).description || current?.routeLabel || row[0].name || '视频';
+                    trigger.querySelector('small').textContent = row[0].routeGroupDescription || (current || row[0]).description || current?.routeLabel || row[0].name || '视频';
                     const panel = document.createElement('div');
                     panel.className = 'generation-composer-route-panel';
                     panel.setAttribute('popover', 'manual');
@@ -9446,6 +9448,10 @@ export class CanvasManager {
                     closeTimers.push(() => clearTimeout(closeTimer));
                     const expand = open => {
                         clearTimeout(closeTimer);
+                        if (open && openRoute !== expand) {
+                            openRoute?.(false);
+                            openRoute = expand;
+                        } else if (!open && openRoute === expand) openRoute = null;
                         group.classList.toggle('expanded', open);
                         trigger.setAttribute('aria-expanded', String(open));
                         panel.inert = !open;
@@ -9459,6 +9465,19 @@ export class CanvasManager {
                             const leftSpace = menuBounds.left - gap - margin;
                             const side = rightSpace >= width || rightSpace >= leftSpace ? 'right' : 'left';
                             const available = side === 'right' ? rightSpace : leftSpace;
+                            panel.style.maxHeight = '';
+                            if (available < 240) {
+                                panel.style.width = `${width}px`;
+                                panel.style.left = `${Math.max(margin, Math.min(bounds.left, window.innerWidth - width - margin))}px`;
+                                panel.showPopover();
+                                const below = window.innerHeight - bounds.bottom - gap - margin;
+                                const above = bounds.top - gap - margin;
+                                const down = below >= panel.offsetHeight || below >= above;
+                                panel.dataset.side = down ? 'below' : 'above';
+                                panel.style.maxHeight = `${Math.max(0, down ? below : above)}px`;
+                                panel.style.top = `${down ? bounds.bottom + gap : bounds.top - gap - panel.offsetHeight}px`;
+                                return;
+                            }
                             panel.style.width = `${Math.min(width, Math.max(240, available))}px`;
                             panel.dataset.side = side;
                             panel.style.top = `${bounds.top}px`;
@@ -9471,7 +9490,7 @@ export class CanvasManager {
                     const deferClose = () => {
                         clearTimeout(closeTimer);
                         closeTimer = setTimeout(() => {
-                            if (!group.matches(':hover') && !panel.matches(':hover')) expand(false);
+                            if (!group.matches(':hover') && !panel.matches(':hover') && !group.matches(':focus-within')) expand(false);
                         }, 120);
                     };
                     group.addEventListener('mouseenter', () => expand(true));
@@ -9479,6 +9498,9 @@ export class CanvasManager {
                     panel.addEventListener('mouseenter', () => clearTimeout(closeTimer));
                     panel.addEventListener('mouseleave', deferClose);
                     popover.addEventListener('mouseleave', deferClose, { signal: routeEvents.signal });
+                    window.addEventListener('resize', () => {
+                        if (group.classList.contains('expanded')) expand(true);
+                    }, { signal: routeEvents.signal });
                     list.addEventListener('scroll', () => {
                         if (!panel.matches(':popover-open')) return;
                         const bounds = trigger.getBoundingClientRect();

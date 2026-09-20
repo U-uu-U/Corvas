@@ -206,6 +206,39 @@ export function getVideoModelProfile(provider) {
     return profile;
 }
 
+export function getVideoModelGroup(provider) {
+    let host = '';
+    try { host = new URL(provider?.endpoint).hostname.toLowerCase(); } catch { return {}; }
+    const model = String(provider?.model || '').toLowerCase();
+    const variant = /^artsdance2-0-(fast|mini|pro)-intl-260701$/.exec(model)?.[1];
+    if (host === 'art.ravenhash.org' && variant) {
+        const label = `Seedance 2.0 ${variant[0].toUpperCase()}${variant.slice(1)}`;
+        return { label, routeLabel: label, routeModelLabel: provider.model,
+            routeGroup: 'seedance20-recommended', routeGroupLabel: 'Seedance 2.0 推荐渠道',
+            routeGroupDescription: '可NSFW 无限制', routeGroupOrder: 100,
+            routeOrder: ['fast', 'mini', 'pro'].indexOf(variant), routeGroupAlways: true };
+    }
+    if (host === 'art.ravenhash.org' && model === 'sd2.5-route1') {
+        return { routeGroup: 'seedance25-backup', routeGroupLabel: 'Seedance 2.5 备用渠道',
+            routeLabel: 'Seedance 2.5 固定 30 秒', routeModelLabel: provider.model,
+            routeGroupOrder: 20, routeGroupAlways: true, recommended: false };
+    }
+    const labels = {
+        'seedance-2.5-pro': 'Seedance 2.5 Pro（满血满参）',
+        'seedance_v2.5': 'HM-Seedance 2.5',
+        'seedance_v2.0-933': 'HM-Seedance 2.0 933',
+        'seedance_v2.5-101010': 'HM-Seedance 2.5 101010',
+        'seedance_v2.5-301010': 'HM-Seedance 2.5 301010',
+        'sd2.5': 'SD2.5 固定 30 秒（电商效果优化）'
+    };
+    const label = labels[model];
+    if (host !== 'video.zhubo.asia' && (host !== 'art.ravenhash.org' || !label)) return {};
+    return { label: label || provider.model, routeGroup: 'zhubo-video', routeGroupLabel: 'Seedance 2.5 推荐渠道',
+        routeLabel: label || provider.model, routeModelLabel: provider.model, routeGroupAlways: true,
+        routeGroupOrder: 10, routeOrder: ({ 'sd2.5': 0, 'seedance-2.5-pro': 1, 'seedance_v2.5': 2,
+            'seedance_v2.0-933': 3 })[model] ?? 10, recommended: false };
+}
+
 export function describeVideoModelProfile(profile) {
     if (!profile) return '';
     const parts = [];

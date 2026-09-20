@@ -10,6 +10,7 @@ import { resolveImageDimensions, resolveGenerationDisplaySize, inferClosestAspec
 import { inferProviderCapability, isMidjourneyImageModel, canUseTextProvider } from '../src/provider-capabilities.js';
 import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from '../src/generation-request-params.js';
 import { getVideoModelProfile } from '../shared/video-model-profiles.mjs';
+import { isVideoGenerationAvailable, assertVideoGenerationAvailable } from '../shared/video-generation-availability.mjs';
 import { DEFAULT_MODEL_CONFIG } from '../src/model-config-default.js';
 import { resolveModelConfigEntry, toVideoProfileOverrides, mergeVideoProfile, validateModelRequest } from '../src/model-config-capabilities.js';
 import { getModelPresentation } from '../shared/model-presentation.mjs';
@@ -165,7 +166,7 @@ export class AgentGeneration {
         return provider;
     }
     listModels(modelConfig = this.loadModelConfig()) {
-        return this.providers().filter(p => inferProviderCapability(p) !== 'text').map(p => {
+        return this.providers().filter(p => inferProviderCapability(p) !== 'text' && isVideoGenerationAvailable(p)).map(p => {
             const kind = inferProviderCapability(p);
             const { profile, presentation, candidates, matched, ambiguous } = this._capabilities(p, kind, modelConfig);
             const price = presentation?.price?.kind === 'sale' ? presentation.price : null;
@@ -245,6 +246,7 @@ export class AgentGeneration {
             const count = Number(config.count ?? 1);
             if (!Number.isInteger(count) || count < 1 || count > 8) throw error('COUNT_LIMIT', '单节点每批次需要 1 到 8 次生成');
             const provider = this.resolveProvider(config, node.nodeType);
+            if (node.nodeType === 'video') assertVideoGenerationAvailable(provider);
             if (Number(config.midjourneyRepeat || 1) > 1)
                 throw error('COUNT_LIMIT', 'Agent 批次请使用生成数量，不使用额外的 Midjourney repeat');
             const { profile, presentation, entry } = this._capabilities(provider, node.nodeType, modelConfig);
@@ -327,6 +329,7 @@ export class AgentGeneration {
         const modelConfig = submitting
             ? (this.refreshModelConfig ? await this.refreshModelConfig() : this.loadModelConfig()) : null;
         const provider = this.resolveProvider(step.providerRef, step.kind);
+        if (submitting && step.kind === 'video') assertVideoGenerationAvailable(provider);
         if ((step.providerRef.endpoint && provider.endpoint !== step.providerRef.endpoint)
             || (step.providerRef.type && provider.type !== step.providerRef.type)) throw error('PROVIDER_CHANGED', 'API 路线已变更，请重新确认计划');
         const references = step.references.map(ref => {

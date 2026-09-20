@@ -40,7 +40,8 @@ import { canRecoverGenerationTask, generationFailureError, formatClientGeneratio
 import { showStatusNotification } from './status-notification.js';
 import { createApplicationLauncher, createHunyuanPanel } from './hunyuan-accounts.js';
 import { createRhinoPanel, RHINO_EDIT_SKILL } from './rhino-workbench.js';
-import { getVideoModelProfile, describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
+import { getVideoModelProfile, describeVideoModelProfile, getVideoModelGroup } from '../shared/video-model-profiles.mjs';
+import { isVideoGenerationAvailable } from '../shared/video-generation-availability.mjs';
 import { getModelPresentation, describeModelPresentation } from '../shared/model-presentation.mjs';
 import { modelConfigStore } from './model-config.js';
 import {
@@ -1192,7 +1193,7 @@ export class AgentSidebar {
     _renderAgentComposerModels() {
         if (!this.agentComposerModelList) return;
         const kind = this.agentModelKind;
-        const allProviders = this._providerVariants();
+        const allProviders = this._providerVariants().filter(isVideoGenerationAvailable);
         const providers = allProviders.filter(provider => kind === 'video'
             ? this._isVideoProvider(provider)
             : kind === 'image'
@@ -2728,7 +2729,7 @@ export class AgentSidebar {
         if (!base) return null;
         const config = modelConfigStore.getConfig();
         const { entry } = resolveModelConfigEntry(config, { ...provider, kind: 'video' });
-        return mergeVideoProfile(base, toVideoProfileOverrides(config, entry, provider));
+        return { ...mergeVideoProfile(base, toVideoProfileOverrides(config, entry, provider)), ...getVideoModelGroup(provider) };
     }
 
     _loadGenerationTasks() {
@@ -4032,7 +4033,7 @@ export class AgentSidebar {
         if (!currentImageProvider || !this._isImageProvider(currentImageProvider)) {
             this.globalConfig.imageProviderId = this._getDefaultImageProviderId();
         }
-        if (!currentVideoProvider || !this._isVideoProvider(currentVideoProvider)) {
+        if (!currentVideoProvider || !this._isVideoProvider(currentVideoProvider) || !isVideoGenerationAvailable(currentVideoProvider)) {
             this.globalConfig.videoProviderId = null;
         }
     }
@@ -4066,7 +4067,7 @@ export class AgentSidebar {
 
     _setVideoProvider(id) {
         const provider = this._findProvider(id);
-        if (!provider || !this._isVideoProvider(provider)) return;
+        if (!provider || !this._isVideoProvider(provider) || !isVideoGenerationAvailable(provider)) return;
         this.globalConfig.videoProviderId = id;
         this._saveConfig();
         this._renderProviderList();
@@ -4115,6 +4116,7 @@ export class AgentSidebar {
 
     getGenerationProviderOptions(kind) {
         return this._providerVariants()
+            .filter(provider => kind !== 'video' || isVideoGenerationAvailable(provider))
             .filter(provider => kind === 'video'
                 ? this._isVideoProvider(provider)
                 : kind === 'text'
@@ -4129,6 +4131,10 @@ export class AgentSidebar {
                     routeLabel: profile?.routeLabel || '',
                     routeGroup: profile?.routeGroup || '',
                     routeGroupLabel: profile?.routeGroupLabel || '',
+                    routeGroupDescription: profile?.routeGroupDescription || '',
+                    routeGroupOrder: profile?.routeGroupOrder ?? 0,
+                    routeOrder: profile?.routeOrder ?? 0,
+                    routeGroupAlways: profile?.routeGroupAlways === true,
                     routeModelLabel: profile?.routeModelLabel || '',
                     recommended: profile?.recommended === true,
                     modelLabel: profile?.label || '',

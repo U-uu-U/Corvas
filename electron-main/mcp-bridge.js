@@ -3326,6 +3326,9 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         if (!apiKey) return { success: false, error: '\u672a\u914d\u7f6e\u89c6\u9891 API Key' };
         if (!endpoint) return { success: false, error: '\u672a\u914d\u7f6e\u89c6\u9891 API \u5730\u5740' };
 
+        const { assertVideoGenerationAvailable } = await import('../shared/video-generation-availability.mjs');
+        assertVideoGenerationAvailable({ model, endpoint });
+
         const isMiniMaxH3 = isMiniMaxH3Model(model);
         const isSeedance = isSeedanceVideoModel(model);
         const isGlobalAiOpc = isGlobalAiOpcModel(model);
