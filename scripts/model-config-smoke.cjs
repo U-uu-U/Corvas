@@ -15,7 +15,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { app } = require('electron');
+const { app, safeStorage } = require('electron');
 const { ApiConfigStore } = require('../electron-main/api-config-store');
 
 const HERE = path.dirname(__filename);
@@ -37,7 +37,7 @@ fs.writeFileSync(path.join(profile, 'data/board.json'), JSON.stringify({
 
 // 预置一个视频 provider，用来验证 CONFIG → 既有 video profile → UI 的完整链路：
 // sd2.5-route1 在默认 CONFIG 里是「固定 30 秒、最多 9 张参考图」。
-const seeded = new ApiConfigStore(profile).save({
+const seedConfig = {
     version: 1,
     revision: 2,
     providers: [{
@@ -51,11 +51,15 @@ const seeded = new ApiConfigStore(profile).save({
         apiKey: 'smoke-key'
     }],
     globalConfig: { videoProviderId: 'smoke-video' }
-});
-if (seeded.success !== true) throw new Error(`无法写入烟测 profile：${seeded.error}`);
+};
 
 app.setPath('userData', profile);
 Object.defineProperty(app, 'isPackaged', { value: true });
+app.whenReady().then(() => {
+    const seeded = new ApiConfigStore(profile, { protect: value => safeStorage.encryptString(value),
+        unprotect: value => safeStorage.decryptString(value) }).save(seedConfig);
+    if (seeded.success !== true) finish(1, `无法写入烟测 profile：${seeded.error}`);
+});
 
 let settled = false;
 function finish(code, message) {

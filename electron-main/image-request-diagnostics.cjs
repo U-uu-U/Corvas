@@ -18,6 +18,8 @@ function imageRequestFailure(error, { requestId, startedAt, payloadBytes, imageC
     // 界面随即给出「重新提交」建议，与本条消息末尾「不要连续重复生成」
     // 的告诫直接矛盾，可能导致重复计费。
     failure.submissionUnknown = true;
+    failure.code = 'RH_SUBMISSION_UNKNOWN';
+    failure.requestId = requestId;
     failure.timedOut = Boolean(timedOut);
     return failure;
 }

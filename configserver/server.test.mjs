@@ -11,6 +11,7 @@ import { hashPassword } from './lib/auth.mjs';
 
 const SILENT = { log() {}, warn() {}, error() {} };
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SEED_CONFIG = JSON.parse(fs.readFileSync(path.join(HERE, 'seed', 'model-config.default.json'), 'utf8'));
 const PASSWORD = 'smoke-admin-password';
 
 async function startServer(options = {}) {
@@ -82,7 +83,7 @@ test('/config：公开只读、带 ETag 与 CORS、首次启动就是播种版�
         assert.match(first.response.headers.get('content-type'), /application\/json/);
         assert.equal(first.response.headers.get('access-control-allow-origin'), '*');
         assert.match(first.response.headers.get('cache-control'), /no-cache/);
-        assert.equal(first.config.models.length, 15);
+        assert.deepEqual(first.config.models, SEED_CONFIG.models);
         assert.equal(first.config.revision, 0);
         assert.equal(first.config.refreshIntervalMs, 3600000);
 
@@ -168,7 +169,7 @@ test('保存 → 客户端可见 → 回滚，全链路走通', async () => {
         const afterSave = await fetchConfig(server.base);
         assert.equal(afterSave.config.revision, 1, '服务端要盖章递增 revision');
         assert.equal(afterSave.config.models[0].label, edited.models[0].label);
-        assert.equal(afterSave.config.models.length, 15);
+        assert.deepEqual(afterSave.config.models, edited.models);
         assert.match(afterSave.config.source, /artconfig\.ravenhash\.org/);
 
         const listHtml = (await openAdmin(server.base, cookie)).html;
@@ -183,7 +184,7 @@ test('保存 → 客户端可见 → 回滚，全链路走通', async () => {
 
         const rolledBack = await fetchConfig(server.base);
         assert.equal(rolledBack.config.revision, 0, '回滚后客户端应拿到旧 revision');
-        assert.equal(rolledBack.config.models[0].label, seeded.models[0].label);
+        assert.deepEqual(rolledBack.config.models, seeded.models);
     } finally {
         await server.cleanup();
     }
@@ -224,13 +225,13 @@ test('仅保存为版本：不动现行，但要能在列表里看到并之后�
         assert.equal(saved.status, 303);
         assert.match(decodeURIComponent(saved.headers.get('location')), /现行版本未改变/);
 
-        assert.equal((await fetchConfig(server.base)).config.models.length, 15, 'draft 不影响 /config');
+        assert.deepEqual((await fetchConfig(server.base)).config.models, config.models, 'draft 不影响 /config');
         const names = server.instance.store.listNames();
         assert.equal(names.length, 2);
         const draftName = names.at(-1);
 
         await postForm(server.base, '/admin/apply', { csrf, name: draftName }, { cookie });
-        assert.equal((await fetchConfig(server.base)).config.models.length, 3, '应用草稿版本后客户端拿到新内容');
+        assert.deepEqual((await fetchConfig(server.base)).config.models, edited.models, '应用草稿版本后客户端拿到新内容');
     } finally {
         await server.cleanup();
     }

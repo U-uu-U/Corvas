@@ -77,7 +77,7 @@ function redactSensitiveText(value, options = {}) {
 /** 排查编号后缀。用户拿编号找运营，运营在诊断日志里查真实上游细节。 */
 function traceSuffix(...ids) {
     const trace = ids.map(id => String(id || '').trim()).find(Boolean);
-    return trace && /^[A-Za-z0-9_:-]{1,80}$/.test(trace) ? `\n排查编号：${trace}` : '';
+    return trace && /^[A-Za-z0-9_:-]{1,80}$/.test(trace) && !/^(?:sk-|bearer|basic)/i.test(trace) ? `\n排查编号：${trace}` : '';
 }
 
 module.exports = {

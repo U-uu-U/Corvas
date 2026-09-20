@@ -24,7 +24,9 @@ export function runtimeActions(run) {
     if (['partial_failed', 'failed'].includes(run.status)) {
         const unresolved = (run.steps || []).some(step => ['submitting', 'submitted', 'unknown'].includes(step.status)
             || (step.remoteTaskId && step.status !== 'completed' && step.confirmedFailure !== true));
-        return unresolved ? ['resume'] : ['resume', 'retry'];
+        const generation = run.plan && (!run.plan.kind || run.plan.kind === 'generation')
+            && (run.steps || []).some(step => step.status !== 'completed');
+        return unresolved || !generation ? ['resume'] : ['resume', 'retry'];
     }
     if (run.status === 'interrupted') return ['resume'];
     return isRuntimeTerminal(run.status) ? [] : ['cancel'];
@@ -134,7 +136,8 @@ export function runtimePriceText(price) {
 export function runtimeTaskTitle(run) {
     const plan = runtimeDisplayPlan(run);
     const kinds = new Set((plan?.steps || []).map(step => step.kind));
-    let title = { memory: '保存项目记忆', board: '修改画板', generation: '生成素材', external: '操作外部软件' }[plan?.kind];
+    let title = run.taskKind === 'rhino' ? '整理 Rhino 模型'
+        : { memory: '保存项目记忆', board: '修改画板', generation: '生成素材', external: '操作外部软件' }[plan?.kind];
     if (plan?.kind === 'generation') {
         if (kinds.has('image') && kinds.has('video')) title = '生成图片与视频';
         else if (kinds.has('image')) title = '生成图片';
@@ -160,10 +163,14 @@ export function runtimeStepSources(step) {
     });
 }
 
+const RHINO_STAGES = { inspect: '检查源模型', clean: '清理网格', quad: '四边面重拓扑', validate: '校验整理结果' };
 export function runtimeProgressText(run) {
     const latest = [...(run.events || [])].reverse().find(event =>
         ['tool_started', 'tool_result', 'review', 'step'].includes(event.type));
     if (!latest) return '';
+    if (latest.data?.tool === 'flow_canvas.rhino.cleanup' && RHINO_STAGES[latest.data.stage]) {
+        return `${RHINO_STAGES[latest.data.stage]} · ${latest.type === 'tool_started' ? '正在执行' : latest.data.result?.reused ? '复用已有结果' : '已完成'}`;
+    }
     const eventLabels = { tool_started: '正在执行', tool_result: '执行结果已返回', review: '正在检查结果' };
     const stepLabels = { queued: '步骤待执行', preparing: '正在准备步骤', submitting: '正在提交步骤',
         submitted: '步骤已提交', downloaded: '产出已下载', completed: '步骤已完成', failed: '步骤失败', unknown: '步骤状态待核对' };
@@ -171,6 +178,38 @@ export function runtimeProgressText(run) {
         .find(entry => entry.id === latest.data?.stepId && entry.title);
     const label = latest.type === 'step' ? stepLabels[latest.data?.status] || '步骤状态更新' : eventLabels[latest.type];
     return [label, latest.data?.title || step?.title || latest.data?.summary].filter(Boolean).join(' · ');
+}
+
+const ACTIVITY_LABELS = {
+    planning: '正在规划任务', awaiting_confirmation: '等待确认执行', running: '开始执行任务',
+    waiting_provider: '等待生成服务返回', reviewing: '正在检查生成结果', completed: '任务完成',
+    partial_failed: '任务部分完成', failed: '任务失败', interrupted: '任务已中断', canceled: '任务已取消'
+};
+const ACTIVITY_STEP_LABELS = {
+    queued: '已排队', preparing: '正在准备', submitting: '正在提交', submitted: '已提交',
+    downloaded: '产物已下载', completed: '已完成', failed: '失败', unknown: '等待核对'
+};
+
+export function runtimeActivityLines(run, limit = 80) {
+    const steps = new Map([...(run.steps || []), ...(runtimeDisplayPlan(run)?.steps || [])].map(step => [step.id, step]));
+    const lines = [];
+    for (const event of run.events || []) {
+        const data = event.data || {};
+        let text = '';
+        if (event.type === 'status') text = ACTIVITY_LABELS[data.status] || data.status || '';
+        else if (event.type === 'plan') text = '执行计划已生成，等待确认';
+        else if (event.type === 'tool_started') text = data.tool === 'flow_canvas.rhino.cleanup'
+            ? `正在${RHINO_STAGES[data.stage] || '整理 Rhino 模型'}` : `正在调用 ${data.tool || '画布工具'}`;
+        else if (event.type === 'tool_result') text = data.tool === 'flow_canvas.rhino.cleanup'
+            ? `${RHINO_STAGES[data.stage] || '整理 Rhino 模型'}：${data.result?.reused ? '复用已有结果' : '已完成'}` : `${data.tool || '画布工具'} 已返回结果`;
+        else if (event.type === 'step') {
+            const step = steps.get(data.stepId);
+            text = [ACTIVITY_STEP_LABELS[data.status] || '步骤更新', step?.title || data.title].filter(Boolean).join(' · ');
+        } else if (event.type === 'review') text = data.text ? `审阅：${data.text}` : '审阅完成';
+        else if (event.type === 'assistant' && data.text) text = String(data.text);
+        if (text) lines.push({ seq: event.seq, type: event.type, text: text.slice(0, 500) });
+    }
+    return lines.slice(-limit);
 }
 
 export class AgentRuntimeClient {
@@ -327,6 +366,10 @@ export function createRuntimeCard({ onAction, onLocate }) {
     const proposedText = element('pre', '');
     proposed.append(proposedLabel, proposedText);
     const progress = element('p', 'agent-runtime-progress');
+    const stream = element('details', 'agent-runtime-stream');
+    const streamLabel = element('summary', '', '执行过程');
+    const streamList = element('ol', 'agent-runtime-stream-list');
+    stream.append(streamLabel, streamList);
     const output = element('div', 'agent-runtime-output');
     const review = element('p', 'agent-runtime-review');
     const error = element('p', 'agent-runtime-error');
@@ -341,11 +384,12 @@ export function createRuntimeCard({ onAction, onLocate }) {
     const submit = element('button', '', '提交修改');
     submit.type = 'submit';
     feedback.append(input, submit);
-    root.append(elapsed, header, summary, steps, estimate, proposed, progress, output, review, error, actions, feedback);
+    root.append(elapsed, header, summary, steps, estimate, proposed, stream, progress, output, review, error, actions, feedback);
     let current;
     let localError = '';
     let renderedPlan = '';
     let renderedActions = '';
+    let renderedActivity = '';
     const invoke = async (action, instruction) => {
         localError = '';
         try {
@@ -354,7 +398,7 @@ export function createRuntimeCard({ onAction, onLocate }) {
         } catch (failure) {
             localError = formatClientGenerationError(failure?.message || failure);
         }
-        error.textContent = localError || formatClientGenerationError(current.error?.message || current.error || '');
+        error.textContent = localError || formatClientGenerationError(current.error || '');
         error.hidden = !error.textContent;
     };
     feedback.addEventListener('submit', event => {
@@ -425,20 +469,33 @@ export function createRuntimeCard({ onAction, onLocate }) {
             }
             progress.textContent = runtimeProgressText(run);
             progress.hidden = !progress.textContent;
+            const activity = runtimeActivityLines(run);
+            const activityKey = JSON.stringify(activity);
+            if (activityKey !== renderedActivity) {
+                renderedActivity = activityKey;
+                streamList.replaceChildren(...activity.map(line => {
+                    const item = element('li', `agent-runtime-stream-${line.type}`, line.text);
+                    item.dataset.seq = String(line.seq || '');
+                    return item;
+                }));
+            }
+            stream.hidden = !activity.length;
+            stream.open = !isRuntimeTerminal(run.status);
             output.textContent = saved && isRuntimeTerminal(run.status) ? '' : runtimeDisplayText(run);
             output.hidden = !output.textContent;
             review.textContent = run.review ? `审阅：${run.review}` : '';
             review.hidden = !review.textContent;
-            error.textContent = localError || formatClientGenerationError(run.error?.message || run.error || '');
+            error.textContent = localError || formatClientGenerationError(run.error || '');
             error.hidden = !error.textContent;
             submit.disabled = busy;
             if (!runtimeActions(run).includes('revise')) feedback.hidden = true;
             const outputFiles = onLocate ? runtimeOutputFiles(run).filter(file => file.filePath) : [];
-            const actionKey = JSON.stringify([run.id, runtimeActions(run), busy, confirmed, outputFiles]);
+            const resumeLabel = run.taskKind === 'rhino' ? '继续整理' : run.plan?.approved ? '继续已确认计划' : '继续任务';
+            const actionKey = JSON.stringify([run.id, runtimeActions(run), resumeLabel, busy, confirmed, outputFiles]);
             if (actionKey === renderedActions) return;
             renderedActions = actionKey;
             actions.replaceChildren();
-            const labels = { confirm: '确认执行', revise: '修改计划', cancel: '取消任务', resume: '继续已确认计划', retry: '重试失败项' };
+            const labels = { confirm: '确认执行', revise: '修改计划', cancel: '取消任务', resume: resumeLabel, retry: '重试失败项' };
             for (const action of runtimeActions(run)) {
                 const button = element('button', '', labels[action]);
                 button.type = 'button';

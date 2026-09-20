@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import sharp from 'sharp';
 import { BOARD_TOOL_DEFINITIONS } from '../shared/board-tool-registry.mjs';
 import agentTools from '../shared/agent-tools.cjs';
+import workflowTools from '../shared/workflow-tools.cjs';
 
 const DEFAULT_BASE_URL = `http://127.0.0.1:${process.env.FLOW_CANVAS_MCP_PORT || '18765'}`;
 const BASE_URL = (process.env.FLOW_CANVAS_BRIDGE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
@@ -15,10 +16,14 @@ const boardTools = BOARD_TOOL_DEFINITIONS.map(({ name, description, inputSchema 
     description,
     inputSchema
 }));
+const externalAgentTools = [
+    ...agentTools.AGENT_TOOL_DEFINITIONS.filter(tool => tool.name !== 'flow_canvas.rhino.cleanup'),
+    ...agentTools.AGENT_RUN_TOOLS.filter(tool => !tool.name.endsWith('.confirm'))
+];
 
 const tools = [
-    ...agentTools.AGENT_TOOL_DEFINITIONS,
-    ...agentTools.AGENT_RUN_TOOLS.filter(tool => !tool.name.endsWith('.confirm')),
+    ...externalAgentTools,
+    ...workflowTools.WORKFLOW_TOOL_DEFINITIONS,
     {
         name: 'flow_canvas.health',
         description: 'Check whether the Corvas local bridge is running and reachable.',
@@ -326,9 +331,10 @@ const tools = [
 ];
 
 const toolHandlers = {
-    ...Object.fromEntries([...agentTools.AGENT_TOOL_DEFINITIONS, ...agentTools.AGENT_RUN_TOOLS]
-        .filter(tool => !tool.name.endsWith('.confirm')).map(tool => [tool.name,
+    ...Object.fromEntries(externalAgentTools.map(tool => [tool.name,
             async (body = {}) => (await api('POST', `/agent/tools/${encodeURIComponent(tool.name)}`, body)).result])),
+    ...Object.fromEntries(workflowTools.WORKFLOW_TOOL_DEFINITIONS.map(tool => [tool.name,
+        async (body = {}) => (await api('POST', `/workflow/tools/${encodeURIComponent(tool.name)}`, body)).result])),
     'flow_canvas.health': () => api('GET', '/health'),
     'flow_canvas.config.get': () => api('GET', '/config'),
     'flow_canvas.config.update': (body = {}) => api('PATCH', '/config', body),
@@ -366,8 +372,8 @@ const pendingMessages = new Set();
 
 process.stdin.on('data', chunk => {
     inputBuffer = Buffer.concat([inputBuffer, chunk]);
-    for (const message of readMessages()) {
-        const pending = handleMessage(message).catch(error => {
+    for (const { message, framing } of readMessages()) {
+        const pending = handleMessage(message, framing).catch(error => {
             if (message?.id !== undefined) {
                 send({
                     jsonrpc: '2.0',
@@ -377,7 +383,7 @@ process.stdin.on('data', chunk => {
                         message: error.message,
                         ...(error.data === undefined ? {} : { data: error.data })
                     }
-                });
+                }, framing);
             }
         }).finally(() => {
             pendingMessages.delete(pending);
@@ -395,8 +401,9 @@ process.stdin.on('end', () => {
 function readMessages() {
     const messages = [];
     while (inputBuffer.length > 0) {
-        const headerEnd = inputBuffer.indexOf('\r\n\r\n');
-        if (headerEnd >= 0) {
+        if (/^Content-Length:/i.test(inputBuffer.toString('ascii', 0, 15))) {
+            const headerEnd = inputBuffer.indexOf('\r\n\r\n');
+            if (headerEnd < 0) return messages;
             const header = inputBuffer.slice(0, headerEnd).toString('utf8');
             const lengthMatch = header.match(/Content-Length:\s*(\d+)/i);
             if (!lengthMatch) {
@@ -409,7 +416,7 @@ function readMessages() {
             if (inputBuffer.length < bodyEnd) return messages;
             const raw = inputBuffer.slice(bodyStart, bodyEnd).toString('utf8');
             inputBuffer = inputBuffer.slice(bodyEnd);
-            messages.push(JSON.parse(raw));
+            messages.push({ message: JSON.parse(raw), framing: 'content-length' });
             continue;
         }
 
@@ -417,12 +424,12 @@ function readMessages() {
         if (newline < 0) return messages;
         const line = inputBuffer.slice(0, newline).toString('utf8').trim();
         inputBuffer = inputBuffer.slice(newline + 1);
-        if (line) messages.push(JSON.parse(line));
+        if (line) messages.push({ message: JSON.parse(line), framing: 'jsonl' });
     }
     return messages;
 }
 
-async function handleMessage(message) {
+async function handleMessage(message, framing = 'jsonl') {
     if (!message || typeof message !== 'object') return;
     const { id, method, params = {} } = message;
 
@@ -439,17 +446,17 @@ async function handleMessage(message) {
                     name: 'flow-canvas-mcp',
                     version: '0.1.0'
                 }
-            });
+            }, framing);
             return;
         }
 
         if (method === 'ping') {
-            sendResult(id, {});
+            sendResult(id, {}, framing);
             return;
         }
 
         if (method === 'tools/list') {
-            sendResult(id, { tools });
+            sendResult(id, { tools }, framing);
             return;
         }
 
@@ -467,7 +474,7 @@ async function handleMessage(message) {
                         text: JSON.stringify(result, null, 2)
                     }
                 ]
-            });
+            }, framing);
             return;
         }
 
@@ -481,7 +488,7 @@ async function handleMessage(message) {
                 message: error.message,
                 ...(error.data === undefined ? {} : { data: error.data })
             }
-        });
+        }, framing);
     }
 }
 
@@ -791,15 +798,17 @@ function required(value, name) {
     return String(value);
 }
 
-function sendResult(id, result) {
-    send({ jsonrpc: '2.0', id, result });
+function sendResult(id, result, framing = 'jsonl') {
+    send({ jsonrpc: '2.0', id, result }, framing);
 }
 
-function send(payload) {
+function send(payload, framing = 'jsonl') {
     const json = JSON.stringify(payload);
-    const body = Buffer.from(json, 'utf8');
-    process.stdout.write(`Content-Length: ${body.length}\r\n\r\n`);
-    process.stdout.write(body);
+    if (framing === 'content-length') {
+        const body = Buffer.from(json, 'utf8');
+        process.stdout.write(`Content-Length: ${body.length}\r\n\r\n`);
+        process.stdout.write(body);
+    } else process.stdout.write(`${json}\n`);
 }
 
 function maybeExitAfterStdinEnd() {

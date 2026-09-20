@@ -24,9 +24,11 @@ async function poll(read, test, timeout = 30000) {
     const live = process.env.FLOW_CANVAS_SMOKE_LIVE === '1';
     const liveVideo = process.env.FLOW_CANVAS_SMOKE_LIVE_VIDEO === '1';
     const multiReference = process.env.FLOW_CANVAS_SMOKE_MULTI_REFERENCE === '1' && !live;
-    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-agent-smoke-'));
+    const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-agent-smoke-'));
+    const profile = path.join(temporaryRoot, 'profile');
+    await fs.mkdir(profile);
     if (live) await fs.copyFile(path.join(process.env.APPDATA, 'flow-canvas', 'Local State'), path.join(profile, 'Local State'));
-    const assets = path.join(profile, 'assets');
+    const assets = path.join(temporaryRoot, 'assets');
     await fs.mkdir(path.join(profile, 'data'), { recursive: true });
     await fs.mkdir(assets);
     const image = await sharp({ create: { width: 400, height: 300, channels: 3, background: '#759da8' } }).png().toBuffer();
@@ -45,6 +47,7 @@ async function poll(read, test, timeout = 30000) {
     }
     let submissions = 0, electronApp;
     const requests = [];
+    const mockToolErrors = [];
     const server = http.createServer(async (req, res) => {
         const chunks = [];
         for await (const chunk of req) chunks.push(chunk);
@@ -64,6 +67,13 @@ async function poll(read, test, timeout = 30000) {
         const outputs = (body.messages || []).filter(m => m.role === 'tool').map(m => { try { return JSON.parse(m.content); } catch { return {}; } });
         let message = { role: 'assistant', content: '审阅通过：已检查画面，声音与完整运动未验证。' };
         if (body.tools?.length) {
+            const failure = outputs.find(output => output.error);
+            if (failure) {
+                mockToolErrors.push(failure.error);
+                res.end(JSON.stringify({ choices: [{ message: { role: 'assistant',
+                    content: `Mock tool failed: ${JSON.stringify(failure.error)}` }, finish_reason: 'stop' }] }));
+                return;
+            }
             const savingRun = (body.messages || []).find(m => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith('SAVE:'))?.content.slice(5);
             if (savingRun) {
                 if (!outputs.length) message = { role: 'assistant', content: '', tool_calls: [tool('save-workflow', 'flow_canvas.skill.save', { runId: savingRun, name: '验收流程' })] };
@@ -132,6 +142,11 @@ async function poll(read, test, timeout = 30000) {
             messages: [{ role: 'user', content: text }] }), instruction);
         const pending = await poll(() => page.evaluate(id => window.flowCanvas.agent.get({ runId: id }), run.id),
             state => state.status === 'awaiting_confirmation' || ['failed', 'completed'].includes(state.status), live ? 180000 : 30000);
+        if (!live && pending.status !== 'awaiting_confirmation') console.error(JSON.stringify({
+            mockToolResults: pending.events.filter(event => event.type === 'tool_result').map(event => ({
+                tool: event.data.tool, result: event.data.result
+            }))
+        }, null, 2));
         assert.equal(pending.status, 'awaiting_confirmation', pending.error || pending.outputText);
         assert.equal(submissions, 0);
         assert.equal(pending.plan.steps.length, 1);
@@ -180,6 +195,7 @@ async function poll(read, test, timeout = 30000) {
         }
         assert.ok(board.folderGroups.find(g => g.id === 'smoke').savedItems.some(item => item.metadata?.agentRunId === run.id && item.filePath));
         if (!live) assert.ok(requests.some(request => (request.messages || []).some(message => Array.isArray(message.content) && message.content.some(part => part.type === 'image_url'))));
+        assert.deepEqual(mockToolErrors, [], 'Every mock workflow tool must succeed');
         const directory = path.resolve('output', 'agent-smoke');
         await fs.mkdir(directory, { recursive: true });
         if (!process.env.FLOW_CANVAS_SMOKE_ASAR) await page.evaluate(async snapshot => {
@@ -198,6 +214,6 @@ async function poll(read, test, timeout = 30000) {
     } finally {
         await electronApp?.close();
         await new Promise(resolve => server.close(resolve));
-        await fs.rm(profile, { recursive: true, force: true });
+        await fs.rm(temporaryRoot, { recursive: true, force: true });
     }
 })().catch(error => { console.error(error); process.exitCode = 1; });

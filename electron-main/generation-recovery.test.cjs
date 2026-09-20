@@ -8,6 +8,25 @@ const Bridge = require('./mcp-bridge');
 const { mapLocalError } = require('../shared/public-api-error.cjs');
 const portraitReason = 'For 肖像保护, Dreamina Seedance 2.5 只支持生成包含您自己的视频. 请换一张参考图, or create a video from text。';
 
+test('pending video URLs are ignored until the existing task returns a completed result', async () => {
+    let polls = 0;
+    const progress = [];
+    const completed = await Bridge.pollOpenAiVideoTask('https://api.test/v1/video/generations', 'fixture', 'task_10194',
+        { status: 'queued', video_url: 'https://cdn.test/not-ready.mp4' }, {
+            wait: async () => {}, onProgress: event => progress.push(event.stage),
+            fetchTask: async (_url, options) => {
+                assert.equal(options.method, 'GET');
+                polls++;
+                return { response: { ok: true, status: 200 }, text: JSON.stringify(polls === 1
+                    ? { id: 'task_10194', status: 'in_progress', video_url: 'https://cdn.test/not-ready.mp4' }
+                    : { id: 'task_10194', status: 'completed', video_url: 'https://cdn.test/ready.mp4' }) };
+            }
+        });
+    assert.equal(polls, 2);
+    assert.equal(completed.url, 'https://cdn.test/ready.mp4');
+    assert.deepEqual(progress, ['queued', 'processing', 'download']);
+});
+
 test('portrait failures stop polling immediately for both HTTP and business-error envelopes', async () => {
     for (const status of [200, 400, 500]) {
         let calls = 0;

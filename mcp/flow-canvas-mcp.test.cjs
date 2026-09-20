@@ -3,6 +3,10 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const Ajv = require('ajv');
+const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
+const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
+const { WORKFLOW_TOOL_DEFINITIONS, HUNYUAN_RHINO_WORKFLOW } = require('../shared/workflow-tools.cjs');
 
 test('stdio MCP exposes and calls the shared board transaction tools', async (t) => {
     const bridgeRequests = [];
@@ -50,6 +54,7 @@ test('stdio MCP exposes and calls the shared board transaction tools', async (t)
     assert.ok(names.includes('flow_canvas.board.transaction.preview'));
     assert.ok(names.includes('flow_canvas.board.transaction.apply'));
     assert.ok(names.includes('flow_canvas.board.transaction.undo'));
+    assert.equal(names.includes('flow_canvas.rhino.cleanup'), false);
 
     const called = await client.request('tools/call', {
         name: 'flow_canvas.board.get_snapshot',
@@ -62,6 +67,146 @@ test('stdio MCP exposes and calls the shared board transaction tools', async (t)
         path: '/board/snapshot',
         body: { scope: 'project' }
     }]);
+});
+
+test('workflow schemas require scoped IDs and reject unsupported inputs', () => {
+    const validator = new Ajv({ allErrors: true });
+    const validators = Object.fromEntries(WORKFLOW_TOOL_DEFINITIONS.map(tool => [
+        tool.name.replace('flow_canvas.workflow.', ''), validator.compile(tool.inputSchema)
+    ]));
+    const run = {
+        workflowId: HUNYUAN_RHINO_WORKFLOW.id,
+        version: 1,
+        projectId: null,
+        requestId: 'request-1',
+        source: { accountId: 'account-1', generationId: 'a'.repeat(32) }
+    };
+    assert.equal(validators.run(run), true);
+    assert.equal(validators.run({ ...run, parameters: { targetQuads: 80000 } }), true);
+    for (const key of ['workflowId', 'version', 'projectId', 'requestId', 'source']) {
+        const input = { ...run };
+        delete input[key];
+        assert.equal(validators.run(input), false, `Missing ${key} must be rejected`);
+    }
+    for (const patch of [
+        { version: 0 }, { version: 1.5 }, { requestId: '' }, { requestId: 'r'.repeat(161) },
+        { source: { ...run.source, generationId: 'not-an-id' } },
+        { source: { ...run.source, downloadUrl: 'https://example.invalid/model.obj' } },
+        { parameters: { targetQuads: 499 } }, { parameters: { targetQuads: 100001 } },
+        { parameters: { targetQuads: 500.5 } }, { parameters: { script: 'arbitrary' } },
+        { script: 'arbitrary' }
+    ]) assert.equal(validators.run({ ...run, ...patch }), false, JSON.stringify(patch));
+    for (const action of ['status', 'confirm', 'resume', 'cancel']) {
+        assert.equal(validators[action]({ projectId: 'project-1', jobId: 'f'.repeat(32) }), true);
+        assert.equal(validators[action]({ jobId: 'f'.repeat(32) }), false);
+        assert.equal(validators[action]({ projectId: null, jobId: '../job' }), false);
+    }
+    assert.equal(validators.history({ projectId: null, offset: 0, limit: 100 }), true);
+    assert.equal(validators.history({ projectId: null, offset: -1 }), false);
+    assert.equal(validators.history({ projectId: null, limit: 101 }), false);
+    assert.equal(validators.history({}), false);
+    assert.equal(validators.list({ extra: true }), false);
+    assert.equal(validators.sources({ accountId: 'account-1' }), true);
+    assert.equal(validators.sources({ accountId: '' }), false);
+    assert.equal(validators.get({ workflowId: HUNYUAN_RHINO_WORKFLOW.id }), true);
+    assert.deepEqual(HUNYUAN_RHINO_WORKFLOW.steps.map(step => step.id),
+        ['download', 'connect', 'import', 'inspect', 'clean', 'quad', 'validate']);
+});
+
+test('stdio MCP exposes workflows and forwards them directly to workflow routes', async t => {
+    const requests = [];
+    const bridge = http.createServer(async (req, res) => {
+        const body = await readJson(req);
+        requests.push({ method: req.method, path: req.url, body });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, result: { jobId: 'b'.repeat(32), status: 'queued' } }));
+    });
+    await listen(bridge);
+    t.after(() => closeServer(bridge));
+    const client = spawnMcpClient(t, bridge);
+    const listed = await client.request('tools/list', {});
+    const workflowTools = listed.result.tools.filter(tool => tool.name.startsWith('flow_canvas.workflow.'));
+    assert.deepEqual(workflowTools, WORKFLOW_TOOL_DEFINITIONS);
+    const readOnly = workflowTools.filter(tool => tool.annotations?.readOnlyHint)
+        .map(tool => tool.name.replace('flow_canvas.workflow.', ''));
+    assert.deepEqual(readOnly, ['list', 'get', 'sources', 'status', 'history']);
+    const inputs = {
+        list: {},
+        get: { workflowId: 'hunyuan-rhino-cleanup' },
+        sources: { accountId: 'account-1' },
+        run: { workflowId: 'hunyuan-rhino-cleanup', version: 1, projectId: null,
+            requestId: 'request-1', source: { accountId: 'account-1', generationId: 'a'.repeat(32) } },
+        status: { projectId: null, jobId: 'b'.repeat(32) },
+        history: { projectId: null, limit: 20 },
+        confirm: { projectId: null, jobId: 'b'.repeat(32) },
+        resume: { projectId: null, jobId: 'b'.repeat(32) },
+        cancel: { projectId: null, jobId: 'b'.repeat(32) }
+    };
+    for (const [action, input] of Object.entries(inputs)) {
+        const name = `flow_canvas.workflow.${action}`;
+        const response = await client.request('tools/call', { name, arguments: input });
+        assert.deepEqual(JSON.parse(response.result.content[0].text), { jobId: 'b'.repeat(32), status: 'queued' });
+        assert.deepEqual(requests.at(-1), { method: 'POST', path: `/workflow/tools/${name}`, body: input });
+    }
+    const obsolete = await client.request('tools/call', { name: 'flow_canvas.rhino.cleanup', arguments: { stage: 'quad' } });
+    assert.equal(obsolete.error.code, -32602);
+    assert.equal(requests.length, 9);
+});
+
+test('stdio MCP preserves workflow recovery errors', async t => {
+    const bridge = http.createServer((_req, res) => {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, code: 'WORKFLOW_CONFLICT', error: 'Request inputs changed',
+            details: { jobId: 'b'.repeat(32), recovery: 'Use the original request parameters' } }));
+    });
+    await listen(bridge);
+    t.after(() => closeServer(bridge));
+    const response = await spawnMcpClient(t, bridge).request('tools/call', {
+        name: 'flow_canvas.workflow.resume', arguments: { projectId: null, jobId: 'b'.repeat(32) }
+    });
+    assert.equal(response.error.code, -32000);
+    assert.deepEqual(response.error.data, { status: 409, code: 'WORKFLOW_CONFLICT',
+        details: { jobId: 'b'.repeat(32), recovery: 'Use the original request parameters' } });
+});
+
+function spawnMcpClient(t, bridge) {
+    const child = spawn(process.execPath, [path.join(__dirname, 'flow-canvas-mcp.mjs')], {
+        cwd: path.join(__dirname, '..'),
+        env: { ...process.env, FLOW_CANVAS_BRIDGE_URL: `http://127.0.0.1:${bridge.address().port}` },
+        stdio: ['pipe', 'pipe', 'pipe']
+    });
+    t.after(() => {
+        child.stdin.end();
+        if (!child.killed) child.kill();
+    });
+    return createMcpClient(child);
+}
+
+test('official MCP SDK can initialize, discover, and call workflows over JSONL', async t => {
+    const requests = [];
+    const bridge = http.createServer(async (req, res) => {
+        const body = await readJson(req);
+        requests.push({ path: req.url, body });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, result: { workflows: [HUNYUAN_RHINO_WORKFLOW] } }));
+    });
+    await listen(bridge);
+    t.after(() => closeServer(bridge));
+    const transport = new StdioClientTransport({
+        command: process.execPath,
+        args: [path.join(__dirname, 'flow-canvas-mcp.mjs')],
+        cwd: path.join(__dirname, '..'),
+        env: { ...process.env, FLOW_CANVAS_BRIDGE_URL: `http://127.0.0.1:${bridge.address().port}` },
+        stderr: 'pipe'
+    });
+    const client = new Client({ name: 'workflow-sdk-test', version: '1.0.0' });
+    t.after(() => client.close());
+    await client.connect(transport, { timeout: 5000 });
+    const listed = await client.listTools();
+    assert.equal(listed.tools.some(tool => tool.name === 'flow_canvas.workflow.run'), true);
+    const result = await client.callTool({ name: 'flow_canvas.workflow.list', arguments: {} });
+    assert.deepEqual(JSON.parse(result.content[0].text), { workflows: [HUNYUAN_RHINO_WORKFLOW] });
+    assert.deepEqual(requests, [{ path: '/workflow/tools/flow_canvas.workflow.list', body: {} }]);
 });
 
 test('stdio MCP preserves structured Flow Canvas bridge errors', async (t) => {

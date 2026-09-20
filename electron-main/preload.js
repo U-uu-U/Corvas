@@ -3,6 +3,13 @@
 // ============================================================
 
 const { contextBridge, ipcRenderer } = require('electron');
+// Native File paths are registered before the page starts loading dropped media.
+// This channel is deliberately not exposed through the renderer API.
+window.addEventListener('drop', event => {
+    if (!event.isTrusted) return;
+    const paths = Array.from(event.dataTransfer?.files || []).map(file => file.path).filter(Boolean);
+    if (paths.length) ipcRenderer.sendSync('media:grant-drop', paths);
+}, true);
 window.addEventListener('error', event => ipcRenderer.send('diagnostics:renderer', {
     type: 'error', message: event.message, stack: event.error?.stack
 }));
@@ -51,6 +58,51 @@ contextBridge.exposeInMainWorld('flowCanvas', {
         save: config => ipcRenderer.invoke('mcp-client:save', config),
         remove: request => ipcRenderer.invoke('mcp-client:remove', request),
         test: request => ipcRenderer.invoke('mcp-client:test', request),
+    },
+
+    hunyuan: {
+        list: () => ipcRenderer.invoke('hunyuan:list'),
+        save: account => ipcRenderer.invoke('hunyuan:save', account),
+        remove: request => ipcRenderer.invoke('hunyuan:remove', request),
+        open: request => ipcRenderer.invoke('hunyuan:open', request),
+        workflowState: () => ipcRenderer.invoke('hunyuan:workflowState'),
+        configureWorkflow: request => ipcRenderer.invoke('hunyuan:configureWorkflow', request),
+        workflowAction: request => ipcRenderer.invoke('hunyuan:workflowAction', request),
+        onWorkflowChanged: callback => {
+            const listener = (_, data) => callback(data);
+            ipcRenderer.on('hunyuan:workflow-changed', listener);
+            return () => ipcRenderer.removeListener('hunyuan:workflow-changed', listener);
+        },
+        onChanged: callback => {
+            const listener = (_, data) => callback(data);
+            ipcRenderer.on('hunyuan:changed', listener);
+            return () => ipcRenderer.removeListener('hunyuan:changed', listener);
+        }
+    },
+
+    rhino: {
+        status: () => ipcRenderer.invoke('rhino:status'),
+        save: settings => ipcRenderer.invoke('rhino:save', settings),
+        open: request => ipcRenderer.invoke('rhino:open', request),
+        choose: () => ipcRenderer.invoke('rhino:choose'),
+        copyCommand: () => ipcRenderer.invoke('rhino:copyCommand'),
+        onChanged: callback => {
+            const listener = (_, data) => callback(data);
+            ipcRenderer.on('rhino:changed', listener);
+            return () => ipcRenderer.removeListener('rhino:changed', listener);
+        }
+    },
+
+    blender: {
+        status: () => ipcRenderer.invoke('blender:status'),
+        save: settings => ipcRenderer.invoke('blender:save', settings),
+        open: () => ipcRenderer.invoke('blender:open'),
+        choose: () => ipcRenderer.invoke('blender:choose'),
+        onChanged: callback => {
+            const listener = (_, data) => callback(data);
+            ipcRenderer.on('blender:changed', listener);
+            return () => ipcRenderer.removeListener('blender:changed', listener);
+        }
     },
 
     agent: {

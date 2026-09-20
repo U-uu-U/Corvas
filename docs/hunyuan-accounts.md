@@ -1,0 +1,62 @@
+# 混元 3D 网页账号
+
+鼠标停在右下角圆球上，点击「混元 3D」，在右侧账号栏添加一个账号名称，然后点击「打开」，窗口会直接显示并进入「3D Studio → 几何生成」。首次在混元官网完成登录，后续打开会复用该账号的本地会话；登录失效时仍需重新登录。
+
+- 每个账号使用独立浏览器进程和独立数据目录，可同时打开。「切换窗口」会将该账号已有窗口恢复到前台，并切到几何生成页；已经在几何生成页时不会重新加载，以保留正在编辑的内容。
+- 账号名称是本地备注，不代表已读取或验证混元用户身份。窗口状态只表示网页加载和窗口是否打开。
+- 重命名不会改变登录会话。移除账号需在卡片中确认，会关闭其主窗口与登录弹窗，清理该账号的本机登录数据和缓存；不会删除混元服务器上的作品。
+- 关闭账号侧栏不会关闭已经打开的网页。退出 Corvas 会关闭关联的混元窗口。
+- 账号会话独立于系统 Chrome；原有 Chrome 登录不会自动导入。
+- 按住 Ctrl（macOS 也可用 Command）拖动画布中的图片，可放入 3D Studio 的图片上传框；多选素材后可一起拖出，具体数量和格式由上传框决定。拖出的是本地文件副本，不会复制画布节点或移动原图。原先 Ctrl 拖动复制节点的行为已移除，复制按钮和快捷键仍可使用。
+
+## 实现
+
+`electron-main/hunyuan-accounts.cjs` 保存账号名称、稳定 UUID、创建及最近打开时间，文件为应用数据目录下的 `data/hunyuan-accounts.json`。每个账号的浏览器进程由 `hunyuan-browser-process.cjs` 拉起，`hunyuan-window-worker.cjs` 负责网页窗口；账号数据目录固定为 `data/hunyuan-browser-profiles/<uuid>`，不进入画板、API 配置或账号表单。
+
+应用入口 `entry.cjs` 区分画布与账号浏览器进程，打包版本复用同一 Electron 可执行程序，开发版本使用相同的入口脚本。账号浏览器不会启动画布、Agent、文件监听或本地 API 服务，控制消息只通过父子进程 IPC 传递。
+
+旧版只隔离 session partition，仍处在同一 Electron 主进程内。Electron 28 会按窗口名在主进程范围内复用弹窗，导致不同账号的同名登录弹窗串用。独立进程同时隔离 Chromium 窗口名注册表、Cookie、localStorage、缓存及 Service Worker。这里不伪装设备指纹，也不承诺平台会将账号识别为不同设备。
+
+升级后保留原账号名称，新环境第一次需要重新登录。旧 partition 数据不会自动复制，以免继承已经串用的登录状态；旧数据先保留，在用户明确移除相应账号时一并清理。
+
+入口固定为 `https://3d.hunyuan.tencent.com/studio/creation/geo`。网页和登录弹窗使用所属账号的同一会话，开启 sandbox/contextIsolation，关闭 Node 集成，不载入画布 preload。混元主窗口不再注入工作流浮层，也不向网页暴露文件或 Rhino API。账号 IPC 只接受 Corvas 主窗口的主框架请求。
+
+## 模型生成后发送到 Rhino
+
+混元窗口和画布顶部的工作流浮层已移除，包括常驻「导入到 Rhino」按钮。现在在外部 Codex 对话中描述导入要求，由 MCP `workflow.sources` 读取当前模型，再用 `workflow.run` 提交；历史模型也可使用，不需要重新生成。配套指引见 [工作流 Skill](../skills/hunyuan-rhino-workflow/SKILL.md)。
+
+当前模型从网页已加载模块的资产状态和预览状态读取，优先使用正在显示的 `modelUrl`，不会用作品列表的第一项或最近生成结果代替。提交绑定 `sources` 返回的模型版本，后续页面切换不会改绑任务。未保存的网页编辑、尚未加载的模型和未保存为资产的网页上传模型需要先处理完成。官网模块结构变化时，读取错误经 MCP 返回 Codex，不猜测模型。
+
+同一项目、模型和参数的活跃提交会合并为原任务。使用相同 `requestId` 重试不会重复执行；处理完成后使用新 `requestId` 才会创建新任务和导入副本。模型版本比较忽略 COS 的临时签名字段，同时保留 `versionId` 等内容版本参数。
+
+复用 Agent 输入框右下角的「自动 / 手动」模式，无需设置第二个开关。旧配置值 `ask` 对应现在的「手动」。
+
+- 自动：几何生成完成后下载 FBX，打开并连接 Rhino，导入新图层，随后运行现有「Rhino 模型编辑」Skill。
+- 手动：任务进入 `awaiting_confirmation`，Codex 读取状态并在对话中呈现确认选项；授权后调用 `workflow.confirm`，不再处理时调用 `workflow.cancel`。
+- 任务进度、错误和恢复选项通过 MCP `workflow.status/history` 返回。已有 Agent 任务记录保留，但无需打开内置 Agent 侧栏才能确认或恢复。单纯连接 MCP 不会主动唤醒空闲的 Codex 对话或弹出选择框。
+- 切换成手动会拦住尚未开始导入、且没有明确确认的任务；已经开始的 Rhino 操作继续执行。多个模型依次处理。
+- Rhino 或 Grasshopper 因启动提示延迟时，任务保持「等待 Rhino / Cordyceps 连接」；服务就绪后自动接续，也可在 Codex 中要求重试。Rhino 自身的插件窗口不属于 Corvas 浮层。已完成的 FBX 下载会复用，即使混元窗口随后关闭也无需重新下载。旧版本中仅因 Rhino 启动超时失败、且还未开始导入的任务会恢复为等待状态。
+- 首次连接只观察已有历史，不自动导入已完成的旧模型。连接期间新提交的任务、或观察到的待处理任务完成后会进入队列。账号、作品 ID 和提交时间共同区分一次生成，重开页面不会重复导入。
+- Rhino 导入保留当前文档、原有对象和选择，记录实际新增的网格 ID；整理 Skill 只处理这些网格，并保留原件，在副本上清理、统一法线和 QuadRemesh。默认不转 NURBS，也不清空 Grasshopper。
+- 执行过程记录在检测到任务时绑定的原项目、原 Agent 对话。此类自动整理任务只获得目标 Rhino MCP 的工具。应用退出、导入超时或整理中断后不会盲目重放，Codex 先检查 `canResume`、`availableActions` 和 `blockedBy`，再按用户意图恢复或取消原任务。移除浮层不会改变已有任务状态。
+
+新模型下载需要对应混元窗口保持打开并登录，以及已安装且可连接的 Rhino/Cordyceps。这条固定整理流程由内置脚本执行，不再依赖文字模型在线生成 Python；普通 Agent 对话仍按原配置运行。内置 Skill、导入脚本和浏览器适配器随安装包分发，不依赖用户的 Codex Skill 目录。
+
+整理任务卡使用「继续整理」恢复；旧版卡片误发 `retry` 时，后台也会转入恢复流程，而不是要求一个并不存在的图片生成批次。恢复时先检查报告和源对象；若 Rhino 已重开且当前文档完全为空，可用本任务已下载模型恢复源对象，旧阶段报告另存保留。有其他模型的文档不会自动覆盖或导入。
+
+实际整理按 `inspect → clean → quad → validate` 执行，调用 `flow_canvas.rhino.cleanup`。每个阶段先保存真实 Python 文件及派发记录，再通过 Cordyceps 执行。已完成阶段会核对实际对象后复用；响应不明或重拓扑仍在执行时不重复派发。Rhino 的 `RunPythonScript` 只接受文件路径，不接受 Python 源码字符串。
+
+`hunyuan-model-watcher.cjs` 使用官网当前任务协议轮询几何生成状态：`/api/game3d/general_info/get_works_list`，`worksPipeline=2`，`pipelineStatus=2` 为完成，模型地址来自 `modelInfo.geometryGenerationRsp.fbxUrl`。每次请求附带 `requestId`。若返回 GLB，使用官网 `/api/game3d/resource/format_conversions` 转为 FBX。协议来源为 2026-09-19 官网静态脚本；官网接口改变时可能需要更新适配器。
+
+文件保存在各账号独立目录下的 `rhino-models`，传递状态保存在 `data/hunyuan-rhino-jobs.json`。导入统计和整理阶段报告存放在 `data/rhino-model-results/<job-id>`，报告按任务隔离。当前混元任务使用内置 Skill v3 的分阶段执行器，不依赖文字模型现场编写 Python。2026-09-19 已实机完成该模型的检查、清理、QuadRemesh 与校验：1,499,668 面输入得到 79,340 面输出（79,290 个四边面、50 个三角面），网格有效且闭合，原件保留；重拓扑约用时 143 秒。恢复入口、脚本落盘、重复执行保护及项目绑定的相关回归通过，未跑全仓库测试。
+
+## 验证
+
+```powershell
+node --test electron-main/hunyuan-accounts.test.cjs
+node scripts/hunyuan-accounts-smoke.cjs
+```
+
+桌面测试需要 Playwright，可通过 `PLAYWRIGHT_MODULE` 指定已安装模块路径。默认使用独立临时配置和模拟网页，验证几何生成直达、切换窗口时的前台显示、当前页面编辑状态保留，以及两个浏览器进程的 Cookie/localStorage 隔离、同时打开同名登录弹窗、保留 opener、重启保存、窗口复用、重命名与移除，以及侧栏切换和不同主题布局。调试端口仅在隔离冒烟环境中启用。
+
+设置 `FLOW_HUNYUAN_SMOKE_LIVE=1` 可在隔离配置中打开官网并验证登录页加载，不登录用户账号、不提交生成。

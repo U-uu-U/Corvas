@@ -4,6 +4,22 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+test('Zhubo Pro sends both supported resolutions and complete multimodal references', () => {
+    const refs = n => Array.from({ length: n }, (_, i) => `https://example.test/${i}`);
+    for (const resolution of ['480p', '720p']) {
+        const input = { model: 'seedance-2.5-pro', prompt: 'fixture', duration: 12, resolution,
+            referenceImages: refs(30), referenceVideos: refs(10), referenceAudios: refs(10) };
+        const body = buildSeedance25RequestBody(input);
+        assert.equal(body.resolution, resolution);
+        assert.equal(body.seconds, 12);
+        assert.deepEqual(body.image_urls, input.referenceImages);
+        assert.deepEqual(body.video_urls, input.referenceVideos);
+        assert.deepEqual(body.audio_urls, input.referenceAudios);
+        assert.throws(() => buildSeedance25RequestBody({ ...input, resolution: '1080p' }));
+        assert.throws(() => buildSeedance25RequestBody({ ...input, referenceImages: refs(31) }));
+    }
+});
+
 test('Seedance route alias retains fixed duration while preserving the relay model ID', () => {
     const { buildSeedance25RequestBody, seedance25ReferenceImageLimit } = require('./video-provider-adapters');
     const body = buildSeedance25RequestBody({ model: 'sd2.5-route1', prompt: 'test', duration: 30 });
@@ -53,6 +69,7 @@ const {
     buildVideoGenerationEndpoint,
     getVideoPayloadError,
     getVideoResultUrl,
+    getVideoTaskId,
     getVideoTaskProgress,
     getVideoTaskStatus,
     isMiniMaxH3NativeEndpoint,
@@ -293,6 +310,27 @@ test('MiniMax H3 视频协议: 中转地址不被改写，显式任务中心按 
     );
     assert.equal(isMiniMaxH3UnavailableResponse(400, '{"error":{"message":"模型不可用"}}'), true);
     assert.equal(isMiniMaxH3UnavailableResponse(401, '模型不可用'), false);
+});
+
+test('video relay task URLs wrapped as data URLs recover task identity without downloading the status endpoint', () => {
+    for (const route of ['videos', 'videos/generations', 'video/generations', 'tasks']) {
+        const url = `https://video.example/v1/${route}/task_10194?model=seedance_v2.5`;
+        const payload = { created: 1789653371, data: [{ url }] };
+        assert.equal(getVideoTaskId(payload), 'task_10194');
+        assert.equal(getVideoResultUrl(payload), '');
+        assert.equal(getVideoResultUrl({ ...payload, data: [{ url }, { url: 'https://cdn.example/output.mp4' }] }),
+            'https://cdn.example/output.mp4');
+    }
+    assert.equal(getVideoTaskId({ data: [{ url: 'https://cdn.example/output.mp4' }] }), '');
+    assert.equal(getVideoResultUrl({ data: [{ url: 'https://cdn.example/output.mp4' }] }), 'https://cdn.example/output.mp4');
+    assert.equal(getVideoResultUrl({ id: 'task_10194', data: [{ url: 'https://video.example/v1/videos/task_10194/content' }] }),
+        'https://video.example/v1/videos/task_10194/content');
+});
+
+test('pending or failed video responses never treat attached URLs as completed media', () => {
+    for (const status of ['queued', 'pending', 'processing', 'in_progress', 'failed', 'cancelled']) {
+        assert.equal(getVideoResultUrl({ id: 'task_test', status, video_url: 'https://cdn.example/preview.mp4' }), '');
+    }
 });
 
 test('HM multimodal routes use the documented unified wire format without truncation', () => {

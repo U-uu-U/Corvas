@@ -405,7 +405,6 @@
     color: #3f3f47;
 }
 
-:root[data-theme='light'] .context-menu-item:hover,
 :root[data-theme='light'] .plan-context-menu button:hover,
 :root[data-theme='light'] .connection-node-menu-item:hover,
 :root[data-theme='light'] .connection-node-menu-item:focus-visible,
@@ -419,6 +418,16 @@
 :root[data-theme='light'] .plan-context-menu-divider,
 :root[data-theme='light'] .op-node-quick-menu-divider {
     background: #e6e6eb;
+}
+
+:root[data-theme='light'] .agent-runtime-stream {
+    border-color: #e5e4ea;
+    background: #fafafa;
+}
+
+:root[data-theme='light'] .agent-runtime-stream summary,
+:root[data-theme='light'] .agent-runtime-stream-list {
+    color: #666672;
 }
 
 :root[data-theme='light'] .connection-node-menu-heading,

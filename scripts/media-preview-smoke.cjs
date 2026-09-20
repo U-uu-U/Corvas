@@ -11,12 +11,12 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
     let app;
     try {
         await fs.mkdir(path.join(profile, 'data'));
-        const mediaRoot = path.join(profile, 'media-root');
+        const mediaRoot = path.join(profile, 'data', 'captured');
         await fs.mkdir(mediaRoot);
-        const generated = path.join(profile, 'large.webp');
+        const generated = path.join(mediaRoot, 'large.webp');
         await sharp({ create: { width: 5000, height: 4000, channels: 3, background: '#73b19f' } }).webp().toFile(generated);
         const samples = process.env.FLOW_MEDIA_SAMPLES ? JSON.parse(process.env.FLOW_MEDIA_SAMPLES) : [generated];
-        const invalid = process.env.FLOW_MEDIA_HTML_SAMPLE || path.join(profile, 'web.png');
+        const invalid = process.env.FLOW_MEDIA_HTML_SAMPLE || path.join(mediaRoot, 'web.png');
         if (!process.env.FLOW_MEDIA_HTML_SAMPLE) await fs.writeFile(invalid, '<!DOCTYPE html><html><head><title>Flow Canvas</title></head></html>');
         const checksum = async file => crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
         const before = await Promise.all([...samples, invalid].map(checksum));
@@ -34,7 +34,13 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             const env = { ...process.env, FLOW_MEDIA_SMOKE_PROFILE: profile };
             delete env.ELECTRON_RUN_AS_NODE;
             app = await electron.launch({ executablePath: require('electron'), args: [path.join(__dirname, 'media-preview-smoke-entry.cjs')], env });
-            const page = await app.firstWindow();
+            let page;
+            for (let i = 0; i < 100; i++) {
+                page = app.windows().find(window => /dist[\\/]index\.html/.test(window.url()));
+                if (page) break;
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            assert.ok(page, 'Main renderer window created');
             await page.waitForFunction(() => window.flowCanvas?.thumb?.preview && window.Konva?.stages?.length);
             await page.waitForFunction(count => {
                 const stage = window.Konva.stages[0];

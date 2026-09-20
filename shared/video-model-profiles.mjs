@@ -1,6 +1,62 @@
 import { describeModelPresentation } from './model-presentation.mjs';
 
+const RAVENHASH_VIDEO_HOSTS = new Set(['art.ravenhash.org', 'cart.ravenhash.org']);
+
 export const VIDEO_MODEL_PROFILES = [
+    {
+        matchModel: /^seedance-2\.5-pro$/i,
+        label: 'Seedance 2.5 Pro',
+        ratios: ['adaptive', '16:9', '9:16', '1:1', '4:3', '3:4'],
+        resolutions: ['480p', '720p'],
+        durations: Array.from({ length: 27 }, (_, index) => index + 4),
+        durationControl: 'slider',
+        supportsWebSearch: false,
+        supportsCameraFixed: false,
+        supportsGeneratedAudio: false,
+        supportsWatermark: false,
+        referenceLimits: { image: 30, video: 10, audio: 10 },
+        defaultRatio: 'adaptive',
+        resolveAdaptiveRatio: true,
+        adaptiveFallbackRatio: '16:9',
+        defaultResolution: '720p',
+        defaultDuration: 4
+    },
+    {
+        matchModel: /^ch0107-sd-2\.5-720p$/i,
+        label: 'Seedance 2.5 720p',
+        routeLabel: 'StarFrame CH0107',
+        ratios: ['16:9'],
+        resolutions: ['720p'],
+        durations: Array.from({ length: 27 }, (_, index) => index + 4),
+        durationControl: 'slider',
+        supportsWebSearch: false,
+        supportsCameraFixed: false,
+        supportsGeneratedAudio: false,
+        supportsWatermark: false,
+        referenceLimits: { image: 30, video: 10, audio: 10 },
+        defaultRatio: '16:9',
+        resolveAdaptiveRatio: false,
+        defaultResolution: '720p',
+        defaultDuration: 4
+    },
+    {
+        matchModel: /^sd_2\.5_discount_v1$/i,
+        label: 'Seedance 2.5',
+        routeLabel: 'GlobalAiOpc',
+        ratios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', 'adaptive'],
+        resolutions: ['480p', '720p', '1080p'],
+        durations: Array.from({ length: 27 }, (_, index) => index + 4),
+        durationControl: 'slider',
+        supportsWebSearch: false,
+        supportsCameraFixed: false,
+        supportsGeneratedAudio: true,
+        supportsWatermark: false,
+        referenceLimits: { image: 30, video: 10, audio: 10 },
+        defaultRatio: '16:9',
+        resolveAdaptiveRatio: false,
+        defaultResolution: '720p',
+        defaultDuration: 4
+    },
     {
         matchModel: /^sd2(?:\.5|_5|-5)(?:-route[12]|-haidiyue-face)?$/i,
         label: 'Seedance 2.5',
@@ -138,11 +194,19 @@ export function getVideoModelProfile(provider) {
         || DEFAULT_VIDEO_MODEL_PROFILE;
     let host = '';
     try { host = new URL(provider.endpoint).hostname; } catch (_) { /* Unconfigured endpoint. */ }
-    const fixedSeedance = profile === VIDEO_MODEL_PROFILES[0];
+    if (model.toLowerCase() === 'seedance-2.5-pro' && RAVENHASH_VIDEO_HOSTS.has(host)) {
+        return { ...profile, price: { amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
+            source: 'ravenhash configured sale', updatedAt: '2026-09-20T00:00:00Z' } };
+    }
+    if (/^ch0107-sd-2\.5-720p$/i.test(model) && host === 'api.xzapi.vip') return { ...profile, price: {
+        amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
+        source: 'user configured sale', updatedAt: '2026-09-20T12:00:00Z'
+    } };
+    const fixedSeedance = profile.routeGroup === 'seedance25-fixed';
     if (fixedSeedance) {
         profile = { ...profile, routeLabel: /-route1$/i.test(model) ? '线路一' : '线路二', recommended: /-route1$/i.test(model) };
     }
-    if (fixedSeedance && host === 'art.ravenhash.org') {
+    if (fixedSeedance && RAVENHASH_VIDEO_HOSTS.has(host)) {
         return {
             ...profile,
             price: {
@@ -157,13 +221,46 @@ export function getVideoModelProfile(provider) {
         'seedance_v2.5-101010': 7,
         'seedance_v2.5-301010': 10
     }[model.toLowerCase()];
-    if (hmPrice && host === 'art.ravenhash.org') {
+    if (hmPrice && RAVENHASH_VIDEO_HOSTS.has(host)) {
         return { ...profile, price: {
             amount: hmPrice, currency: 'CNY', unit: 'request', kind: 'sale',
             source: 'ravenhash configured sale', updatedAt: '2026-09-12T11:30:00Z'
         } };
     }
     return profile;
+}
+
+export function getVideoModelGroup(provider) {
+    let host = '';
+    try { host = new URL(provider?.endpoint).hostname.toLowerCase(); } catch { return {}; }
+    const model = String(provider?.model || '').toLowerCase();
+    const variant = /^artsdance2-0-(fast|mini|pro)-intl-260701$/.exec(model)?.[1];
+    if (RAVENHASH_VIDEO_HOSTS.has(host) && variant) {
+        const label = `Seedance 2.0 ${variant[0].toUpperCase()}${variant.slice(1)}`;
+        return { label, routeLabel: label, routeModelLabel: provider.model,
+            routeGroup: 'seedance20-recommended', routeGroupLabel: 'Seedance 2.0 推荐渠道',
+            routeGroupDescription: '可NSFW 无限制', routeGroupOrder: 100,
+            routeOrder: ['fast', 'mini', 'pro'].indexOf(variant), routeGroupAlways: true };
+    }
+    if (RAVENHASH_VIDEO_HOSTS.has(host) && model === 'sd2.5-route1') {
+        return { routeGroup: 'seedance25-backup', routeGroupLabel: 'Seedance 2.5 备用渠道',
+            routeLabel: 'Seedance 2.5 固定 30 秒（过人脸）', routeModelLabel: provider.model,
+            routeGroupOrder: 20, routeGroupAlways: true, recommended: false };
+    }
+    const labels = {
+        'seedance-2.5-pro': 'Seedance 2.5 Pro（满血满参）',
+        'seedance_v2.5': 'HM-Seedance 2.5',
+        'seedance_v2.0-933': 'HM-Seedance 2.0 933',
+        'seedance_v2.5-101010': 'HM-Seedance 2.5 101010',
+        'seedance_v2.5-301010': 'HM-Seedance 2.5 301010',
+        'sd2.5': 'SD2.5 固定 30 秒（电商效果优化）'
+    };
+    const label = labels[model];
+    if (host !== 'video.zhubo.asia' && (!RAVENHASH_VIDEO_HOSTS.has(host) || !label)) return {};
+    return { label: label || provider.model, routeGroup: 'zhubo-video', routeGroupLabel: 'Seedance 2.5 推荐渠道',
+        routeLabel: label || provider.model, routeModelLabel: provider.model, routeGroupAlways: true,
+        routeGroupOrder: 10, routeOrder: ({ 'sd2.5': 0, 'seedance-2.5-pro': 1, 'seedance_v2.5': 2,
+            'seedance_v2.0-933': 3 })[model] ?? 10, recommended: false };
 }
 
 export function describeVideoModelProfile(profile) {

@@ -1,0 +1,37 @@
+.corvas-rhino-mark { display: inline-grid; width: 20px; height: 20px; place-items: center; border: 1px solid currentColor; border-radius: 5px; font-size: 11px; font-weight: 600; letter-spacing: -0.6px; }
+body.rhino-mode.agent-open .agent-sidebar-wrapper { width: 370px; max-width: calc(100vw - 24px); }
+body.rhino-mode .agent-sidebar { display: none; }
+body.rhino-mode.agent-open .agent-toggle-btn { right: min(386px, calc(100vw - 76px)); }
+.rhino-workbench-panel .hunyuan-panel-head > button { font-size: 21px; }
+.rhino-workbench-content { flex: 1; min-height: 0; padding-bottom: 28px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+.rhino-workbench-content::-webkit-scrollbar { width: 5px; }
+.rhino-workbench-content::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--scrollbar-thumb); }
+.rhino-connection-card { margin: 0 18px 16px; padding: 14px; border: 1px solid var(--border-color); border-radius: 9px; }
+.rhino-connection-state { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.rhino-connection-state strong { font-weight: 500; }
+.rhino-connection-state > span { margin-left: auto; color: var(--text-secondary); font-size: 10px; }
+.rhino-connection-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-secondary); }
+.rhino-workbench-panel[data-state="connected"] .rhino-connection-state i { background: #87b79b; }
+.rhino-workbench-panel[data-state="error"] .rhino-connection-state i { background: #c98989; }
+.rhino-workbench-panel:is([data-state="launching"], [data-state="connecting"]) .rhino-connection-state i { animation: rhino-connect-pulse 1.3s ease-in-out infinite; }
+.rhino-connection-card > p { margin: 10px 0 14px; color: var(--text-secondary); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.rhino-connection-actions { display: flex; gap: 6px; }
+.rhino-connection-actions button { padding: 7px 12px; border-color: var(--border-color); color: var(--text-primary); }
+.rhino-connection-actions button:first-child { background: var(--hover-bg); }
+.rhino-workbench-tasks { display: grid; gap: 7px; margin: 0 18px 22px; }
+.rhino-workbench-tasks button { padding: 11px 12px; text-align: left; border-color: var(--border-color); }
+.rhino-workbench-tasks strong { display: block; color: var(--text-primary); font-size: 12px; font-weight: 500; }
+.rhino-workbench-tasks span { display: block; margin-top: 5px; color: var(--text-secondary); font-size: 10px; }
+.rhino-workbench-settings { margin: 0 18px; border-top: 1px solid var(--border-color); padding-top: 14px; }
+.rhino-workbench-settings summary { color: var(--text-secondary); cursor: pointer; font-size: 11px; }
+.rhino-workbench-settings form { display: grid; gap: 10px; margin-top: 16px; }
+.rhino-workbench-settings label { display: grid; gap: 7px; color: var(--text-secondary); font-size: 11px; }
+.rhino-workbench-settings :is(select, input) { min-width: 0; width: 100%; height: 32px; border: 1px solid var(--border-color); border-radius: 5px; padding: 0 8px; background: var(--bg-color); color: var(--text-primary); font: inherit; font-size: 11px; }
+.rhino-workbench-settings button { padding: 6px 8px; border-color: var(--border-color); justify-self: start; }
+.rhino-workbench-settings p { color: var(--text-secondary); font-size: 10px; line-height: 1.7; }
+@keyframes rhino-connect-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .rhino-connection-state i { animation: none !important; } }
+@media (max-width: 900px) {
+    body.rhino-mode.agent-open .agent-sidebar-wrapper { position: fixed; top: var(--titlebar-h); bottom: 0; right: 0; height: auto; }
+    body.platform-win32 .rhino-workbench-panel { padding-top: 0; }
+}

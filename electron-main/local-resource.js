@@ -5,6 +5,7 @@ const { ReadableStream } = require('stream/web');
 const MIME_TYPES = {
     '.aac': 'audio/aac',
     '.avi': 'video/x-msvideo',
+    '.avif': 'image/avif',
     '.bmp': 'image/bmp',
     '.flac': 'audio/flac',
     '.gif': 'image/gif',
@@ -17,6 +18,8 @@ const MIME_TYPES = {
     '.mov': 'video/quicktime',
     '.mp3': 'audio/mpeg',
     '.mp4': 'video/mp4',
+    '.mpeg': 'video/mpeg',
+    '.mpg': 'video/mpeg',
     '.ogg': 'audio/ogg',
     '.pdf': 'application/pdf',
     '.png': 'image/png',
@@ -30,8 +33,11 @@ const MIME_TYPES = {
 };
 
 function decodeLocalResourcePath(url) {
+    if (!String(url || '').startsWith('local-res://')) throw new Error('Invalid scheme');
     const encodedPath = String(url || '').slice('local-res://'.length).split(/[?#]/, 1)[0];
-    return decodeURIComponent(encodedPath).replace(/\0/g, '');
+    const decoded = decodeURIComponent(encodedPath);
+    if (decoded.includes('\0')) throw new Error('Invalid path');
+    return decoded;
 }
 
 function parseByteRange(value, size) {
@@ -59,15 +65,24 @@ function parseByteRange(value, size) {
 function baseHeaders(filePath, size) {
     return {
         'Accept-Ranges': 'bytes',
-        'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'no-cache',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
         'Content-Type': MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
         'Content-Length': String(size)
     };
 }
 
-function createFileWebStream(filePath, options = {}) {
-    const fileStream = fs.createReadStream(filePath, options);
+async function createFileWebStream(filePath, expectedStat, options = {}) {
+    const handle = await fs.promises.open(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    let fileStream;
+    try {
+        const actual = await handle.stat();
+        if (!actual.isFile() || actual.ino !== expectedStat.ino || actual.dev !== expectedStat.dev || actual.size !== expectedStat.size) {
+            throw new Error('Resource changed');
+        }
+        fileStream = handle.createReadStream(options);
+    } catch (error) { await handle.close(); throw error; }
     const iterator = fileStream[Symbol.asyncIterator]();
     let closed = false;
 
@@ -98,7 +113,13 @@ function createFileWebStream(filePath, options = {}) {
     });
 }
 
-async function handleLocalResourceRequest(request) {
+async function handleLocalResourceRequest(request, { accessPolicy, allowedOrigins = ['null'] } = {}) {
+    if (!['GET', 'HEAD'].includes(request?.method || 'GET')) return new Response(null, { status: 405 });
+    const origin = request?.headers?.get?.('origin');
+    const destination = request?.headers?.get?.('sec-fetch-dest');
+    if ((origin && !allowedOrigins.includes(origin)) || ['document', 'iframe', 'object', 'embed'].includes(destination)) {
+        return new Response(null, { status: 403 });
+    }
     let filePath;
     try {
         filePath = decodeLocalResourcePath(request?.url);
@@ -108,11 +129,15 @@ async function handleLocalResourceRequest(request) {
 
     let stat;
     try {
-        stat = await fs.promises.stat(filePath);
-        if (!stat.isFile()) throw new Error('Not a file');
+        if (!accessPolicy) return new Response(null, { status: 403 });
+        const resolved = await accessPolicy.resolve(filePath);
+        filePath = resolved.filePath;
+        stat = resolved.stat;
     } catch (_) {
-        return new Response('Local resource not found', { status: 404 });
+        return new Response('Local resource unavailable', { status: 404 });
     }
+
+    const corsHeaders = origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {};
 
     const rangeValue = request?.headers?.get?.('range');
     const range = rangeValue ? parseByteRange(rangeValue, stat.size) : null;
@@ -121,6 +146,7 @@ async function handleLocalResourceRequest(request) {
             status: 416,
             headers: {
                 ...baseHeaders(filePath, 0),
+                ...corsHeaders,
                 'Content-Range': `bytes */${stat.size}`
             }
         });
@@ -130,15 +156,19 @@ async function handleLocalResourceRequest(request) {
         const contentLength = range.end - range.start + 1;
         const headers = {
             ...baseHeaders(filePath, contentLength),
+            ...corsHeaders,
             'Content-Range': `bytes ${range.start}-${range.end}/${stat.size}`
         };
         if (request?.method === 'HEAD') return new Response(null, { status: 206, headers });
-        return new Response(createFileWebStream(filePath, { start: range.start, end: range.end }), { status: 206, headers });
+        try {
+            return new Response(await createFileWebStream(filePath, stat, { start: range.start, end: range.end }), { status: 206, headers });
+        } catch { return new Response(null, { status: 404 }); }
     }
 
-    const headers = baseHeaders(filePath, stat.size);
+    const headers = { ...baseHeaders(filePath, stat.size), ...corsHeaders };
     if (request?.method === 'HEAD') return new Response(null, { status: 200, headers });
-    return new Response(createFileWebStream(filePath), { status: 200, headers });
+    try { return new Response(await createFileWebStream(filePath, stat), { status: 200, headers }); }
+    catch { return new Response(null, { status: 404 }); }
 }
 
 module.exports = {

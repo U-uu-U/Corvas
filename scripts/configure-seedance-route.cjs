@@ -5,7 +5,8 @@ const { ApiConfigStore } = require('../electron-main/api-config-store');
 app.setPath('userData', path.join(app.getPath('appData'), 'flow-canvas'));
 app.whenReady().then(async () => {
     const hm = process.argv.includes('--hm');
-    const requiredModels = hm
+    const pro = process.argv.includes('--pro');
+    const requiredModels = pro ? ['seedance-2.5-pro'] : hm
         ? ['seedance_v2.0-933', 'seedance_v2.5-101010', 'seedance_v2.5-301010']
         : ['sd2.5-route1', 'sd2.5'];
     const store = new ApiConfigStore(app.getPath('userData'), {
@@ -16,7 +17,7 @@ app.whenReady().then(async () => {
     if (!loaded.config) throw new Error('No saved API configuration');
     const provider = loaded.config.providers.find(provider => {
         try { return new URL(provider.endpoint).hostname === 'art.ravenhash.org' && provider.apiKey
-            && (!hm || [...(provider.models || []), provider.model].includes('seedance_v2.5')); }
+            && (!(hm || pro) || [...(provider.models || []), provider.model].includes('seedance_v2.5')); }
         catch { return false; }
     });
     if (!provider) throw new Error('No configured RavenHash video API');
@@ -27,7 +28,7 @@ app.whenReady().then(async () => {
     const payload = await response.json();
     const models = (payload.data || []).map(model => model.id);
     console.log(JSON.stringify({ endpoint: provider.endpoint,
-        routes: models.filter(model => hm ? /^seedance_v2/.test(model) : /^sd2\.5/.test(model)) }));
+        routes: models.filter(model => pro ? /^seedance|^sd2\.5/.test(model) : hm ? /^seedance_v2/.test(model) : /^sd2\.5/.test(model)) }));
     if (requiredModels.some(model => !models.includes(model))) throw new Error('Required relay models are not all visible');
     const taskIndex = process.argv.indexOf('--task');
     if (taskIndex >= 0) {

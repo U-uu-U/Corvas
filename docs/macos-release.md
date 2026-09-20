@@ -6,7 +6,8 @@
 
 1. 更新 `package.json` 和 `package-lock.json` 的版本，提交并推送代码。
 2. 创建同版本的轻量标签，例如 `git tag v1.5.0-beta.3`，再推送该标签。
-3. Workflow 自动安装依赖、测试、打包、检查打包后的运行时和视频解码，然后上传并发布 GitHub Release。
+3. Workflow 自动安装依赖、测试、打包、检查打包后的运行时和视频解码，然后把 DMG 上传到草稿 Release。
+4. 确认 Windows 工作流使用同一标签提交并构建成功，上传对应 EXE 和校验清单后，再统一公开 Windows / macOS Release。
 
 带 `-beta` 等后缀的版本发布为预发布。发布前可先创建该标签的草稿 Release 并填写更新说明；自动发布会保留这些说明。版本标签必须与 `package.json` 一致，不要移动已发布标签。
 

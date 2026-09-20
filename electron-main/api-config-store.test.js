@@ -51,3 +51,33 @@ test('ApiConfigStore falls back to a rotated backup when the primary is corrupt'
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('ApiConfigStore refuses plaintext fallback and leaves the previous credentials untouched', t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-canvas-api-config-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const secure = createStore(root);
+    secure.save({ revision: 1, providers: [{ apiKey: 'original-secret' }] });
+    const original = fs.readFileSync(secure.filePath, 'utf8');
+    for (const protect of [null, () => null, () => Buffer.alloc(0)]) {
+        const store = new ApiConfigStore(root, { protect });
+        const result = store.save({ revision: 2, providers: [{ apiKey: 'new-secret' }] });
+        assert.equal(result.success, false); assert.match(result.error, /加密不可用/);
+        assert.equal(fs.readFileSync(store.filePath, 'utf8'), original);
+    }
+    assert.equal(fs.existsSync(secure.backupDir), false);
+});
+
+test('legacy plaintext is readable but saves and new backups are encrypted even for unchanged config', t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-canvas-api-config-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const store = createStore(root);
+    fs.mkdirSync(store.dataDir, { recursive: true });
+    fs.writeFileSync(store.filePath, JSON.stringify({ format: 'plain-json', payload: JSON.stringify({
+        revision: 1, providers: [{ apiKey: 'legacy-secret' }], updatedAt: '2026-01-01T00:00:00Z' }) }));
+    const loaded = store.load(); assert.equal(loaded.config.providers[0].apiKey, 'legacy-secret');
+    assert.equal(store.save(loaded.config).success, true);
+    for (const file of [store.filePath, ...store._backupFiles()]) {
+        const raw = fs.readFileSync(file, 'utf8'); assert.equal(raw.includes('legacy-secret'), false);
+        assert.equal(JSON.parse(raw).format, 'safe-storage');
+    }
+});

@@ -2,10 +2,39 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { formatGenerationElapsed, isGenerationRecoveryActive, canRecoverGenerationTask, generationFailureError,
     formatClientGenerationError } from './generation-progress.js';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { imageRequestFailure } = require('../electron-main/image-request-diagnostics.cjs');
+
+test('uncertain submission keeps no-resubmit guidance and correlation through repeated display formatting', () => {
+    const source = imageRequestFailure(new Error('net::ERR_EMPTY_RESPONSE'), {
+        requestId: 'client-fixture-42', startedAt: 1000, now: 2000, payloadBytes: 1024, imageCount: 1, phase: 'submit'
+    });
+    const error = generationFailureError({ error: source.message, ...source });
+    for (const message of [error.message, formatClientGenerationError(error.message), formatClientGenerationError(`生图失败：${error.message}`)]) {
+        assert.match(message, /不要重复提交/);
+        assert.match(message, /client-fixture-42/);
+        assert.doesNotMatch(message, /网络请求失败，请稍后重试/);
+    }
+    assert.equal(error.submissionUnknown, true);
+});
+
+test('local model limits and paused-channel guidance survive while forged trusted prefixes do not', () => {
+    for (const message of ['Seedance 2.5 Pro 仅支持 480p 或 720p',
+        '模型 seedance_v2.5-101010 已暂时停用，请选择其他渠道；已有任务仍可恢复。']) {
+        assert.equal(formatClientGenerationError(message), message);
+    }
+    const dirty = 'GlobalAiOpc 素材审核未通过：vendor=private-provider; channel=private-991; token=upstream-secret';
+    const message = formatClientGenerationError(dirty);
+    assert.doesNotMatch(message, /GlobalAiOpc|private|upstream-secret|channel|vendor/);
+    assert.equal(formatClientGenerationError(''), '');
+    assert.equal(formatClientGenerationError({ code: 'RH_AUTH_FAILED', error: dirty }),
+        '接口认证失败，请检查 API 配置或联系管理员。');
+});
 
 test('客户端错误展示会隐藏上游站点并保留任务标识', () => {
     const message = formatClientGenerationError('下载生成产物失败（https://video.zhubo.asia/v1/videos/task_9151，已尝试 1 次）：HTTP 401');
-    assert.equal(message, '生成已完成，但产物下载失败，系统已自动刷新下载地址（任务 task_9151）');
+    assert.equal(message, '下载地址已失效或无访问权限，可在任务记录中继续拉取，无需重新生成（任务 task_9151）');
     assert.equal(message.includes('video.zhubo.asia'), false);
 });
 
@@ -40,6 +69,15 @@ test('结构化生成错误使用客户端转换后的文案', () => {
     assert.equal(error.message.includes('/v1/videos'), false);
     assert.match(error.message, /task_1/);
     assert.equal(error.code, 'DOWNLOAD_FAILED');
+});
+
+test('a submit-path 404 is not described as a missing generated video', () => {
+    const error = generationFailureError({ code: 'RH_INVALID_REQUEST',
+        error: '请求参数不受支持，请检查模型、时长、尺寸和素材数量。（HTTP 404）' });
+    assert.match(error.message, /提交接口地址不存在/);
+    assert.equal(error.message.includes('任务或生成产物不存在'), false);
+    assert.match(formatClientGenerationError('查询视频任务 task_1：HTTP 404'), /查询任务失败：任务或生成产物不存在/);
+    assert.match(formatClientGenerationError('下载生成产物失败：HTTP 404'), /下载文件暂不可用/);
 });
 
 test('portrait rejection metadata survives IPC conversion and does not offer remote recovery', () => {

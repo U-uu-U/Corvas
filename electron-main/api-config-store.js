@@ -59,15 +59,16 @@ class ApiConfigStore {
         try {
             const normalized = normalizeConfig(config);
             const current = this._readConfig(this.filePath);
-            if (current && JSON.stringify(current) === JSON.stringify(normalized)) {
+            const encrypted = current && JSON.parse(fs.readFileSync(this.filePath, 'utf8')).format === 'safe-storage';
+            if (encrypted && JSON.stringify(current) === JSON.stringify(normalized)) {
                 return { success: true, unchanged: true, revision: normalized.revision };
             }
 
-            fs.mkdirSync(this.dataDir, { recursive: true });
-            if (current && fs.existsSync(this.filePath)) this._backupPrimary();
             const envelope = this._encode(normalized);
+            fs.mkdirSync(this.dataDir, { recursive: true });
+            if (current && fs.existsSync(this.filePath)) this._backupPrimary(current);
             const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
-            fs.writeFileSync(tempPath, JSON.stringify(envelope, null, 2), 'utf8');
+            fs.writeFileSync(tempPath, JSON.stringify(envelope, null, 2), { encoding: 'utf8', mode: 0o600 });
             fs.renameSync(tempPath, this.filePath);
             this._pruneBackups();
             return { success: true, unchanged: false, revision: normalized.revision };
@@ -80,7 +81,7 @@ class ApiConfigStore {
         const raw = JSON.stringify(config);
         if (this.protect) {
             const protectedValue = this.protect(raw);
-            if (protectedValue) {
+            if (protectedValue?.length) {
                 const buffer = Buffer.isBuffer(protectedValue)
                     ? protectedValue
                     : Buffer.from(protectedValue);
@@ -92,12 +93,7 @@ class ApiConfigStore {
                 };
             }
         }
-        return {
-            version: STORE_VERSION,
-            format: 'plain-json',
-            updatedAt: config.updatedAt,
-            payload: raw
-        };
+        throw new Error('系统凭据加密不可用，未保存 API 配置；原有配置已保留。请解锁系统钥匙串或凭据服务后重试。');
     }
 
     _decode(envelope) {
@@ -124,7 +120,7 @@ class ApiConfigStore {
         }
     }
 
-    _backupPrimary() {
+    _backupPrimary(config) {
         fs.mkdirSync(this.backupDir, { recursive: true });
         const stamp = this.now().toISOString().replace(/[:.]/g, '-');
         let backupPath = path.join(this.backupDir, `api-config-${stamp}.json`);
@@ -132,7 +128,7 @@ class ApiConfigStore {
         while (fs.existsSync(backupPath)) {
             backupPath = path.join(this.backupDir, `api-config-${stamp}-${suffix++}.json`);
         }
-        fs.copyFileSync(this.filePath, backupPath);
+        fs.writeFileSync(backupPath, JSON.stringify(this._encode(config), null, 2), { encoding: 'utf8', mode: 0o600 });
     }
 
     _backupFiles() {

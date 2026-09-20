@@ -105,4 +105,5 @@ test('排查编号只接受安全字符，拒绝凭据形态', () => {
     assert.equal(traceSuffix(''), '');
     assert.equal(traceSuffix('has space'), '');
     assert.equal(traceSuffix('https://vendor-secret.internal/x'), '');
+    assert.equal(traceSuffix('sk-fixture-private-secret'), '');
 });

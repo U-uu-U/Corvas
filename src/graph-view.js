@@ -651,9 +651,14 @@ export class GraphView {
         const toItem = this._nodeData(to.nodeId);
         const result = G.canConnect(fromItem, from.port, toItem, to.port, this.connections);
         if (!result.ok) {
+            if (result.duplicate) {
+                if (!opts.silent) this.setConnectionsVisible(true);
+                this.drawEdge(result.duplicate);
+            }
             if (!opts.silent) this.canvas._showCanvasStatus?.(result.reason);
             return null;
         }
+        if (!opts.silent) this.setConnectionsVisible(true);
         // 同一输入端口只允许一条连线：新线替换旧线
         if (result.replaces) this.disconnect(result.replaces.id);
         const conn = { id: newConnectionId(), from, to };
@@ -686,12 +691,15 @@ export class GraphView {
 
     setConnectionsVisible(visible) {
         this.connectionsVisible = visible !== false;
+        this.canvas._connectionsVisible = this.connectionsVisible;
+        this.canvas._syncCanvasViewDock?.();
         this.edgeShapes.forEach(line => line.visible(this.connectionsVisible));
         this.edgeLayer.batchDraw();
     }
 
     drawEdge(conn) {
         this.edgeShapes.get(conn.id)?.destroy();
+        this.edgeShapes.delete(conn.id);
         const a = this.portPosition(conn.from.nodeId, conn.from.port, 'out');
         const b = this.portPosition(conn.to.nodeId, conn.to.port, 'in');
         if (!a || !b) return;
@@ -769,7 +777,10 @@ export class GraphView {
         this.connections.forEach(conn => {
             if (scoped && !scoped.has(conn.from.nodeId) && !scoped.has(conn.to.nodeId)) return;
             const line = this.edgeShapes.get(conn.id);
-            if (!line) return;
+            if (!line || line.getLayer() !== this.edgeLayer) {
+                this.drawEdge(conn);
+                return;
+            }
             const a = this.portPosition(conn.from.nodeId, conn.from.port, 'out');
             const b = this.portPosition(conn.to.nodeId, conn.to.port, 'in');
             if (a && b) line.points(curvePoints(a, b));

@@ -2,7 +2,7 @@
 // Corvas — Electron Main Process
 // ============================================================
 
-const { app, BrowserWindow, ipcMain, shell, clipboard, nativeImage, dialog, protocol, net, Menu, screen, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, clipboard, nativeImage, dialog, protocol, net, Menu, screen, safeStorage, session } = require('electron');
 const path = require('path');
 require('./app-identity.cjs').configureAppIdentity(app);
 const util = require('util');
@@ -13,11 +13,21 @@ const Thumbnailer = require('./thumbnailer');
 const FlowCanvasBridge = require('./mcp-bridge');
 const BrowserSyncService = require('./browser-sync');
 const { handleLocalResourceRequest } = require('./local-resource');
+const { MediaAccessPolicy, collectBoardMediaScope } = require('./media-access.cjs');
+const { fetchPublicMedia } = require('./public-media-download.cjs');
 const { saveGenerationTrace } = require('./generation-trace-store');
 const { ApiConfigStore } = require('./api-config-store');
 const { fetchModelConfig } = require('./model-config-service.cjs');
 const { DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
 const { mapLocalError } = require('../shared/public-api-error.cjs');
+const { HunyuanAccounts, partitionFor } = require('./hunyuan-accounts.cjs');
+const { launchHunyuanBrowser } = require('./hunyuan-browser-process.cjs');
+const { RhinoDesktop } = require('./rhino-desktop.cjs');
+const { RhinoWorkbench } = require('./rhino-workbench.cjs');
+const { HunyuanRhinoWorkflow } = require('./hunyuan-rhino-workflow.cjs');
+const { WorkflowService } = require('./workflow-service.cjs');
+const { BlenderDesktop } = require('./blender-desktop.cjs');
+const { BlenderWorkbench } = require('./blender-workbench.cjs');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -45,7 +55,12 @@ let flowCanvasBridge = null;
 let browserSyncService = null;
 let apiConfigStore = null;
 let agentServices = null;
+let hunyuanAccounts = null;
+let hunyuanRhinoWorkflow = null;
+let rhinoWorkbench = null;
+let blenderWorkbench = null;
 let mediaPreviewWasFullScreen = null;
+let mediaAccess = null;
 // 文件移动会让 chokidar 先后报告旧路径 unlink、新路径 add。
 // 这两条事件由 moveFilesToFolder 的结果统一处理，不能再让 renderer 当成真实删除/新增。
 const suppressedMoveFileChanges = new Map();
@@ -172,7 +187,7 @@ function installSafeConsole() {
 
 // 注册私有协议权限
 protocol.registerSchemesAsPrivileged([
-    { scheme: 'local-res', privileges: { bypassCSP: true, supportFetchAPI: true, stream: true, secure: true } }
+    { scheme: 'local-res', privileges: { supportFetchAPI: true, stream: true, secure: true, corsEnabled: true } }
 ]);
 
 // ── 窗口创建 ───────────────────────────────────────────
@@ -200,11 +215,13 @@ function createWindow() {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
-            sandbox: false
+            sandbox: true
         }
     });
 
     const nextMainWindow = mainWindow;
+    nextMainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    nextMainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
     const startupSplash = splashWindow;
     const minimumDisplay = splashMinimumDisplay;
     let mainWindowRevealed = false;
@@ -303,6 +320,7 @@ function createWindow() {
     }
 
     mainWindow.on('closed', () => {
+        void hunyuanAccounts?.closeAll();
         flowCanvasBridge?.setBoardToolsReady(false, {
             code: 'RENDERER_NOT_READY',
             message: 'Corvas main window was closed'
@@ -462,12 +480,15 @@ async function createOrbWindow() {
             preload: path.join(__dirname, 'orb-preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
-            sandbox: false,
+            sandbox: true,
             backgroundThrottling: false
         }
     });
 
     orbWindow = nextOrbWindow;
+    nextOrbWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    nextOrbWindow.webContents.on('will-navigate', event => event.preventDefault());
+    nextOrbWindow.webContents.on('will-attach-webview', event => event.preventDefault());
     nextOrbWindow.setBackgroundColor('#00000000');
     nextOrbWindow.setAlwaysOnTop(true, 'screen-saver');
     nextOrbWindow.setSkipTaskbar(true);
@@ -532,6 +553,14 @@ function restoreMainWindowFromOrb() {
 // ── 初始化服务 ──────────────────────────────────────────
 async function initServices() {
     store = new Store();
+    const managedMediaRoots = ['captured', 'asset-library', 'reference-cache'].map(name => path.join(app.getPath('userData'), 'data', name));
+    managedMediaRoots.forEach(directory => fs.mkdirSync(directory, { recursive: true }));
+    mediaAccess = new MediaAccessPolicy({
+        userData: app.getPath('userData'),
+        managedRoots: managedMediaRoots,
+        registryFile: path.join(app.getPath('userData'), 'data', 'media-access.v1.json'),
+        legacyScope: collectBoardMediaScope(store.load())
+    });
     apiConfigStore = new ApiConfigStore(app.getPath('userData'), {
         protect: value => safeStorage.isEncryptionAvailable()
             ? safeStorage.encryptString(value)
@@ -567,6 +596,7 @@ async function initServices() {
         getDefaultSaveFolder: getBoardDefaultSaveFolder,
         getFallbackSaveDir: getSaveDir,
         getMainWindow: () => mainWindow,
+        registerMediaFile: filePath => mediaAccess.grant(filePath),
         notifyRenderer: (event, data) => {
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('mcp:store-updated', {
@@ -596,6 +626,10 @@ async function initServices() {
     const { createAgentServices } = require('./agent-services.cjs');
     agentServices = await createAgentServices({ store, bridge: flowCanvasBridge, apiConfigStore,
         dataDir: path.join(app.getPath('userData'), 'data'), getSaveDir, getMainWindow: () => mainWindow, BrowserWindow, net, safeStorage });
+    const workflows = new WorkflowService({ directory: path.join(app.getPath('userData'), 'data'),
+        getAccounts: getHunyuanAccounts, getWorkflow: () => { getHunyuanAccounts(); return hunyuanRhinoWorkflow; },
+        getRuntime: () => agentServices.runtime });
+    flowCanvasBridge.workflowExecutor = (name, input) => workflows.execute(name, input);
     flowCanvasBridge.start(mcpConfig);
 
     const activeGroup = (boardData.folderGroups || []).find(group => group.id === boardData.activeGroupId);
@@ -1461,6 +1495,101 @@ for (const action of ['list', 'save', 'remove', 'test']) {
     });
 }
 
+function getRhinoWorkbench() {
+    if (!agentServices) throw new Error('Agent 服务尚未初始化');
+    rhinoWorkbench ||= new RhinoWorkbench({ directory: path.join(app.getPath('userData'), 'data'),
+        desktop: new RhinoDesktop(), mcpClient: agentServices.mcpClient,
+        onChange: data => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('rhino:changed', data); } });
+    return rhinoWorkbench;
+}
+
+function getHunyuanAccounts() {
+    if (!agentServices) throw new Error('Agent 服务尚未初始化');
+    hunyuanRhinoWorkflow ||= new HunyuanRhinoWorkflow({ directory: path.join(app.getPath('userData'), 'data'),
+        getAccounts: () => hunyuanAccounts, getRhino: getRhinoWorkbench, getRuntime: () => agentServices.runtime,
+        getProjectId: () => store.load().activeGroupId,
+        readMode: () => apiConfigStore.load().config?.globalConfig?.agentExecutionMode,
+        onChange: state => {
+            hunyuanAccounts?.syncWorkflow();
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hunyuan:workflow-changed', state);
+        } });
+    hunyuanAccounts ||= new HunyuanAccounts({ dataDir: path.join(app.getPath('userData'), 'data'),
+            launchBrowser: launchHunyuanBrowser,
+            workflowState: id => hunyuanRhinoWorkflow.snapshot(id),
+            onModelTask: (id, task) => {
+                try { hunyuanRhinoWorkflow.observe(id, task); }
+                catch (error) { console.error('[Hunyuan] 模型传递记录失败:', error.message); }
+            },
+            onWorkflowAction: (id, action) => {
+                try { hunyuanRhinoWorkflow.action(action, id); }
+                catch (error) { console.error('[Hunyuan] 模型传递操作失败:', error.message); }
+            },
+            clearLegacySession: async id => {
+                const legacy = session.fromPartition(partitionFor(id));
+                await legacy.closeAllConnections();
+                await legacy.clearStorageData();
+                await legacy.clearCache();
+                legacy.flushStorageData();
+            },
+            onChange: data => {
+                if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hunyuan:changed', data);
+            } });
+    return hunyuanAccounts;
+}
+
+for (const action of ['list', 'save', 'remove', 'open']) {
+    ipcMain.handle(`hunyuan:${action}`, (event, request) => {
+        if (!isCurrentMainWindowSender(event) || event.senderFrame !== mainWindow.webContents.mainFrame) {
+            throw new Error('混元账号请求来源无效');
+        }
+        return getHunyuanAccounts()[action](request || {});
+    });
+}
+
+for (const action of ['workflowState', 'configureWorkflow', 'workflowAction']) {
+    ipcMain.handle(`hunyuan:${action}`, (event, request) => {
+        if (!isCurrentMainWindowSender(event) || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('模型传递请求来源无效');
+        getHunyuanAccounts();
+        if (action === 'configureWorkflow') return hunyuanRhinoWorkflow.configure(request || {});
+        if (action === 'workflowAction') return hunyuanRhinoWorkflow.action(request || {});
+        return hunyuanRhinoWorkflow.snapshot();
+    });
+}
+
+for (const action of ['status', 'save', 'open', 'choose', 'copyCommand']) {
+    ipcMain.handle(`rhino:${action}`, async (event, request) => {
+        if (!isCurrentMainWindowSender(event) || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('Rhino 请求来源无效');
+        if (!agentServices) throw new Error('Agent 服务尚未初始化');
+        getRhinoWorkbench();
+        if (action === 'choose') {
+            const result = await dialog.showOpenDialog(mainWindow, { title: '选择 Rhino 程序', properties: ['openFile'],
+                filters: [{ name: 'Rhino', extensions: IS_MAC ? ['app'] : ['exe'] }] });
+            return result.canceled ? rhinoWorkbench.status() : rhinoWorkbench.save({ executablePath: result.filePaths[0] });
+        }
+        if (action === 'copyCommand') {
+            clipboard.writeText(rhinoWorkbench.connectionCommand());
+            return { success: true };
+        }
+        return rhinoWorkbench[action](request || {});
+    });
+}
+
+for (const action of ['status', 'save', 'open', 'choose']) {
+    ipcMain.handle(`blender:${action}`, async (event, request) => {
+        if (!isCurrentMainWindowSender(event) || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('Blender 请求来源无效');
+        if (!agentServices) throw new Error('Agent 服务尚未初始化');
+        blenderWorkbench ||= new BlenderWorkbench({ directory: path.join(app.getPath('userData'), 'data'),
+            desktop: new BlenderDesktop(), mcpClient: agentServices.mcpClient,
+            onChange: data => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('blender:changed', data); } });
+        if (action === 'choose') {
+            const result = await dialog.showOpenDialog(mainWindow, { title: '选择 Blender 程序', properties: ['openFile'],
+                filters: [{ name: 'Blender', extensions: IS_MAC ? ['app'] : ['exe'] }] });
+            return result.canceled ? blenderWorkbench.status() : blenderWorkbench.save({ executablePath: result.filePaths[0] });
+        }
+        return blenderWorkbench[action](request || {});
+    });
+}
+
 for (const action of ['start', 'get', 'list', 'confirm', 'revise', 'cancel', 'resume', 'retry']) {
     ipcMain.handle(`agent:${action}`, (event, request) => {
         if (!isCurrentMainWindowSender(event)) throw new Error('Agent 请求来源无效');
@@ -1518,6 +1647,7 @@ ipcMain.handle('folder:select', async () => {
         title: '选择要关联的文件夹'
     });
     if (result.canceled || result.filePaths.length === 0) return null;
+    await mediaAccess.grant(result.filePaths[0], { directory: true });
     return result.filePaths[0];
 });
 
@@ -1640,6 +1770,7 @@ ipcMain.handle('file:selectMedia', async () => {
     if (result.canceled || result.filePaths.length === 0) {
         return { success: false, canceled: true, filePaths: [] };
     }
+    await Promise.all(result.filePaths.map(file => mediaAccess.grant(file)));
     return { success: true, filePaths: result.filePaths };
 });
 
@@ -1667,6 +1798,7 @@ ipcMain.handle('file:selectReplacement', async (_, options = {}) => {
     if (result.canceled || result.filePaths.length === 0) {
         return { success: false, canceled: true };
     }
+    await mediaAccess.grant(result.filePaths[0]);
     return { success: true, filePath: result.filePaths[0] };
 });
 
@@ -1712,11 +1844,19 @@ ipcMain.handle('file:inspect', async (_, filePath) => {
 
 
 // 缩略图
-ipcMain.handle('thumb:get', async (_, filePath, maxDim) => {
-    return thumbnailer.getThumbnail(filePath, maxDim);
+ipcMain.handle('thumb:get', async (event, filePath, maxDim) => {
+    requireMainFrame(event);
+    try {
+        const resolved = await mediaAccess.resolve(filePath);
+        return thumbnailer.getThumbnail(resolved.filePath, maxDim);
+    } catch { return null; }
 });
-ipcMain.handle('thumb:preview', async (_, filePath, maxDim, preferOriginal) => {
-    return thumbnailer.getPreview(filePath, maxDim, preferOriginal === true);
+ipcMain.handle('thumb:preview', async (event, filePath, maxDim, preferOriginal) => {
+    requireMainFrame(event);
+    try {
+        const resolved = await mediaAccess.resolve(filePath);
+        return thumbnailer.getPreview(resolved.filePath, maxDim, preferOriginal === true);
+    } catch { return { success: false, error: { code: 'FILE_UNAVAILABLE', message: '素材不存在或尚未授权，请重新添加' } }; }
 });
 
 function psQuoted(value) {
@@ -1921,12 +2061,34 @@ ipcMain.handle('clipboard:writeText', async (_, text) => {
 });
 
 // Shell 操作
-ipcMain.handle('shell:showInExplorer', (_, filePath) => {
-    shell.showItemInFolder(filePath);
+function requireMainFrame(event) {
+    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
+        throw new Error('此操作只能由画布主窗口发起');
+    }
+}
+
+ipcMain.on('media:grant-drop', (event, paths) => {
+    try {
+        requireMainFrame(event);
+        for (const file of (Array.isArray(paths) ? paths : []).slice(0, 1000)) {
+            try { mediaAccess.grant(file, { directory: fs.statSync(file).isDirectory(), persist: false }); } catch { /* Unsupported drops are not authorized. */ }
+        }
+        mediaAccess.persist();
+        event.returnValue = true;
+    } catch { event.returnValue = false; }
 });
 
-ipcMain.handle('shell:openFile', (_, filePath) => {
-    shell.openPath(filePath);
+ipcMain.handle('shell:showInExplorer', async (event, filePath) => {
+    requireMainFrame(event);
+    const resolved = await mediaAccess.resolve(filePath, { purpose: 'asset' });
+    shell.showItemInFolder(resolved.filePath);
+});
+
+ipcMain.handle('shell:openFile', async (event, filePath) => {
+    requireMainFrame(event);
+    const resolved = await mediaAccess.resolve(filePath, { purpose: 'open' });
+    const error = await shell.openPath(resolved.filePath);
+    if (error) throw new Error('系统未能打开此素材，请检查默认打开程序');
 });
 
 const RAVENHASH_URLS = Object.freeze({
@@ -2080,6 +2242,7 @@ ipcMain.handle('window:queueOrbFiles', async (event, payload) => {
         if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return false;
         try {
             if (!fs.statSync(filePath).isFile()) return false;
+            mediaAccess.grant(filePath);
             const normalizedPath = path.normalize(filePath);
             const pathKey = process.platform === 'win32' ? normalizedPath.toLowerCase() : normalizedPath;
             accepted += 1;
@@ -2325,6 +2488,7 @@ async function saveDroppedImageFile(file, targetDir) {
         const hash = crypto.createHash('md5').update(prepared.buffer).digest('hex').slice(0, 12);
         const filePath = path.join(saveDir, `web_drop_${hash}${extension}`);
         if (!fs.existsSync(filePath)) await fs.promises.writeFile(filePath, prepared.buffer);
+        mediaAccess.grant(filePath);
         return { success: true, filePath };
     } catch (error) {
         return { success: false, error: error.message };
@@ -2405,7 +2569,7 @@ ipcMain.handle('image:saveDroppedFile', async (_, file, targetDir) => {
 
 ipcMain.handle('image:crop', async (_, body = {}) => {
     try {
-        const sourcePath = path.resolve(String(body.filePath || ''));
+        const { filePath: sourcePath } = await mediaAccess.resolve(body.filePath);
         if (!sourcePath || !fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
             return { success: false, error: '原图片文件不存在' };
         }
@@ -2422,6 +2586,7 @@ ipcMain.handle('image:crop', async (_, body = {}) => {
             .extract(crop)
             .toFormat(output.format, output.options)
             .toFile(output.filePath);
+        mediaAccess.grant(output.filePath);
         return {
             success: true,
             filePath: output.filePath,
@@ -2464,6 +2629,7 @@ ipcMain.handle('image:pasteFromClipboard', async (_, targetDir) => {
             fs.writeFileSync(filePath, img.toPNG());
         }
 
+        mediaAccess.grant(filePath);
         return { success: true, filePath };
     } catch (err) {
         return { success: false, error: err.message };
@@ -2617,7 +2783,7 @@ async function archiveLocalFile(filePath, targetDir) {
             return { success: false, error: 'Missing file path' };
         }
 
-        const sourcePath = path.resolve(String(filePath));
+        const { filePath: sourcePath } = await mediaAccess.resolve(filePath, { purpose: 'asset' });
         if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
             return { success: false, error: 'Source file does not exist' };
         }
@@ -2631,6 +2797,7 @@ async function archiveLocalFile(filePath, targetDir) {
 
         const existingArchivePath = await findExistingArchivePath(saveDir, sourcePath);
         if (existingArchivePath) {
+            mediaAccess.grant(existingArchivePath);
             return {
                 success: true,
                 filePath: existingArchivePath,
@@ -2641,6 +2808,7 @@ async function archiveLocalFile(filePath, targetDir) {
 
         const archivedPath = getAvailableArchivePath(saveDir, sourcePath);
         await fs.promises.copyFile(sourcePath, archivedPath);
+        mediaAccess.grant(archivedPath);
         return { success: true, filePath: archivedPath, archived: true };
     } catch (err) {
         return { success: false, error: err.message };
@@ -2662,7 +2830,7 @@ async function moveFilesToFolder(filePaths, targetDir) {
 
         for (const source of paths) {
             try {
-                const sourcePath = path.resolve(source);
+                const { filePath: sourcePath } = await mediaAccess.resolve(source, { purpose: 'asset' });
                 if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
                     errors.push({ source, error: 'Source file does not exist' });
                     continue;
@@ -2675,6 +2843,7 @@ async function moveFilesToFolder(filePaths, targetDir) {
 
                 const targetPath = getAvailableArchivePath(saveDir, sourcePath);
                 await fs.promises.rename(sourcePath, targetPath);
+                mediaAccess.grant(targetPath);
                 moved.push({ oldPath: sourcePath, newPath: targetPath, moved: true });
             } catch (err) {
                 errors.push({ source, error: err.message });
@@ -2706,7 +2875,7 @@ async function copyFilesToFolder(filePaths, targetDir) {
 
         for (const source of paths) {
             try {
-                const sourcePath = path.resolve(source);
+                const { filePath: sourcePath } = await mediaAccess.resolve(source, { purpose: 'asset' });
                 if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
                     errors.push({ source, error: 'Source file does not exist' });
                     continue;
@@ -2719,6 +2888,7 @@ async function copyFilesToFolder(filePaths, targetDir) {
 
                 const targetPath = getAvailableArchivePath(saveDir, sourcePath);
                 await fs.promises.copyFile(sourcePath, targetPath);
+                mediaAccess.grant(targetPath);
                 copied.push({ oldPath: sourcePath, newPath: targetPath, copied: true });
             } catch (err) {
                 errors.push({ source, error: err.message });
@@ -3197,6 +3367,7 @@ async function downloadImageFromUrl(url, targetDir, redirectDepth = 0) {
             if (fs.existsSync(cachedPath) && fs.statSync(cachedPath).size > 0) {
                 try {
                     await sharp(cachedPath).metadata();
+                    mediaAccess.grant(cachedPath);
                     return { success: true, filePath: cachedPath };
                 } catch (_) {
                     await fs.promises.unlink(cachedPath).catch(() => {});
@@ -3211,10 +3382,8 @@ async function downloadImageFromUrl(url, targetDir, redirectDepth = 0) {
         if (/\.(?:pinimg|pinterest)\.com$/i.test(parsedUrl.hostname)) {
             headers.Referer = 'https://www.pinterest.com/';
         }
-        const res = await net.fetch(normalizedUrl, {
-            headers,
-            redirect: 'follow'
-        });
+        const res = await fetchPublicMedia(normalizedUrl, { headers,
+            resolveProxy: target => session.defaultSession.resolveProxy(target) });
 
         if (!res.ok) {
             return { success: false, error: `HTTP ${res.status} ${res.statusText}` };
@@ -3246,12 +3415,14 @@ async function downloadImageFromUrl(url, targetDir, redirectDepth = 0) {
         if (fs.existsSync(filePath) && fs.statSync(filePath).size > 0) {
             try {
                 await sharp(filePath).metadata();
+                mediaAccess.grant(filePath);
                 return { success: true, filePath };
             } catch (_) {
                 await fs.promises.unlink(filePath).catch(() => {});
             }
         }
         await fs.promises.writeFile(filePath, prepared.buffer);
+        mediaAccess.grant(filePath);
         return { success: true, filePath };
     } catch (err) {
         return { success: false, error: err.message };
@@ -3266,7 +3437,9 @@ function startApplication() {
         await app.whenReady();
 
         // 监听本地文件加载
-        protocol.handle('local-res', handleLocalResourceRequest);
+        protocol.handle('local-res', request => handleLocalResourceRequest(request, {
+            accessPolicy: mediaAccess, allowedOrigins: isDev ? ['null', 'file://', DEV_RENDERER_ORIGIN] : ['null', 'file://']
+        }));
         createSplashWindow();
         await initServices();
 
@@ -3284,9 +3457,12 @@ let agentShutdownPromise = null;
 let agentShutdownComplete = false;
 app.on('before-quit', event => {
     isQuitting = true;
-    if (agentServices && !agentShutdownComplete) {
+    hunyuanRhinoWorkflow?.close();
+    rhinoWorkbench?.close();
+    blenderWorkbench?.close();
+    if ((agentServices || hunyuanAccounts) && !agentShutdownComplete) {
         event.preventDefault();
-        agentShutdownPromise ||= agentServices.close().catch(() => {}).finally(() => {
+        agentShutdownPromise ||= Promise.all([agentServices?.close(), hunyuanAccounts?.closeAll()]).catch(() => {}).finally(() => {
             agentShutdownComplete = true;
             app.quit();
         });

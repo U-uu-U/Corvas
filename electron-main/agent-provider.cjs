@@ -1,8 +1,9 @@
 'use strict';
 
 const { createHash } = require('node:crypto');
-const { mapLocalError, readPublicError } = require('../shared/public-api-error.cjs');
+const { mapLocalError, readPublicError, parsePayload } = require('../shared/public-api-error.cjs');
 const { redactSensitiveText, GENERIC_FAILURE_MESSAGE } = require('../shared/error-redaction.cjs');
+const { diagnostic, sanitize } = require('./diagnostics.cjs');
 
 function endpointFor(provider, anthropic) {
     const fallback = anthropic
@@ -247,14 +248,7 @@ function parseJson(text) {
     try { return JSON.parse(text); } catch { throw new Error('Malformed provider JSON response'); }
 }
 
-function providerError(payload) {
-    const mapped = readPublicError(payload);
-    if (mapped) return Object.assign(new Error(mapped.message), mapped);
-    const detail = typeof payload?.error === 'string' ? payload.error : payload?.error?.message;
-    return new Error(`Provider error: ${typeof detail === 'string' ? detail : 'request failed'}`);
-}
-
-function accumulator(anthropic, names, onDelta, signal) {
+function accumulator(anthropic, names, onDelta, signal, providerError) {
     let text = '';
     let usage = {};
     let complete = false;
@@ -384,7 +378,8 @@ function unsupportedTools(status, text) {
  * fields; Anthropic usage events are merged. timeoutMs defaults to 120 seconds and
  * covers both attempts and all body reads. Inject Electron net.fetch via fetchImpl.
  */
-async function callAgentProvider({ provider, messages, tools = [], signal, onDelta, maxTokens = 4096, fetchImpl } = {}) {
+async function callAgentProvider({ provider, messages, tools = [], signal, onDelta, maxTokens = 4096, fetchImpl,
+    taskId, clientTaskId, requestId } = {}) {
     const { textProviderError } = await import('../src/provider-capabilities.js');
     const providerError = textProviderError(provider);
     if (providerError) throw Object.assign(new Error(providerError.error), { code: providerError.code });
@@ -392,6 +387,25 @@ async function callAgentProvider({ provider, messages, tools = [], signal, onDel
     const controller = new AbortController();
     let timer;
     let activeResponse;
+    let endpoint = provider?.endpoint || '';
+    let responseRequestId;
+    const recordedFailures = new WeakSet();
+    const recordFailure = (status, detail, payload) => {
+        let endpointRef = 'unknown';
+        try { const url = new URL(endpoint); endpointRef = createHash('sha256').update(url.origin + url.pathname).digest('hex').slice(0, 12); } catch { /* Invalid local configuration. */ }
+        diagnostic('error', 'agent.provider_failed', sanitize({ endpointRef, model: provider?.model,
+            status, taskId: taskId || payload?.task_id || payload?.taskId, clientTaskId, clientRequestId: requestId,
+            requestId: payload?.error?.request_id || payload?.request_id || responseRequestId || requestId,
+            detail }, [key, encodeURIComponent(key)]));
+    };
+    const responseFailure = (status, payload) => {
+        const parsed = parsePayload(payload) || payload;
+        recordFailure(status, parsed, parsed);
+        const mapped = mapLocalError(status, parsed, { query: true, taskId, requestId: responseRequestId || requestId });
+        const error = Object.assign(new Error(mapped.error), mapped, { status });
+        recordedFailures.add(error);
+        return error;
+    };
     const cancel = () => controller.abort(signal.reason);
     try {
         if (!provider?.model || !key) throw new Error('Provider model and API key are required');
@@ -412,7 +426,7 @@ async function callAgentProvider({ provider, messages, tools = [], signal, onDel
         validateHistory(messages);
         const names = toolNames(tools, messages);
         const anthropic = type === 'anthropic';
-        const endpoint = endpointFor(provider, anthropic);
+        endpoint = endpointFor(provider, anthropic);
         const body = requestBody(provider, messages, tools, names, anthropic, maxTokens);
         const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json' };
         if (anthropic) {
@@ -435,6 +449,8 @@ async function callAgentProvider({ provider, messages, tools = [], signal, onDel
                 }
                 return received;
             }, controller.signal);
+            responseRequestId = response.headers?.get('x-request-id') || response.headers?.get('request-id')
+                || response.headers?.get('x-log-id') || undefined;
             if (!response.ok) {
                 let errorText = '';
                 await readBody(response, controller.signal, chunk => { errorText += chunk; });
@@ -443,12 +459,9 @@ async function callAgentProvider({ provider, messages, tools = [], signal, onDel
                     unavailable = true;
                     continue;
                 }
-                const mapped = mapLocalError(response.status, errorText, { query: true });
-                const error = Object.assign(new Error(`HTTP ${response.status}: ${mapped.error}`), mapped);
-                error.status = response.status;
-                throw error;
+                throw responseFailure(response.status, errorText);
             }
-            const state = accumulator(anthropic, names, onDelta, controller.signal);
+            const state = accumulator(anthropic, names, onDelta, controller.signal, payload => responseFailure(response.status, payload));
             if (/text\/event-stream/i.test(response.headers?.get('content-type') || '')) {
                 const parse = sseParser(state.event);
                 await readBody(response, controller.signal, chunk => parse(chunk));
@@ -465,6 +478,7 @@ async function callAgentProvider({ provider, messages, tools = [], signal, onDel
         }
         throw new Error('Provider retry exhausted');
     } catch (error) {
+        if (!recordedFailures.has(error)) recordFailure(error?.status, error);
         // Providers and custom transports may echo credentials in error messages.
         let message = String(error?.message || 'Agent provider request failed');
         for (const secret of new Set([key, encodeURIComponent(key)])) {
@@ -482,6 +496,9 @@ async function callAgentProvider({ provider, messages, tools = [], signal, onDel
             safe.code = error.code;
             safe.requestId = error.requestId;
             safe.submissionUnknown = error.submissionUnknown === true;
+            safe.taskId = error.taskId;
+            safe.confirmedFailure = error.confirmedFailure === true;
+            safe.retryable = error.retryable === true;
         }
         throw safe;
     } finally {

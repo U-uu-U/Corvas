@@ -103,19 +103,21 @@ export class GraphRunner {
     async runFrom(targetId, options = {}) {
         const context = this.ctx.captureRunContext?.() || {};
         const items = this._items();
-        const connections = this.ctx.getConnections() || [];
+        const allConnections = this.ctx.getConnections() || [];
         const target = items.get(targetId);
         if (!target) return { ok: false, reason: '节点不存在' };
 
+        // A saved product is an input snapshot, not a request to rerun its ancestors.
+        const connections = allConnections.filter(connection => {
+            const input = items.get(connection.to.nodeId);
+            return connection.to.nodeId === targetId || !input || (input.kind === 'op'
+                && !Object.keys(generatorResultOutput(input)).length);
+        });
         const { order, missing, cyclic } = topoOrder(targetId, items, connections);
         if (cyclic) return { ok: false, reason: '存在环形依赖，无法执行' };
         if (!order.length) return { ok: false, reason: '无可执行节点' };
         if (missing.length) {
             console.warn('[Runner] 连线引用了已删除的节点:', missing);
-        }
-
-        if (order.some(id => this.activeNodes.has(this._key(id, context)))) {
-            return { ok: false, reason: '该节点链正在执行' };
         }
 
         // Shared references are read per run; only nodes doing work own status and cancellation.
@@ -132,9 +134,17 @@ export class GraphRunner {
             return readOnly ? [[id, { item: { ...item, config }, product }]] : [];
         }));
         const ownedNodes = order.filter(id => !readOnlyInputs.has(id));
-        ownedNodes.forEach(id => this.activeNodes.add(this._key(id, context)));
+        const blockedNodeId = order.find(id => this.activeNodes.has(this._key(id, context))
+            && (!readOnlyInputs.has(id) || items.get(id)?.nodeType === 'text'));
+        if (blockedNodeId) {
+            return { ok: false, code: 'NODE_BUSY', nodeId: blockedNodeId,
+                reason: blockedNodeId === targetId
+                    ? '当前节点正在生成，请等待完成或中断后再试；其他节点可同时生成'
+                    : '需要的上游节点正在生成且尚无可复用产物，请等待它完成；其他分支可同时生成' };
+        }
         const runState = { id: crypto.randomUUID(), targetId, order, ownedNodes, items, context, canceled: false,
             snapshots: new Map([...items].map(([id, item]) => [id, structuredClone(item)])) };
+        ownedNodes.forEach(id => this.activeNodes.add(this._key(id, context)));
         this.activeRuns.set(this._key(targetId, context), runState);
         const runCache = new Map();
 
