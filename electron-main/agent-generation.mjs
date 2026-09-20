@@ -10,6 +10,7 @@ import { resolveImageDimensions, resolveGenerationDisplaySize, inferClosestAspec
 import { inferProviderCapability, isMidjourneyImageModel, canUseTextProvider } from '../src/provider-capabilities.js';
 import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from '../src/generation-request-params.js';
 import { getVideoModelProfile } from '../shared/video-model-profiles.mjs';
+import { isVideoGenerationAvailable, assertVideoGenerationAvailable } from '../shared/video-generation-availability.mjs';
 import { DEFAULT_MODEL_CONFIG } from '../src/model-config-default.js';
 import { resolveModelConfigEntry, toVideoProfileOverrides, mergeVideoProfile, validateModelRequest } from '../src/model-config-capabilities.js';
 import { getModelPresentation } from '../shared/model-presentation.mjs';
@@ -165,7 +166,7 @@ export class AgentGeneration {
         return provider;
     }
     listModels(modelConfig = this.loadModelConfig()) {
-        return this.providers().filter(p => inferProviderCapability(p) !== 'text').map(p => {
+        return this.providers().filter(p => inferProviderCapability(p) !== 'text' && isVideoGenerationAvailable(p)).map(p => {
             const kind = inferProviderCapability(p);
             const { profile, presentation, candidates, matched, ambiguous } = this._capabilities(p, kind, modelConfig);
             const price = presentation?.price?.kind === 'sale' ? presentation.price : null;
@@ -178,6 +179,16 @@ export class AgentGeneration {
                 modelConfig: { revision: modelConfig.revision, matched, ambiguous, candidates: copy(candidates) },
                 pricingStatus: price ? 'configured_sale' : 'unknown' };
         });
+    }
+    _isPreparedGenerationNode(node, kind, run) {
+        if (!node || node.kind !== 'op' || node.nodeType !== kind) return false;
+        if (node.id === run.source?.nodeId) return false;
+        if (getGeneratorResultEntries(node).length || node.filePath) return false;
+        if (node.runStatus && !['idle', 'queued', 'canceled', 'error'].includes(node.runStatus)) return false;
+        if (node.metadata?.agentRunId || node.metadata?.agentStepId || node.metadata?.agentPrepared) return true;
+        const title = String(node.title || '').trim();
+        const defaults = new Set([kind === 'video' ? '视频生成' : '图片生成', kind]);
+        return Boolean(title && !defaults.has(title) && /[|｜:：]/.test(title));
     }
     prepare(run, input, modelConfig = this.loadModelConfig()) {
         const project = this.board.readProject(run.projectId);
@@ -235,6 +246,7 @@ export class AgentGeneration {
             const count = Number(config.count ?? 1);
             if (!Number.isInteger(count) || count < 1 || count > 8) throw error('COUNT_LIMIT', '单节点每批次需要 1 到 8 次生成');
             const provider = this.resolveProvider(config, node.nodeType);
+            if (node.nodeType === 'video') assertVideoGenerationAvailable(provider);
             if (Number(config.midjourneyRepeat || 1) > 1)
                 throw error('COUNT_LIMIT', 'Agent 批次请使用生成数量，不使用额外的 Midjourney repeat');
             const { profile, presentation, entry } = this._capabilities(provider, node.nodeType, modelConfig);
@@ -273,13 +285,24 @@ export class AgentGeneration {
                 title: `${node.title || node.nodeType} ${index + 1}/${prompts.length}`, model: provider.model, kind: node.nodeType,
                 count: 1, prompt, originalPrompt: config.prompt || '', config, price, references,
                 providerRef: { id: provider.id, model: provider.model, endpoint: provider.endpoint, type: provider.type }, nodeFingerprints,
-                width: node.width || 320, height: node.height || 320, x: node.x || 0, y: node.y || 0 });
+                width: node.width || 320, height: node.height || 320, x: node.x || 0, y: node.y || 0,
+                ...(this._isPreparedGenerationNode(node, node.nodeType, run) ? { reuseNodeId: node.id } : {}) });
         }
         if (!steps.length || steps.length > 20) throw error('BATCH_LIMIT', '每批次需要 1 到 20 次媒体生成');
         const currencies = new Set(steps.map(s => s.price?.currency).filter(Boolean));
-        const priceKnown = steps.every(s => s.price?.unit === 'request') && currencies.size === 1;
+        const costs = steps.map(step => {
+            const price = step.price;
+            if (!price || !Number.isFinite(price.amount) || price.amount < 0) return null;
+            if (price.unit === 'request') return price.amount;
+            const seconds = Number(step.config?.duration);
+            if (price.unit === 'second' && step.kind === 'video' && Number.isFinite(seconds) && seconds > 0) {
+                return Number((price.amount * seconds).toFixed(6));
+            }
+            return null;
+        });
+        const priceKnown = costs.every(Number.isFinite) && currencies.size === 1;
         return { summary: String(input.summary || '生成所选节点'), steps, priceKnown,
-            estimatedCost: priceKnown ? steps.reduce((sum, step) => sum + step.price.amount, 0) : null,
+            estimatedCost: priceKnown ? Number(costs.reduce((sum, value) => sum + value, 0).toFixed(6)) : null,
             currency: priceKnown ? [...currencies][0] : null };
     }
     _pathFor(node) { return getGeneratorResultEntries(node)[0]?.filePath || node.filePath || ''; }
@@ -295,7 +318,8 @@ export class AgentGeneration {
     async execute(step, run, { signal, resume, checkpoint }) {
         const project = this.board.readProject(run.projectId);
         this._validate(step, project);
-        const outputId = `result-${step.id}`;
+        const reusableTarget = step.reuseNodeId && project.items.find(n => n.id === step.reuseNodeId);
+        const outputId = reusableTarget ? reusableTarget.id : `result-${step.id}`;
         const existing = project.items.find(n => n.id === outputId);
         const hasExistingOutput = existing?.filePath && fs.existsSync(existing.filePath);
         const downloaded = step.filePaths?.length && step.filePaths.every(filePath => fs.existsSync(filePath));
@@ -305,6 +329,7 @@ export class AgentGeneration {
         const modelConfig = submitting
             ? (this.refreshModelConfig ? await this.refreshModelConfig() : this.loadModelConfig()) : null;
         const provider = this.resolveProvider(step.providerRef, step.kind);
+        if (submitting && step.kind === 'video') assertVideoGenerationAvailable(provider);
         if ((step.providerRef.endpoint && provider.endpoint !== step.providerRef.endpoint)
             || (step.providerRef.type && provider.type !== step.providerRef.type)) throw error('PROVIDER_CHANGED', 'API 路线已变更，请重新确认计划');
         const references = step.references.map(ref => {

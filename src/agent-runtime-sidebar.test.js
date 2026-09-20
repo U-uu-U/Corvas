@@ -236,6 +236,22 @@ test('rehydrating results-only snapshots saves files and keeps the final reply u
     sidebar.runtimeClient.dispose();
 });
 
+test('MCP Rhino workflow snapshots restore a dedicated conversation without moving the active chat', () => {
+    const { sidebar } = harness(async () => {});
+    const run = { id: 'workflow-run', projectId: 'project-1', conversationId: 'external-workflows',
+        taskKind: 'rhino', external: false, status: 'completed', outputText: 'Rhino cleanup completed', lastSeq: 6, events: [] };
+    sidebar._onAgentRuntimeChange(run);
+    sidebar._onAgentRuntimeChange(run);
+    const project = sidebar._loadAgentConversationStore()['project-1'];
+    const conversations = project.conversations.filter(entry => entry.id === 'external-workflows');
+    assert.equal(conversations.length, 1);
+    assert.equal(conversations[0].title, 'MCP 工作流');
+    assert.equal(conversations[0].messages.filter(message => message.role === 'assistant').length, 1);
+    assert.equal(project.activeConversationId, 'chat-1');
+    assert.equal(sidebar.activeConversationId, 'chat-1');
+    sidebar.runtimeClient.dispose();
+});
+
 const imageAttachment = name => ({ mediaType: 'image', filePath: `C:/refs/${name}.png`, name });
 const imageContext = attachments => ({ nodeId: 'image-node', nodeType: 'image',
     originalPrompt: 'original', effectivePrompt: 'latest prompt', parameters: { quality: 'high' }, attachments });
@@ -331,4 +347,60 @@ test('legacy node generation rejects exclusions before any paid request and reta
     assert.equal(requests.length, 0);
     assert.deepEqual(sidebar.pendingAgentAttachments.map(item => item.name), ['b']);
     assert.deepEqual(sidebar.pendingAgentSource.excludedAttachmentKeys, ['image:c:/refs/a.png']);
+});
+
+test('manual canvas references survive context refresh and are connected before node generation', async t => {
+    let request;
+    const { sidebar } = harness(async body => {
+        request = body;
+        return { id: 'manual-run', projectId: body.projectId, conversationId: body.conversationId,
+            status: 'completed', lastSeq: 1, events: [] };
+    });
+    t.after(() => sidebar.runtimeClient.dispose());
+    const a = { ...imageAttachment('a'), sourceNodeId: 'source-a' };
+    const b = { id: 'source-b', ...imageAttachment('b'), annotation: '产品正面' };
+    sidebar._refreshPendingAgentNodeContext(imageContext([a]));
+    sidebar.agentMaterialPickKey = sidebar._activeConversationCacheKey();
+    sidebar._onAgentMaterialSelection({ owner: 'agent', selected: true, changedEntry: b });
+    sidebar._refreshPendingAgentNodeContext(imageContext([a]));
+    assert.deepEqual(sidebar.pendingAgentAttachments.map(item => item.name), ['a', 'b']);
+    assert.equal(sidebar.pendingAgentAttachments[1].manual, true);
+    let connected = false;
+    sidebar.options.connectAgentReferences = (id, references) => {
+        assert.equal(id, 'image-node'); assert.equal(references[0].sourceNodeId, 'source-b'); connected = true;
+    };
+    sidebar.options.getAgentNodeContext = () => {
+        assert.equal(connected, true);
+        return imageContext([a, { ...b, sourceNodeId: b.id }]);
+    };
+    await sidebar.generateImageFromNode(imageContext([a]), '使用两张图');
+    assert.deepEqual(request.attachments.map(item => item.sourceNodeId), ['source-a', 'source-b']);
+    assert.equal(request.attachments[1].annotation, '产品正面');
+});
+
+test('material picking handles mixed media, duplicate clicks, exclusions and conversation boundaries', t => {
+    const { sidebar } = harness(async () => {});
+    t.after(() => sidebar.runtimeClient.dispose());
+    sidebar._refreshPendingAgentNodeContext(imageContext([]));
+    sidebar.agentMaterialPickKey = sidebar._activeConversationCacheKey();
+    const select = (mediaType, selected = true) => ({ owner: 'agent', selected,
+        changedEntry: { id: `${mediaType}-node`, filePath: `/${mediaType}.${mediaType === 'audio' ? 'wav' : mediaType === 'video' ? 'mp4' : 'png'}`, mediaType } });
+    for (const kind of ['image', 'image', 'video', 'audio']) sidebar._onAgentMaterialSelection(select(kind));
+    assert.deepEqual(sidebar.pendingAgentAttachments.map(item => item.mediaType), ['image', 'video', 'audio']);
+    sidebar._onAgentMaterialSelection(select('image', false));
+    assert.equal(sidebar.pendingAgentAttachments.length, 2);
+    assert.equal(sidebar.pendingAgentSource.excludedAttachmentKeys.length, 1);
+    sidebar._onAgentMaterialSelection(select('image'));
+    assert.equal(sidebar.pendingAgentAttachments.length, 3);
+    assert.equal(sidebar.pendingAgentSource.excludedAttachmentKeys.length, 0);
+    sidebar.activeConversationId = 'chat-2';
+    sidebar._onAgentMaterialSelection(select('audio', false));
+    assert.equal(sidebar.pendingAgentAttachments.length, 3, 'A stale picker cannot edit another conversation');
+    let ended = 0;
+    sidebar.options.endMediaReferencePick = () => ended++;
+    sidebar._restorePendingAgentAttachments();
+    assert.equal(ended, 1);
+    assert.equal(sidebar.pendingAgentAttachments.length, 0);
+    sidebar.activeConversationId = 'chat-1'; sidebar._restorePendingAgentAttachments();
+    assert.equal(sidebar.pendingAgentAttachments.length, 3);
 });

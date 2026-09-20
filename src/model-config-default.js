@@ -945,6 +945,115 @@ export const DEFAULT_MODEL_CONFIG = {
             "notes": "2026-09-12用户确认：线路二固定30秒、720p、最多9张参考图；4-30秒仅属于独立的seedance_v2.5模型"
         },
         {
+            "id": "ravenhash-video.seedance-2.5-pro",
+            "presentation": {
+                "label": "Seedance 2.5 Pro",
+                "routeGroup": "zhubo-video",
+                "routeGroupLabel": "主播视频",
+                "routeLabel": "Seedance 2.5 Pro"
+            },
+            "pricing": {
+                "status": "known",
+                "hosts": [
+                    "art.ravenhash.org"
+                ],
+                "amount": 1.06,
+                "currency": "CNY",
+                "unit": "second",
+                "kind": "sale",
+                "source": "ravenhash configured sale",
+                "updatedAt": "2026-09-20T00:00:00Z"
+            },
+            "label": "seedance-2.5-pro",
+            "kind": "video",
+            "channel": "RavenHash视频",
+            "route": "主播 Seedance 2.5 Pro",
+            "priority": 140,
+            "match": {
+                "model": [
+                    "^seedance-2\\.5-pro$"
+                ]
+            },
+            "parameters": {
+                "accepts": [
+                    "model",
+                    "prompt",
+                    "seconds",
+                    "ratio",
+                    "resolution",
+                    "image_urls",
+                    "video_urls",
+                    "audio_urls"
+                ],
+                "required": [
+                    "model",
+                    "prompt"
+                ]
+            },
+            "options": {
+                "duration": {
+                    "type": "range",
+                    "min": 4,
+                    "max": 30,
+                    "integer": true,
+                    "unit": "second",
+                    "default": 4
+                },
+                "ratio": {
+                    "type": "enum",
+                    "values": [
+                        "adaptive",
+                        "16:9",
+                        "9:16",
+                        "1:1",
+                        "4:3",
+                        "3:4"
+                    ],
+                    "default": "adaptive",
+                    "allowAuto": true
+                },
+                "resolutionTier": {
+                    "type": "enum",
+                    "values": [
+                        "480p",
+                        "720p"
+                    ],
+                    "default": "720p"
+                }
+            },
+            "capabilities": {
+                "referenceImages": {
+                    "supported": true,
+                    "max": 30
+                },
+                "referenceVideos": {
+                    "supported": true,
+                    "max": 10,
+                    "note": "参考视频时长不得超过输出时长"
+                },
+                "referenceAudios": {
+                    "supported": true,
+                    "max": 10
+                },
+                "webSearch": {
+                    "supported": false
+                },
+                "cameraFixed": {
+                    "supported": false
+                },
+                "generatedAudio": {
+                    "supported": false
+                },
+                "watermark": {
+                    "supported": false
+                }
+            },
+            "prompt": {
+                "required": true
+            },
+            "notes": "2026-09-20核对video.zhubo.asia：4-30秒；480p/720p；最多30图/10视频/10音频；参考视频时长不得超过输出时长；老站售价CNY1.06/秒"
+        },
+        {
             "id": "ravenhash-video.seedance-v2.5",
             "presentation": {
                 "label": "HM-Seedance 2.5"
@@ -1834,6 +1943,216 @@ export const DEFAULT_MODEL_CONFIG = {
                 "concurrency": 1
             },
             "notes": "当前固定发送720p；支持参考图片和音频；不支持参考视频"
+        },
+        {
+            "id": "starframe.ch0107-sd-2.5-720p",
+            "label": "ch0107-sd-2.5-720p",
+            "presentation": {
+                "label": "Seedance 2.5 720p",
+                "routeLabel": "StarFrame CH0107"
+            },
+            "pricing": {
+                "status": "known",
+                "hosts": [
+                    "api.xzapi.vip"
+                ],
+                "amount": 1.06,
+                "currency": "CNY",
+                "unit": "second",
+                "kind": "sale",
+                "source": "user configured sale",
+                "updatedAt": "2026-09-20T12:00:00Z"
+            },
+            "kind": "video",
+            "channel": "StarFrame视频",
+            "route": "CH0107按秒线路",
+            "priority": 150,
+            "match": {
+                "model": [
+                    "^ch0107-sd-2\\.5-720p$"
+                ]
+            },
+            "parameters": {
+                "accepts": [
+                    "model",
+                    "prompt",
+                    "client_task_id",
+                    "mode",
+                    "duration",
+                    "aspect_ratio",
+                    "resolution",
+                    "references"
+                ],
+                "required": [
+                    "model",
+                    "prompt",
+                    "client_task_id",
+                    "mode"
+                ]
+            },
+            "options": {
+                "duration": {
+                    "type": "range",
+                    "min": 4,
+                    "max": 30,
+                    "integer": true,
+                    "unit": "second",
+                    "default": 4
+                },
+                "ratio": {
+                    "type": "unknown",
+                    "reason": "供应商未公开该模型比例枚举，当前界面使用文档示例16:9"
+                },
+                "resolutionTier": {
+                    "type": "enum",
+                    "values": [
+                        "720p"
+                    ],
+                    "default": "720p"
+                }
+            },
+            "capabilities": {
+                "referenceImages": {
+                    "supported": true,
+                    "max": 30
+                },
+                "referenceVideos": {
+                    "supported": true,
+                    "max": 10
+                },
+                "referenceAudios": {
+                    "supported": true,
+                    "max": 10
+                },
+                "generatedAudio": {
+                    "supported": false
+                },
+                "webSearch": {
+                    "supported": false
+                },
+                "cameraFixed": {
+                    "supported": false
+                },
+                "watermark": {
+                    "supported": false
+                }
+            },
+            "prompt": {
+                "required": true
+            },
+            "notes": "用户指定售价CNY1.06/秒；720p、4-30秒；最多30图/10视频/10音频，合计不超过50；references模式、公网URL；必传client_task_id；完成后鉴权下载content；比例枚举未公开"
+        },
+        {
+            "id": "globalaiopc.sd-2.5-discount-v1",
+            "label": "sd_2.5_discount_v1",
+            "presentation": {
+                "label": "Seedance 2.5",
+                "routeLabel": "GlobalAiOpc"
+            },
+            "kind": "video",
+            "channel": "GlobalAiOpc视频",
+            "route": "Seedance2.5官方折扣版",
+            "priority": 150,
+            "match": {
+                "model": [
+                    "^sd_2\\.5_discount_v1$"
+                ]
+            },
+            "parameters": {
+                "accepts": [
+                    "model",
+                    "prompt",
+                    "duration",
+                    "aspect_ratio",
+                    "resolution",
+                    "seed",
+                    "generate_audio",
+                    "reference_images",
+                    "reference_videos",
+                    "reference_audios",
+                    "first_image",
+                    "last_image"
+                ],
+                "required": [
+                    "model",
+                    "prompt",
+                    "duration"
+                ]
+            },
+            "options": {
+                "duration": {
+                    "type": "range",
+                    "min": 4,
+                    "max": 30,
+                    "integer": true,
+                    "unit": "second",
+                    "default": 4
+                },
+                "ratio": {
+                    "type": "enum",
+                    "values": [
+                        "16:9",
+                        "9:16",
+                        "1:1",
+                        "4:3",
+                        "3:4",
+                        "21:9",
+                        "adaptive"
+                    ],
+                    "default": "16:9",
+                    "resolveAdaptiveRatio": false
+                },
+                "resolutionTier": {
+                    "type": "enum",
+                    "values": [
+                        "480p",
+                        "720p",
+                        "1080p"
+                    ],
+                    "default": "720p"
+                }
+            },
+            "capabilities": {
+                "referenceImages": {
+                    "supported": true,
+                    "max": 30,
+                    "maxBytesPerImage": 31457279
+                },
+                "referenceVideos": {
+                    "supported": true,
+                    "max": 10,
+                    "note": "单个2-30秒，总时长不超过30秒"
+                },
+                "referenceAudios": {
+                    "supported": true,
+                    "max": 10,
+                    "note": "单个2-30秒，总时长不超过30秒"
+                },
+                "firstFrame": {
+                    "supported": true,
+                    "note": "仅有1-2张图片时按首尾帧提交"
+                },
+                "lastFrame": {
+                    "supported": true,
+                    "note": "仅有2张图片时第二张为尾帧"
+                },
+                "generatedAudio": {
+                    "supported": true
+                },
+                "webSearch": {
+                    "supported": false
+                },
+                "cameraFixed": {
+                    "supported": false
+                },
+                "watermark": {
+                    "supported": false
+                }
+            },
+            "prompt": {
+                "required": true
+            },
+            "notes": "4-30秒；480p/720p/1080p；最多30图/10视频/10音频；图片小于30MB且宽高在300-6000像素开区间、宽高比在0.4-2.5开区间；音视频各自总时长不超过30秒；素材审核ACTIVE后提交；不支持Base64；价格待确认"
         },
         {
             "id": "text.openai.gpt-5.6-terra",

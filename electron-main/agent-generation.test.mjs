@@ -82,6 +82,20 @@ async function setup(t, { items = [op('image')], connections = [], providers, mo
 }
 
 describe('AgentGeneration planning', () => {
+    test('Seedance Pro estimates per-second sale using approved duration and expanded count', async t => {
+        const p = { ...provider('videos', 'video', 'seedance-2.5-pro'), endpoint: 'https://art.ravenhash.org/v1' };
+        const h = await setup(t, { providers: [p], items: [op('video', 'video', { count: 2, duration: 5 })] });
+        const run = h.plan(['video']);
+        assert.equal(run.plan.priceKnown, true);
+        assert.equal(run.plan.estimatedCost, 10.6);
+        assert.equal(run.plan.currency, 'CNY');
+        assert.equal(run.steps[0].price.unit, 'second');
+        assert.equal(run.steps[0].price.amount, 1.06);
+        await h.execute(run.steps[0], run);
+        assert.equal(h.requests[0].body.duration, 5);
+        assert.equal(h.requests[0].body.providerConfig.model, p.model);
+        assert.equal(h.requests[0].body.price, undefined);
+    });
     test('runtime text resolver rejects a stale role on a dedicated image model', async t => {
         const h = await setup(t, { providers: [provider('bad-text','text','gpt-image-2'),provider('text','text','gpt-5.5')] });
         assert.throws(() => h.generation.resolveProvider({ providerId: 'bad-text' }, 'text'), { code: 'PROVIDER_REQUIRED' });
@@ -732,6 +746,28 @@ describe('AgentGeneration execution', () => {
         assert.equal(output.generation.agentRunId, run.id);
         assert.equal(output.resultEntries[0].filePath, result.filePaths[0]);
         assert.equal(h.projects.original.connections[0].kind, 'history');
+    });
+
+    test('approved plans reuse an existing named empty generator node instead of creating a result child', async t => {
+        const placeholder = op('front-view', 'image', { prompt: '生成正视图' });
+        placeholder.title = '机械狗六视图 | 正视图';
+        const h = await setup(t, { items: [placeholder] });
+        const run = h.plan(['front-view']);
+        assert.equal(run.steps[0].reuseNodeId, 'front-view');
+        const result = await h.execute(run.steps[0], run);
+        assert.equal(result.nodeIds[0], 'front-view');
+        assert.equal(h.projects.original.items.length, 1);
+        assert.equal(h.projects.original.items[0].filePath, result.filePaths[0]);
+        assert.equal(h.projects.original.connections.length, 0);
+    });
+
+    test('generic source nodes keep the existing new-child generation behavior', async t => {
+        const h = await setup(t, { items: [op('image')] });
+        const run = h.plan(['image']);
+        assert.equal(run.steps[0].reuseNodeId, undefined);
+        const result = await h.execute(run.steps[0], run);
+        assert.equal(result.nodeIds[0], `result-${run.steps[0].id}`);
+        assert.equal(h.projects.original.items.length, 2);
     });
 
     test('approved count loop submits each step once and preserves every result reference', async t => {

@@ -4,10 +4,11 @@
 
 import Konva from 'konva';
 import { installMediaViewportCulling } from './canvas-media-culling.js';
+import { createAudioPlayer } from './canvas-audio-player.js';
 import { GraphView } from './graph-view.js';
 import { collectUpstreamMediaAttachments, collectUpstreamPromptContext } from './agent-attachments.js';
 import { NODE_TYPES } from './node-types.js';
-import { formatClientGenerationError } from './generation-progress.js';
+import { formatClientGenerationError, formatClientStatusMessage, generationFailureError } from './generation-progress.js';
 import { nodeIconSvg } from './node-icons.js';
 import { GraphRunner, STATUS } from './graph-runner.js';
 import { generationNodeSignature } from '../shared/generation-node-state.mjs';
@@ -2369,7 +2370,7 @@ export class CanvasManager {
         requestAnimationFrame(() => preview.classList.add('show'));
     }
 
-    beginMediaReferencePick(type, entries = [], maxItems = 1, allSelections = {}) {
+    beginMediaReferencePick(type, entries = [], maxItems = 1, allSelections = {}, options = {}) {
         const normalizedType = type === 'mixed'
             ? 'mixed'
             : (['image', 'video', 'audio'].includes(type) ? type : 'image');
@@ -2385,10 +2386,11 @@ export class CanvasManager {
                 mediaType,
                 Math.max(0, Number(maxItems?.[mediaType]) || 0)
             ]));
-            this._activeMediaReferencePick = { type: 'mixed', limits };
+            this._activeMediaReferencePick = { type: 'mixed', limits, owner: options.owner || null,
+                excludedIds: options.excludedIds || [] };
             this._renderMediaReferencePickHighlights();
             this._showCanvasStatus('依次点击画布中的图片、视频或音频素材；再次点击可取消选择', 4200);
-            this.emit('mediaReferencePickStateChanged', { active: true, type: 'mixed' });
+            this.emit('mediaReferencePickStateChanged', { active: true, type: 'mixed', owner: options.owner || null });
             return true;
         }
         const normalizedEntries = (Array.isArray(entries) ? entries : [])
@@ -2436,6 +2438,38 @@ export class CanvasManager {
         return true;
     }
 
+    beginAgentMaterialPick(attachments = [], sourceNodeId = '') {
+        this._closeGenerationComposer({ commit: true });
+        const selections = { image: [], video: [], audio: [] };
+        for (const attachment of attachments) {
+            const id = attachment.sourceNodeId || attachment.itemId || attachment.id;
+            const entry = this._normalizeMediaReferenceEntry({ id });
+            if (entry && selections[entry.mediaType] && !selections[entry.mediaType].some(item => item.id === entry.id)) {
+                selections[entry.mediaType].push(entry);
+            }
+        }
+        return this.beginMediaReferencePick('mixed', [], { image: 32, video: 32, audio: 32 }, selections,
+            { owner: 'agent', excludedIds: sourceNodeId ? [sourceNodeId] : [] });
+    }
+
+    connectAgentReferences(nodeId, attachments = []) {
+        const target = this.items.get(nodeId)?.data;
+        if (!target || target.kind !== 'op' || !['image', 'video'].includes(target.nodeType)) return false;
+        for (const attachment of attachments) {
+            const sourceId = attachment.sourceNodeId || attachment.itemId;
+            const source = this.items.get(sourceId)?.data;
+            if (!source || sourceId === nodeId) throw new Error('添加的素材节点已删除或不能引用自身，请重新选择素材。');
+            const type = this._getItemMediaType(source);
+            if (target.nodeType === 'image' && type !== 'image') continue;
+            if (!['image', 'video', 'audio'].includes(type)) continue;
+            const existing = this.graphView?.connections.some(connection => connection.kind !== 'history'
+                && connection.from.nodeId === sourceId && this._isGeneratorInputConnection(target, connection));
+            if (!existing && !this.graphView?.connect({ nodeId: sourceId, port: this._mediaOutputPortName(source) },
+                { nodeId, port: 'source' })) throw new Error('参考素材连接失败，请检查是否形成循环连接。');
+        }
+        return true;
+    }
+
     endMediaReferencePick(options = {}) {
         const pick = this._activeMediaReferencePick;
         if (!pick && !options.clearHighlights) return false;
@@ -2451,7 +2485,7 @@ export class CanvasManager {
         }
         this._renderMediaReferencePickHighlights();
         document.body.style.cursor = 'default';
-        if (pick) this.emit('mediaReferencePickStateChanged', { active: false, type });
+        if (pick) this.emit('mediaReferencePickStateChanged', { active: false, type, owner: pick.owner || null });
         if (pick && !options.silent) this._showCanvasStatus('参考素材选择已完成');
         return true;
     }
@@ -2497,6 +2531,10 @@ export class CanvasManager {
     _toggleMediaReferencePick(item) {
         const pick = this._activeMediaReferencePick;
         if (!pick || !item?.data) return;
+        if (pick.excludedIds?.includes(item.data.id)) {
+            this._showCanvasStatus('不能将当前生成节点作为自己的参考素材');
+            return;
+        }
         const entry = this._normalizeMediaReferenceEntry({
             id: item.data.id,
             filePath: this._copyableFilePath(item.data)
@@ -2535,7 +2573,10 @@ export class CanvasManager {
         this._renderMediaReferencePickHighlights();
         this.emit('mediaReferenceSelectionChanged', {
             type: targetType,
-            entries: entries.map(candidate => ({ ...candidate }))
+            entries: entries.map(candidate => ({ ...candidate })),
+            owner: pick.owner || null,
+            changedEntry: { ...entry },
+            selected: existingIndex < 0
         });
         if (pick.type !== 'mixed' && existingIndex < 0 && entries.length >= maxItems) {
             this.endMediaReferencePick({ silent: true });
@@ -2860,6 +2901,7 @@ export class CanvasManager {
         const coverControls = item.group?.findOne?.('.videoCoverControls');
         if (controls) this._layoutVideoControlGroup(controls, targetWidth, targetHeight);
         if (coverControls) this._layoutVideoControlGroup(coverControls, targetWidth, targetHeight);
+        item.audioPlayer?.layout(targetWidth, targetHeight);
         this._syncExternalNodeTitle(item.group, item.data, this._getItemMediaType(item.data));
         this.graphView?.scheduleSync(item.data.id);
         if (this.imageTransformer?.nodes?.()[0] === displayNode) this.imageTransformer.forceUpdate();
@@ -3343,30 +3385,26 @@ export class CanvasManager {
                     return;
                 }
 
-                // ── Ctrl+拖拽：在原位留下副本，拖走原件 ──
-                if (e.evt && (e.evt.ctrlKey || e.evt.metaKey) && !this._isAltDragModifier(e.evt)) {
-                    const clonedDataList = [];
-                    let cloneIdx = 0;
-                    this.selectedItems.forEach(id => {
-                        const item = this.items.get(id);
-                        if (!item) return;
-                        const cloneData = {
-                            id: Date.now().toString() + '_c' + (cloneIdx++) + Math.random().toString(36).substr(2, 5),
-                            kind: item.data.kind,
-                            mediaType: item.data.mediaType,
-                            filePath: item.data.filePath,
-                            x: item.group.x(),
-                            y: item.group.y(),
-                            width: item.data.width,
-                            height: item.data.height,
-                            addedAt: Date.now()
-                        };
-                        this._createCard(cloneData);
-                        clonedDataList.push(cloneData);
-                    });
-                    if (clonedDataList.length > 0) {
-                        this.emit('clonedItems', clonedDataList);
+                // Hand the gesture to the OS before Konva moves any canvas nodes.
+                // Export copies give web upload fields real Files while retaining originals.
+                if (e.evt && (e.evt.ctrlKey || e.evt.metaKey)) {
+                    group.stopDrag();
+                    const item = this.items.get(group.attrs.id);
+                    const filePaths = this._copyableFilePath(item?.data)
+                        ? this._getSelectedFilePathsForExternalDrag(group) : [];
+                    if (!filePaths.length) {
+                        this._showCanvasStatus('当前节点没有可拖出的本地素材', 2800);
+                        return;
                     }
+                    if (!window.flowCanvas?.drag?.startExportCopy) {
+                        this._showCanvasStatus('请在 Corvas 桌面应用中拖出素材', 3200);
+                        return;
+                    }
+                    this._showCanvasStatus(filePaths.length > 1
+                        ? `拖到上传框：上传 ${filePaths.length} 个素材`
+                        : '拖到 3D Studio 等网页的图片上传框后松手', 4200);
+                    window.flowCanvas.drag.startExportCopy(filePaths);
+                    return;
                 }
 
                 this.selectedItems.forEach(id => {
@@ -3540,6 +3578,7 @@ export class CanvasManager {
             console.log('[Canvas] drop candidates:', imageUrls, 'files:', files.length);
 
             let lastRemoteError = '';
+            let importedFileCount = 0;
             if (imageUrls.length > 0) {
                 this._showCanvasStatus('正在导入网页图片...');
                 for (const imageUrl of imageUrls.slice(0, 12)) {
@@ -3561,9 +3600,11 @@ export class CanvasManager {
                         const result = await this._archiveLocalDroppedFile(file.path, targetDir);
                         if (result?.success) {
                             this._addCapturedFile(result.filePath, dropPosition);
+                            importedFileCount += 1;
                         } else {
                             console.error('[Canvas] 归档本地文件失败:', result?.error);
                             this._addCapturedFile(file.path, dropPosition);
+                            importedFileCount += 1;
                         }
                     }
                 }
@@ -3576,12 +3617,15 @@ export class CanvasManager {
                         }, targetDir);
                         if (result?.success) {
                             this._addCapturedFile(result.filePath, dropPosition);
-                            this._showCanvasStatus('网页图片已加入画板');
-                            return;
+                            importedFileCount += 1;
                         }
                         lastRemoteError = result?.error || lastRemoteError;
                     }
                 }
+            }
+            if (importedFileCount > 0) {
+                this._showCanvasStatus(`${importedFileCount} 个素材已加入画板`);
+                return;
             }
             const typeHint = dropTypes.length > 0 ? `（${dropTypes.join(', ')}）` : '';
             this._showCanvasStatus(`网页图片导入失败${lastRemoteError ? `：${lastRemoteError}` : `：拖拽数据中没有可用图片${typeHint}`}`, 0, 'error');
@@ -4284,6 +4328,7 @@ export class CanvasManager {
                 requestAnimationFrame(renderBatch);
             } else {
                 console.log('[Canvas] renderInitialItems 完成: this.items.size =', this.items.size);
+                this.graphView?.sync();
                 this.emit('initialRenderComplete', { itemCount: this.items.size });
                 requestAnimationFrame(() => this._loadAllContent());
             }
@@ -4573,13 +4618,21 @@ export class CanvasManager {
         }));
 
         if (editableMediaTitle) {
+            // Keep the first click from rebuilding the title or opening the composer
+            // before Konva can recognize the second click on the same target.
+            title.on('mousedown touchstart click tap', event => {
+                if (this._activeMediaReferencePick || this._activePlanReferencePick) return;
+                if (event.evt?.button != null && event.evt.button !== 0) return;
+                event.cancelBubble = true;
+            });
             title.on('mouseenter', () => {
-                document.body.style.cursor = 'text';
+                if (!this._activeMediaReferencePick && !this._activePlanReferencePick) document.body.style.cursor = 'text';
             });
             title.on('mouseleave', () => {
                 document.body.style.cursor = 'default';
             });
             title.on('dblclick dbltap', event => {
+                if (this._activeMediaReferencePick || this._activePlanReferencePick) return;
                 event.cancelBubble = true;
                 this.openMediaTitleEditor(data.id);
             });
@@ -4668,6 +4721,14 @@ export class CanvasManager {
         return group;
     }
 
+    _ensureAudioPlayer(item) {
+        if (!item?.data?.filePath || this._getItemMediaType(item.data) !== 'audio') return null;
+        item.audioPlayer ||= createAudioPlayer(this, item);
+        const size = this._mediaPlaceholderSize('audio', item.data);
+        item.audioPlayer.layout(size.width, size.height);
+        return item.audioPlayer;
+    }
+
     _createAudioWaveform(width, height, filePath) {
         const group = new Konva.Group({ name: 'audioWaveform', listening: false });
         const fileName = this._fileNameFromPath(filePath) || '未命名音频';
@@ -4710,17 +4771,17 @@ export class CanvasManager {
         }));
 
         const waveX = 14;
-        const waveY = Math.max(52, height - 32);
+        const waveY = Math.max(46, height - 48);
         const waveWidth = Math.max(40, width - 28);
         const barCount = Math.max(18, Math.min(42, Math.floor(waveWidth / 7)));
         const gap = waveWidth / barCount;
         const seed = [...fileName].reduce((total, char) => (total + char.charCodeAt(0)) % 997, 37);
         for (let index = 0; index < barCount; index += 1) {
             const value = Math.abs(Math.sin((index + 1) * 1.71 + seed * 0.013));
-            const barHeight = 4 + Math.round(value * Math.max(8, Math.min(22, height - 62)));
+            const barHeight = 4 + Math.round(value * Math.max(4, Math.min(10, height - 76)));
             group.add(new Konva.Rect({
                 x: waveX + index * gap,
-                y: waveY + (24 - barHeight) / 2,
+                y: waveY + (16 - barHeight) / 2,
                 width: Math.max(2, gap - 3),
                 height: barHeight,
                 cornerRadius: 1,
@@ -4963,7 +5024,7 @@ export class CanvasManager {
                             : errorLabel === '图片损坏或不支持'
                                 ? '原文件无法生成兼容预览，请检查文件是否完整，或重接原图'
                                 : '点击错误标记可手动重接';
-                this._showCanvasStatus(`${errorLabel}：${this._fileNameFromPath(data.filePath)}，${guidance}`, 0, 'error');
+                this._showCanvasStatus(`${errorLabel}：${this._fileNameFromPath(data.filePath)}，${guidance}`, 0, 'error', true);
             }
             if (this._countPlanReferencesToItem(data.id, data.filePath) > 0) {
                 this._setHoveredReferenceItem(data.id, data.filePath);
@@ -5015,7 +5076,7 @@ export class CanvasManager {
             } else {
                 this.selectItem(data.id, false);
                 const product = this._getMediaProduct(data);
-                if ((hasGenerationRecord(data) || fileType === 'image')
+                if (fileType !== 'audio' && (hasGenerationRecord(data) || fileType === 'image')
                     && (product?.filePath || product?.url)) {
                     this.openMediaGenerationComposer(data.id);
                 }
@@ -5060,7 +5121,11 @@ export class CanvasManager {
         });
 
         group.on('dblclick', () => {
-            if (this._activePlanReferencePick) return;
+            if (this._activePlanReferencePick || this._activeMediaReferencePick) return;
+            if (this._getItemMediaType(data) === 'audio') {
+                this._ensureAudioPlayer(this.items.get(data.id))?.toggle();
+                return;
+            }
             if (data.filePath) {
                 window.flowCanvas.shell.openFile(data.filePath);
             } else {
@@ -5093,6 +5158,7 @@ export class CanvasManager {
             loadErrorMessage: '',
             isHovered: false
         });
+        this._ensureAudioPlayer(this.items.get(data.id));
         void this._hydrateReferenceAnnotation(data);
 
         const pendingPlacement = this.pendingGenerationPlacements.get(data.id);
@@ -5343,7 +5409,7 @@ export class CanvasManager {
         return data;
     }
 
-    duplicateItems(itemIds = []) {
+    duplicateItems(itemIds = [], { offset = 30 } = {}) {
         const sourceIds = (Array.isArray(itemIds) && itemIds.length ? itemIds : [...this.selectedItems])
             .filter(id => this.items.has(id));
         if (!sourceIds.length) return [];
@@ -5352,8 +5418,8 @@ export class CanvasManager {
             const source = this.items.get(id);
             const data = JSON.parse(JSON.stringify(source.data || {}));
             data.id = `${data.kind === 'op' ? 'op' : 'item'}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
-            data.x = Math.round(source.group.x() + 30 + index * 6);
-            data.y = Math.round(source.group.y() + 30 + index * 6);
+            data.x = Math.round(source.group.x() + offset + (offset ? index * 6 : 0));
+            data.y = Math.round(source.group.y() + offset + (offset ? index * 6 : 0));
             data.addedAt = Date.now();
             if (data.kind === 'op') {
                 data.runStatus = 'idle';
@@ -5631,6 +5697,16 @@ export class CanvasManager {
         };
     }
 
+    prepareAgentGenerationContext(nodeId) {
+        const data = this.items.get(nodeId)?.data;
+        if (!data) return null;
+        if (data.composerDraft) {
+            this._cacheMediaGenerationPromptDraft(data);
+            if (!this._materializeMediaComposerDraft(nodeId)) return null;
+        }
+        return this.getAgentGenerationContext(nodeId);
+    }
+
     _drawOpReferenceStrip(group, data, width) {
         const references = this._opReferenceEntries(data);
         const y = OP_GENERATOR_REFERENCE_TOP;
@@ -5790,14 +5866,23 @@ export class CanvasManager {
     _drawGeneratorPlaceholder(group, data, width, height) {
         group.getAttr('generatorAnimation')?.stop?.();
         group.setAttr('generatorAnimation', null);
-        this._disposeGeneratorPreviewMedia(group);
+        const results = ensureGeneratorResultEntries(data);
+        const retained = (group.getAttr('generatorVideoPreviews') || []).filter(entry => {
+            const result = results[entry.isPrimary ? 0 : 1];
+            const source = this._generatorPreviewSource(result);
+            return data.nodeType === 'video' && entry.source === source;
+        });
+        retained.forEach(entry => {
+            entry.preview.remove();
+            entry.controls?.remove();
+        });
+        this._disposeGeneratorPreviewMedia(group, retained);
         group.off('.generatorStack');
         group.destroyChildren();
 
         const status = data.runStatus || 'idle';
         const recoveryTask = this.generationTaskStates.get(data.id) || null;
         const isRecovering = isGenerationRecoveryActive(recoveryTask);
-        const results = ensureGeneratorResultEntries(data);
         const resultCount = results.length;
         const isRecoverable = (!isGenerationFailureConfirmed(recoveryTask) || Boolean(recoveryTask?.filePath))
             && (['disconnected', 'failed', 'canceled'].includes(recoveryTask?.status)
@@ -6119,7 +6204,14 @@ export class CanvasManager {
             next.set(nodeId, task);
         });
         this.generationTaskStates = next;
+        const previousSignatures = this._generationTaskVisualSignatures || new Map();
+        const nextSignatures = new Map([...next].map(([id, task]) => [id, JSON.stringify([
+            task.id, task.status, task.taskId, task.filePath, task.errorCode, task.confirmedFailure,
+            task.createdAt, task.params?.syncStage, task.params?.recoveryStartedAt
+        ])]));
+        this._generationTaskVisualSignatures = nextSignatures;
         new Set([...previousNodeIds, ...next.keys()]).forEach(nodeId => {
+            if (previousSignatures.get(nodeId) === nextSignatures.get(nodeId)) return;
             const data = this.items.get(nodeId)?.data;
             if (data?.kind === 'op' && ['image', 'video'].includes(data.nodeType)) {
                 this.refreshOpNode(nodeId);
@@ -6354,13 +6446,30 @@ export class CanvasManager {
         }
     }
 
-    _addGeneratorResultPreview(ownerGroup, parent, data, result, width, height, name = '') {
-        const source = result?.filePath
+    _generatorPreviewSource(result) {
+        return result?.filePath
             ? `local-res://${encodeURIComponent(resolveCanvasFilePath(result.filePath))}`
             : result?.url || '';
+    }
+
+    _addGeneratorResultPreview(ownerGroup, parent, data, result, width, height, name = '') {
+        const source = this._generatorPreviewSource(result);
         if (!source) return null;
 
         const isPrimary = parent === ownerGroup && name === 'generatorResultPreview';
+        const retained = (ownerGroup.getAttr('generatorVideoPreviews') || []).find(entry =>
+            entry.source === source && entry.isPrimary === isPrimary && !entry.preview.getParent());
+        if (retained) {
+            retained.preview.size({ width, height });
+            parent.add(retained.preview);
+            this._coverGeneratorPreview(retained.preview, retained.video.videoWidth, retained.video.videoHeight, width, height);
+            if (isPrimary) this._styleMediaSurface(data, retained.preview);
+            if (retained.controls) {
+                ownerGroup.add(retained.controls);
+                this._layoutVideoControlGroup(retained.controls, width, height);
+            }
+            return retained.preview;
+        }
         const preview = new Konva.Image({
             name: isPrimary ? `${name} displayNode` : name,
             width,
@@ -6382,10 +6491,10 @@ export class CanvasManager {
             video.style.display = 'none';
             if (isPrimary) document.body.appendChild(video);
             const drawFrame = () => {
-                if (!ownerGroup.getLayer()) return;
-                if (isPrimary && this._syncGeneratorProductAspect(ownerGroup, data, video.videoWidth, video.videoHeight)) return;
+                if (!ownerGroup.getLayer() || !preview.getParent() || video.readyState < 2 || video.seeking) return;
                 preview.image(video);
-                this._coverGeneratorPreview(preview, video.videoWidth, video.videoHeight, width, height);
+                this._coverGeneratorPreview(preview, video.videoWidth, video.videoHeight, preview.width(), preview.height());
+                if (isPrimary) this._syncGeneratorProductAspect(ownerGroup, data, video.videoWidth, video.videoHeight);
                 ownerGroup.getLayer()?.batchDraw();
             };
             video.addEventListener('loadeddata', () => {
@@ -6401,6 +6510,10 @@ export class CanvasManager {
             videos.push(video);
             ownerGroup.setAttr('generatorPreviewVideos', videos);
             if (isPrimary) this._addGeneratorVideoControls(ownerGroup, data, preview, video, width, height);
+            const previews = ownerGroup.getAttr('generatorVideoPreviews') || [];
+            previews.push({ source, isPrimary, preview, video,
+                controls: isPrimary ? ownerGroup.findOne('.generatorVideoControls') : null });
+            ownerGroup.setAttr('generatorVideoPreviews', previews);
         } else {
             const image = new window.Image();
             image.onload = () => {
@@ -6440,15 +6553,19 @@ export class CanvasManager {
         return true;
     }
 
-    _disposeGeneratorPreviewMedia(group) {
+    _disposeGeneratorPreviewMedia(group, retained = []) {
         if (!group) return;
         group.getAttr('generatorAnimation')?.stop?.();
         group.setAttr('generatorAnimation', null);
-        group.getAttr('generatorVideoAnimation')?.stop?.();
-        group.setAttr('generatorVideoAnimation', null);
+        if (!retained.some(entry => entry.isPrimary)) {
+            group.getAttr('generatorVideoAnimation')?.stop?.();
+            group.setAttr('generatorVideoAnimation', null);
+        }
         const videos = group.getAttr('generatorPreviewVideos') || [];
-        videos.forEach(video => this._disposeVideoElement(video));
-        group.setAttr('generatorPreviewVideos', []);
+        const retainedVideos = retained.map(entry => entry.video);
+        videos.filter(video => !retainedVideos.includes(video)).forEach(video => this._disposeVideoElement(video));
+        group.setAttr('generatorPreviewVideos', retainedVideos);
+        group.setAttr('generatorVideoPreviews', retained);
     }
 
     _addGeneratorVideoControls(group, data, preview, video, width, height) {
@@ -6599,7 +6716,7 @@ export class CanvasManager {
         video.addEventListener('timeupdate', () => {
             if (!Number.isFinite(video.duration) || video.duration <= 0) return;
             progressForeground.width((video.currentTime / video.duration) * progressBackground.width());
-            if (preview.image() !== video) preview.image(video);
+            if (video.readyState >= 2 && !video.seeking && preview.image() !== video) preview.image(video);
             group.getLayer()?.batchDraw();
         });
     }
@@ -6619,7 +6736,6 @@ export class CanvasManager {
     }
 
     _drawOpNode(group, data, width, height) {
-        group.destroyChildren();
         const def = NODE_TYPES[data.nodeType] || {};
         const status = data.runStatus || 'idle';
         const isGenerator = data.nodeType === 'image' || data.nodeType === 'video';
@@ -6629,6 +6745,7 @@ export class CanvasManager {
             return;
         }
 
+        group.destroyChildren();
         this._syncExternalNodeTitle(group, data, data.nodeType);
 
         group.add(new Konva.Rect({
@@ -8362,6 +8479,7 @@ export class CanvasManager {
             return;
         }
 
+        this._closeGenerationComposer({ commit: true });
         this._closeInlineOpPromptEditor();
         this._closeMediaTitleEditor();
         const { data, group } = entry;
@@ -8386,6 +8504,11 @@ export class CanvasManager {
             originalCustomName,
             originalValue
         };
+        const closeOutside = event => {
+            if (!input.contains(event.target)) this._closeMediaTitleEditor();
+        };
+        this._activeMediaTitleEditor.closeOutside = closeOutside;
+        document.addEventListener('pointerdown', closeOutside, true);
         this._positionMediaTitleEditor();
 
         ['pointerdown', 'mousedown', 'click', 'dblclick', 'wheel'].forEach(type => {
@@ -8393,6 +8516,7 @@ export class CanvasManager {
         });
         input.addEventListener('keydown', keyEvent => {
             keyEvent.stopPropagation();
+            if (keyEvent.isComposing || keyEvent.keyCode === 229) return;
             if (keyEvent.key === 'Escape') {
                 keyEvent.preventDefault();
                 this._closeMediaTitleEditor({ commit: false });
@@ -8433,6 +8557,7 @@ export class CanvasManager {
         const active = this._activeMediaTitleEditor;
         if (!active) return;
         this._activeMediaTitleEditor = null;
+        document.removeEventListener('pointerdown', active.closeOutside, true);
 
         if (commit) {
             const nextName = String(active.element?.value || '').trim();
@@ -8646,7 +8771,8 @@ export class CanvasManager {
             try {
                 const enabled = await this.options.setImageIntentPipelineEnabled?.(enable);
                 if (enable && enabled) {
-                    await this.options.prepareAgentFromNode?.(this.getAgentGenerationContext(nodeId));
+                    const context = this.prepareAgentGenerationContext(nodeId);
+                    if (context) await this.options.prepareAgentFromNode?.(context);
                 }
             } finally {
                 agentToggle.disabled = false;
@@ -9297,6 +9423,7 @@ export class CanvasManager {
             const providers = this.options.getGenerationProviders?.(data.nodeType) || [];
             const rows = [];
             const groups = new Map();
+            let openRoute = null;
             for (const provider of providers) {
                 const sourceId = provider.sourceProviderId;
                 const key = sourceId && provider.routeGroup && provider.routeLabel
@@ -9309,11 +9436,12 @@ export class CanvasManager {
                 }
                 row.push(provider);
             }
-            rows.forEach(row => row.sort((a, b) => (a.routeLabel || '') < (b.routeLabel || '') ? -1
-                : (a.routeLabel || '') > (b.routeLabel || '') ? 1 : 0));
+            rows.forEach(row => row.sort((a, b) => (a.routeOrder ?? 0) - (b.routeOrder ?? 0)
+                || ((a.routeLabel || '') < (b.routeLabel || '') ? -1 : (a.routeLabel || '') > (b.routeLabel || '') ? 1 : 0)));
+            rows.sort((a, b) => (a[0].routeGroupOrder ?? 0) - (b[0].routeGroupOrder ?? 0));
             const query = search.value.trim().toLowerCase();
             const matches = rows.filter(row => row.some(provider => !query
-                || `${provider.routeLabel || ''} ${provider.model || ''} ${provider.modelLabel || ''} ${provider.description || ''} ${provider.name || ''}`.toLowerCase().includes(query)));
+                || `${provider.routeLabel || ''} ${provider.routeGroupLabel || ''} ${provider.routeGroupDescription || ''} ${provider.model || ''} ${provider.modelLabel || ''} ${provider.description || ''} ${provider.name || ''}`.toLowerCase().includes(query)));
             list.replaceChildren();
             if (!matches.length) {
                 const empty = document.createElement('div');
@@ -9325,7 +9453,7 @@ export class CanvasManager {
                 return;
             }
             matches.forEach(row => {
-                const split = row.length > 1 && row.every(provider => provider.routeGroup && provider.routeLabel);
+                const split = (row.length > 1 || row[0].routeGroupAlways) && row.every(provider => provider.routeGroup && provider.routeLabel);
                 let container = list;
                 if (split) {
                     const group = document.createElement('div');
@@ -9341,7 +9469,8 @@ export class CanvasManager {
                     trigger.classList.toggle('selected', !!current);
                     trigger.innerHTML = '<span><strong></strong><small></small></span><svg class="flow-icon" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-arrow-up"></use></svg>';
                     trigger.querySelector('strong').textContent = groupLabel;
-                    trigger.querySelector('small').textContent = (current || row[0]).description || current?.routeLabel || row[0].name || '视频';
+                    const displayedProvider = current || row[0];
+                    trigger.querySelector('small').textContent = `当前使用：${displayedProvider.routeLabel || displayedProvider.modelLabel || displayedProvider.model}`;
                     const panel = document.createElement('div');
                     panel.className = 'generation-composer-route-panel';
                     panel.setAttribute('popover', 'manual');
@@ -9352,6 +9481,10 @@ export class CanvasManager {
                     closeTimers.push(() => clearTimeout(closeTimer));
                     const expand = open => {
                         clearTimeout(closeTimer);
+                        if (open && openRoute !== expand) {
+                            openRoute?.(false);
+                            openRoute = expand;
+                        } else if (!open && openRoute === expand) openRoute = null;
                         group.classList.toggle('expanded', open);
                         trigger.setAttribute('aria-expanded', String(open));
                         panel.inert = !open;
@@ -9365,6 +9498,19 @@ export class CanvasManager {
                             const leftSpace = menuBounds.left - gap - margin;
                             const side = rightSpace >= width || rightSpace >= leftSpace ? 'right' : 'left';
                             const available = side === 'right' ? rightSpace : leftSpace;
+                            panel.style.maxHeight = '';
+                            if (available < 240) {
+                                panel.style.width = `${width}px`;
+                                panel.style.left = `${Math.max(margin, Math.min(bounds.left, window.innerWidth - width - margin))}px`;
+                                panel.showPopover();
+                                const below = window.innerHeight - bounds.bottom - gap - margin;
+                                const above = bounds.top - gap - margin;
+                                const down = below >= panel.offsetHeight || below >= above;
+                                panel.dataset.side = down ? 'below' : 'above';
+                                panel.style.maxHeight = `${Math.max(0, down ? below : above)}px`;
+                                panel.style.top = `${down ? bounds.bottom + gap : bounds.top - gap - panel.offsetHeight}px`;
+                                return;
+                            }
                             panel.style.width = `${Math.min(width, Math.max(240, available))}px`;
                             panel.dataset.side = side;
                             panel.style.top = `${bounds.top}px`;
@@ -9377,7 +9523,7 @@ export class CanvasManager {
                     const deferClose = () => {
                         clearTimeout(closeTimer);
                         closeTimer = setTimeout(() => {
-                            if (!group.matches(':hover') && !panel.matches(':hover')) expand(false);
+                            if (!group.matches(':hover') && !panel.matches(':hover') && !group.matches(':focus-within')) expand(false);
                         }, 120);
                     };
                     group.addEventListener('mouseenter', () => expand(true));
@@ -9385,6 +9531,9 @@ export class CanvasManager {
                     panel.addEventListener('mouseenter', () => clearTimeout(closeTimer));
                     panel.addEventListener('mouseleave', deferClose);
                     popover.addEventListener('mouseleave', deferClose, { signal: routeEvents.signal });
+                    window.addEventListener('resize', () => {
+                        if (group.classList.contains('expanded')) expand(true);
+                    }, { signal: routeEvents.signal });
                     list.addEventListener('scroll', () => {
                         if (!panel.matches(':popover-open')) return;
                         const bounds = trigger.getBoundingClientRect();
@@ -14039,11 +14188,11 @@ export class CanvasManager {
                 addToCanvas: true,
                 includePlanAssets: false
             });
-            if (!result?.success && result?.error) throw new Error(result.error);
+            if (!result?.success && result?.error) throw generationFailureError(result);
             this._showCanvasStatus(result?.item ? '已生成并连接结果图' : '已生成图片');
         } catch (error) {
             console.error('[Canvas] plan row image generation failed:', error);
-            this._showCanvasStatus(`生图失败：${error.message || error}`, 0, 'error');
+            this._showCanvasStatus(error, 0, 'error');
         } finally {
             this._isGeneratingPlanRow = false;
         }
@@ -14201,8 +14350,8 @@ export class CanvasManager {
         return selectedEntries.map(item => item.filePath);
     }
 
-    _showCanvasStatus(text, timeoutMs = 1800, kind = 'info') {
-        showStatusNotification(formatClientGenerationError(text), { kind, duration: timeoutMs });
+    _showCanvasStatus(text, timeoutMs = 1800, kind = 'info', local = false) {
+        showStatusNotification(kind === 'error' && !local ? formatClientGenerationError(text) : formatClientStatusMessage(text), { kind, duration: timeoutMs });
     }
 
     _capturePlanInlineFocus(planId) {
@@ -14295,6 +14444,8 @@ export class CanvasManager {
 
     _scheduleResourceSaverPromote(item) {
         if (this._activeCanvasPanStop || !this.resourceSaverMode || item.isResizing || !item.group.getLayer()) return;
+        // Audio and video decode only when playback is requested, not on hover.
+        if (['video', 'audio'].includes(this._getItemMediaType(item.data))) return;
         clearTimeout(item.hoverTimer);
         item.hoverTimer = setTimeout(() => {
             item.hoverTimer = null;
@@ -14440,6 +14591,7 @@ export class CanvasManager {
                 this._loadVideoCover(item, token);
             }
         } else {
+            if (fileType === 'audio') this._ensureAudioPlayer(item);
             this._finishLoad(item, token);
         }
     }
@@ -14650,6 +14802,8 @@ export class CanvasManager {
      * 卸载节点内容 — 释放图片纹理和视频资源
      */
     _unloadContent(item) {
+        item.audioPlayer?.dispose();
+        item.audioPlayer = null;
         // Operation nodes use vector shapes instead of media textures. Treat them as
         // already unloaded so the shared deletion path never calls Image-only APIs.
         if (item?.data?.kind === 'op') {
@@ -14905,9 +15059,9 @@ export class CanvasManager {
         glyph?.find('.videoVolumeSlash').forEach(node => node.visible(muted));
     }
 
-    _layoutVideoControlGroup(controls, width, height) {
+    _layoutVideoControlGroup(controls, width, height, stageScale = this.stage?.scaleX?.()) {
         if (!controls) return;
-        const layout = getVideoControlLayout(this.stage?.scaleX?.(), width, height, this.uiScaleLimit);
+        const layout = getVideoControlLayout(stageScale, width, height, this.uiScaleLimit);
         controls.visible(layout.visible);
         const progressBg = controls.findOne('.videoProgressBg');
         const progressFg = controls.findOne('.videoProgressFg');
@@ -14968,6 +15122,7 @@ export class CanvasManager {
             const height = Number(displayNode?.height?.()) || Number(item.data?.height) || 0;
             this._layoutVideoControlGroup(item.group?.findOne('.videoControls'), width, height);
             this._layoutVideoControlGroup(item.group?.findOne('.videoCoverControls'), width, height);
+            item.audioPlayer?.layout(width, height);
         });
     }
 
@@ -15517,7 +15672,7 @@ export class CanvasManager {
     }
 
     removeFile(filePath) {
-        // 移除所有与此 filePath 关联的条目（可能有 Ctrl+拖拽的副本）
+        // 移除所有与此 filePath 关联的条目（可能有复制产生的副本）
         const idsToRemove = [];
         const targetPath = normalizePathForCompare(resolveCanvasFilePath(filePath));
         if (!targetPath) return;

@@ -11,6 +11,7 @@ const { app } = require('electron');
 const {
     DEFAULT_MCP_CONFIG,
     MCP_BOARD_TOOLS_VERSION,
+    MCP_WORKFLOW_TOOLS_VERSION,
     normalizeMcpConfig
 } = require('../shared/plan-service-core.cjs');
 
@@ -53,8 +54,11 @@ class Store {
                 const parsed = JSON.parse(raw);
                 const normalized = this._normalizeData(parsed);
                 const currentBoardToolsVersion = Number(parsed.mcp?.boardToolsVersion);
+                const currentWorkflowToolsVersion = Number(parsed.mcp?.workflowToolsVersion);
                 if (!Number.isInteger(currentBoardToolsVersion)
-                    || currentBoardToolsVersion < MCP_BOARD_TOOLS_VERSION) {
+                    || currentBoardToolsVersion < MCP_BOARD_TOOLS_VERSION
+                    || !Number.isInteger(currentWorkflowToolsVersion)
+                    || currentWorkflowToolsVersion < MCP_WORKFLOW_TOOLS_VERSION) {
                     this.save(normalized);
                 }
                 return normalized;

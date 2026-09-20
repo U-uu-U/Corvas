@@ -454,22 +454,18 @@ function isFailedImageTaskStatus(status) {
     return IMAGE_TASK_FAILED_STATUSES.has(String(status || '').trim().toLowerCase());
 }
 
+// 上游错误文本只作为分类输入，绝不回显。所有面向用户的文案都来自
+// shared/public-api-error.cjs 的 CATALOG，真实原文只进本地诊断日志。
 function imageTaskErrorMessage(payload = {}) {
-    const mapped = require('../shared/public-api-error.cjs').readPublicError(payload);
+    const { readPublicError, mapLocalError } = require('../shared/public-api-error.cjs');
+    const mapped = readPublicError(payload);
     if (mapped) return mapped.message;
-    const error = payload?.error || payload?.result?.error;
-    if (typeof error === 'string' && error.trim()) return error.trim();
-    return String(
-        error?.message
-        || payload?.failReason
-        || payload?.result?.failReason
-        || payload?.message
-        || payload?.description
-        || ''
-    ).trim();
+    return mapLocalError(200, payload, { query: true, terminal: true }).error;
 }
 
 function imageHttpErrorMessage(statusCode, responseText = '', options = {}) {
+    const { readPublicError, mapLocalError } = require('../shared/public-api-error.cjs');
+    const { traceSuffix } = require('../shared/error-redaction.cjs');
     const text = String(responseText || '').trim();
     let payload = null;
     try {
@@ -477,27 +473,26 @@ function imageHttpErrorMessage(statusCode, responseText = '', options = {}) {
     } catch (_) {
         payload = null;
     }
-    const mapped = require('../shared/public-api-error.cjs').readPublicError(payload);
+    const mapped = readPublicError(payload);
     if (mapped) return mapped.message;
-    const reason = payload ? imageTaskErrorMessage(payload) : '';
+    const trace = traceSuffix(options.requestId, options.taskId);
     const errorCode = String(payload?.error?.code || payload?.code || '').trim().toLowerCase();
     const errorType = String(payload?.error?.type || payload?.type || '').trim().toLowerCase();
+    // 「全部上游通道失败」是唯一需要额外说明的形态：用户重试无用，应改选模型。
+    // 说明里不再出现中转站、渠道、账号池和供应商名称。
     if (errorCode === 'all_vendors_failed' || (Number(statusCode) === 503 && errorType === 'yamlrunner_error')) {
-        if (options.midjourneyModel && options.compatibilityFallbackUsed) {
-            return `Midjourney 上游提交失败（HTTP ${statusCode}）。Corvas 已先后尝试完整参数和仅保留提示词、画幅比例的兼容参数，但 RavenHash/上游 MJ 通道均未创建任务；请检查中转站的 MJ 渠道或账号池状态。`;
-        }
         const retries = Math.max(0, Number(options.attempts || 1) - 1);
         const retryText = retries > 0 ? `，已自动重试 ${retries} 次` : '';
-        const subject = options.midjourneyModel ? 'Midjourney' : '图片';
-        return `${subject}上游通道暂时全部不可用（HTTP ${statusCode}${retryText}）。请求已到达 RavenHash，但所有上游供应商都执行失败；请稍后重试，或在模型栏切换其他可用 API。`;
+        const fallbackText = options.compatibilityFallbackUsed ? '，并已尝试兼容参数' : '';
+        return `图片生成服务暂时没有可用的生成通道${retryText}${fallbackText}。请稍后重试，或在模型栏切换其他可用模型。${trace}`;
     }
-    if (options.nativeMidjourney && reason === 'unmarshal_response_body_failed') {
-        return 'RavenHash 的 NewAPI 无法解析上游 Midjourney 响应。当前原生 MJ 转发使用 mj-api-secret，但该上游要求 Authorization: Bearer；需要修改 RavenHash 服务端的上游鉴权头。';
-    }
-    if (options.nativeMidjourney && reason) {
-        return `Midjourney 提交失败（HTTP ${statusCode}）：${reason}`;
-    }
-    return `Image API failed: ${statusCode}${text ? ` ${text.slice(0, 2000)}` : ''}`;
+    // 其余一切（包含上游解析失败、鉴权头不匹配等部署问题）统一走 CATALOG。
+    // 这些细节属于运维，凭排查编号在诊断日志里查，不展示给用户。
+    return mapLocalError(statusCode, payload ?? text, {
+        query: options.query === true,
+        requestId: options.requestId,
+        taskId: options.taskId
+    }).error;
 }
 
 function isAllVendorsFailedImageResponse(statusCode, responseText = '') {

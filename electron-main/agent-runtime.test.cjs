@@ -119,6 +119,29 @@ test('retry refuses ambiguous submissions and wrong projects', async t => {
     assert.equal(h.stepCalls.length, 0);
 });
 
+test('Rhino cleanup executes saved stages without a text provider request', async t => {
+    const h = harness(t);
+    const stages = [];
+    h.runtime.rhinoCleanup = async (run, input) => { stages.push(input.stage); return { ok: true, outputs: [{ source: { faces: 1000 }, mesh: { faces: 200 } }] }; };
+    const id = h.start({ execution: 'rhino_cleanup', source: { hunyuanJobId: 'fixture-job' }, provider: null });
+    const result = await h.idle(id);
+    assert.equal(result.status, 'completed');
+    assert.equal(result.taskKind, 'rhino');
+    assert.deepEqual(stages, ['inspect', 'clean', 'quad', 'validate']);
+    assert.equal(h.requests.length, 0);
+    assert.match(result.outputText, /200/);
+});
+
+test('legacy retry on a Rhino tool-only failure resumes into the bound cleanup path', async t => {
+    const seed = recoveryRun({}, { status: 'failed', plan: null, steps: [], pendingCalls: [], source: { hunyuanJobId: 'fixture-job' } });
+    const h = harness(t, { initialRuns: [seed] });
+    h.runtime.prepareRhinoResume = async run => { run.execution = 'rhino_cleanup'; };
+    h.runtime.rhinoCleanup = async () => ({ ok: true, outputs: [{ source: { faces: 100 }, mesh: { faces: 50 } }] });
+    h.runtime.retry({ runId: seed.id });
+    assert.equal((await h.idle(seed.id)).status, 'completed');
+    assert.equal(h.requests.length, 0);
+});
+
 test('external graph proposals confirm and run without invoking an internal language model', async t => {
     const h = harness(t, { script: [] });
     const proposal = await h.runtime.propose({ projectId: 'a', toolName: 'flow_canvas.graph.run',

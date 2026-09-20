@@ -4,6 +4,9 @@ const ids = { type: 'array', items: string, minItems: 1, maxItems: 20, uniqueIte
 const columns = { type: 'array', minItems: 1, maxItems: 24, items: object({ key: string, label: string, width: { type: 'number', minimum: 60, maximum: 1000 } }, ['key', 'label']) };
 const references = { type: 'array', maxItems: 20, items: object({ itemId: string, kind: { enum: ['source', 'process', 'output'] } }, ['itemId']) };
 const AGENT_TOOL_DEFINITIONS = [
+    { name: 'flow_canvas.rhino.cleanup', description: 'Run the bundled Rhino mesh-cleanup Skill for this task only. Calls real Python files, never inline Rhino command text. First inspect/status, then clean, quad, validate. Completed stages are reused; status only reads checkpoint reports. The original imported model is preserved.',
+        inputSchema: object({ stage: { enum: ['status', 'inspect', 'clean', 'quad', 'validate'] },
+            targetQuads: { type: 'integer', minimum: 500, maximum: 100000 } }, ['stage']) },
     { name: 'flow_canvas.document.list', description: 'List editable project tables, scripts, character sheets and shot lists.', inputSchema: object() },
     { name: 'flow_canvas.document.get', description: 'Read an editable table with stable row IDs and project revision before modifying it.', inputSchema: object({ documentId: string }, ['documentId']) },
     { name: 'flow_canvas.document.create', description: 'Create an editable table or script/character/shot-list template on the canvas. References use existing project node IDs.', inputSchema: object({ title: string, templateId: { enum: ['table', 'script', 'characters', 'shots'] }, columns,

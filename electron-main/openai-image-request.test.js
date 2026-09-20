@@ -4,6 +4,22 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+test('Zhubo Pro sends both supported resolutions and complete multimodal references', () => {
+    const refs = n => Array.from({ length: n }, (_, i) => `https://example.test/${i}`);
+    for (const resolution of ['480p', '720p']) {
+        const input = { model: 'seedance-2.5-pro', prompt: 'fixture', duration: 12, resolution,
+            referenceImages: refs(30), referenceVideos: refs(10), referenceAudios: refs(10) };
+        const body = buildSeedance25RequestBody(input);
+        assert.equal(body.resolution, resolution);
+        assert.equal(body.seconds, 12);
+        assert.deepEqual(body.image_urls, input.referenceImages);
+        assert.deepEqual(body.video_urls, input.referenceVideos);
+        assert.deepEqual(body.audio_urls, input.referenceAudios);
+        assert.throws(() => buildSeedance25RequestBody({ ...input, resolution: '1080p' }));
+        assert.throws(() => buildSeedance25RequestBody({ ...input, referenceImages: refs(31) }));
+    }
+});
+
 test('Seedance route alias retains fixed duration while preserving the relay model ID', () => {
     const { buildSeedance25RequestBody, seedance25ReferenceImageLimit } = require('./video-provider-adapters');
     const body = buildSeedance25RequestBody({ model: 'sd2.5-route1', prompt: 'test', duration: 30 });
@@ -53,6 +69,7 @@ const {
     buildVideoGenerationEndpoint,
     getVideoPayloadError,
     getVideoResultUrl,
+    getVideoTaskId,
     getVideoTaskProgress,
     getVideoTaskStatus,
     isMiniMaxH3NativeEndpoint,
@@ -90,7 +107,9 @@ test('Seedance 2.5 自适应比例按第一张参考图映射到上游支持值'
     assert.equal(resolveSeedance25AspectRatio('9:16', 1920, 1080), '9:16');
 });
 
-test('视频任务响应: 识别 HTTP 200 内嵌上游错误，不再永久停在 0%', () => {
+// 检测语义必须保持：有内嵌错误就返回非空字符串，否则轮询会永久停在 0%。
+// 变化只在文案——返回 CATALOG 输出而不是上游原文。
+test('视频任务响应: 识别 HTTP 200 内嵌上游错误，且文案不含上游原文', () => {
     const payload = {
         error: {
             message: '视频生成失败',
@@ -98,9 +117,19 @@ test('视频任务响应: 识别 HTTP 200 内嵌上游错误，不再永久停�
             code: 'upstream_error'
         }
     };
-    assert.equal(getVideoPayloadError(payload), '视频生成失败');
+    const message = getVideoPayloadError(payload);
+    assert.equal(Boolean(message), true, '必须仍被判定为失败，否则任务会卡在 0%');
+    assert.equal(message.includes('upstream_error'), false);
     assert.equal(getVideoTaskStatus(payload), '');
     assert.equal(getVideoTaskProgress(payload), null);
+});
+
+// 没有错误的正常响应不能被误判成失败——这条守住检测边界没有被脱敏改动带偏。
+test('视频任务响应: 正常响应不被误判为失败', () => {
+    for (const payload of [{ status: 'processing', progress: 0.4 }, { data: { status: 'queued' } },
+        { status: 'succeeded', video_url: 'https://cdn.example/v.mp4' }]) {
+        assert.equal(getVideoPayloadError(payload), '');
+    }
 });
 
 test('视频任务响应: 兼容 data/result/output 包装的状态、进度和下载地址', () => {
@@ -281,6 +310,27 @@ test('MiniMax H3 视频协议: 中转地址不被改写，显式任务中心按 
     );
     assert.equal(isMiniMaxH3UnavailableResponse(400, '{"error":{"message":"模型不可用"}}'), true);
     assert.equal(isMiniMaxH3UnavailableResponse(401, '模型不可用'), false);
+});
+
+test('video relay task URLs wrapped as data URLs recover task identity without downloading the status endpoint', () => {
+    for (const route of ['videos', 'videos/generations', 'video/generations', 'tasks']) {
+        const url = `https://video.example/v1/${route}/task_10194?model=seedance_v2.5`;
+        const payload = { created: 1789653371, data: [{ url }] };
+        assert.equal(getVideoTaskId(payload), 'task_10194');
+        assert.equal(getVideoResultUrl(payload), '');
+        assert.equal(getVideoResultUrl({ ...payload, data: [{ url }, { url: 'https://cdn.example/output.mp4' }] }),
+            'https://cdn.example/output.mp4');
+    }
+    assert.equal(getVideoTaskId({ data: [{ url: 'https://cdn.example/output.mp4' }] }), '');
+    assert.equal(getVideoResultUrl({ data: [{ url: 'https://cdn.example/output.mp4' }] }), 'https://cdn.example/output.mp4');
+    assert.equal(getVideoResultUrl({ id: 'task_10194', data: [{ url: 'https://video.example/v1/videos/task_10194/content' }] }),
+        'https://video.example/v1/videos/task_10194/content');
+});
+
+test('pending or failed video responses never treat attached URLs as completed media', () => {
+    for (const status of ['queued', 'pending', 'processing', 'in_progress', 'failed', 'cancelled']) {
+        assert.equal(getVideoResultUrl({ id: 'task_test', status, video_url: 'https://cdn.example/preview.mp4' }), '');
+    }
 });
 
 test('HM multimodal routes use the documented unified wire format without truncation', () => {
@@ -571,14 +621,19 @@ test('异步图片任务: 从 completed.result.data 提取最终图片', () => {
     assert.deepEqual(getGeneratedImageData(payload), { url: 'https://cdn.example/image.png' });
 });
 
-test('异步图片任务: 规范化失败状态和错误信息', () => {
+// 失败状态判定必须保持不变（任务恢复语义依赖它），但文案改为 CATALOG 输出：
+// 上游 message 只作为分类输入，不再回显给用户。
+test('异步图片任务: 规范化失败状态并输出脱敏文案', () => {
     const payload = {
         status: 'failed',
         error: { message: 'image generation failed', code: 'bad_response_status_code' }
     };
 
     assert.equal(isFailedImageTaskStatus(payload.status), true);
-    assert.equal(imageTaskErrorMessage(payload), 'image generation failed');
+    const message = imageTaskErrorMessage(payload);
+    assert.equal(message.includes('image generation failed'), false);
+    assert.equal(message.includes('bad_response_status_code'), false);
+    assert.match(message, /任务未能完成|未通过|请稍后重试/);
 });
 
 test('异步图片任务: Location 优先且编辑任务回退到 generations 查询路由', () => {
@@ -845,16 +900,20 @@ test('异步图片任务: 可从 Location 或 NewAPI 嵌套错误恢复任务 ID
     }, 202), 'task_01JEMBEDDED');
 });
 
-test('Midjourney 任务: 将 NewAPI 上游解析失败转换为可操作的鉴权提示', () => {
+// 上游解析失败原本会输出中转站架构、鉴权头和 NewAPI 等部署细节。
+// 这些属于运维信息，现在只进诊断日志，用户侧只看到 CATALOG 文案。
+test('Midjourney 任务: 上游解析失败不再泄漏中转架构与鉴权细节', () => {
     const message = imageHttpErrorMessage(400, JSON.stringify({
         code: 5,
         description: 'unmarshal_response_body_failed',
         type: 'upstream_error'
     }), { nativeMidjourney: true });
 
-    assert.match(message, /mj-api-secret/);
-    assert.match(message, /Authorization: Bearer/);
-    assert.match(message, /RavenHash/);
+    for (const leak of ['mj-api-secret', 'Authorization: Bearer', 'RavenHash', 'NewAPI',
+        'unmarshal_response_body_failed', 'upstream_error']) {
+        assert.equal(message.includes(leak), false, `不应泄漏 ${leak}`);
+    }
+    assert.equal(message.includes('{'), false);
 });
 
 test('图片请求重试: 仅重试上游临时故障并解释全部通道失败', () => {
@@ -872,10 +931,13 @@ test('图片请求重试: 仅重试上游临时故障并解释全部通道失败
         }
     }), { midjourneyModel: true, attempts: 3 });
 
-    assert.match(message, /Midjourney/);
-    assert.match(message, /RavenHash/);
+    // 「全部通道不可用」仍需告知用户重试无用、应改选模型，但不再点名中转站与供应商。
+    assert.match(message, /没有可用的生成通道/);
     assert.match(message, /已自动重试 2 次/);
     assert.doesNotMatch(message, /Image API failed/);
+    for (const leak of ['RavenHash', '中转站', '账号池', 'yamlrunner_error', 'all_vendors_failed']) {
+        assert.equal(message.includes(leak), false, `不应泄漏 ${leak}`);
+    }
 
     const responseText = JSON.stringify({
         error: {
@@ -891,8 +953,13 @@ test('图片请求重试: 仅重试上游临时故障并解释全部通道失败
         midjourneyModel: true,
         compatibilityFallbackUsed: true
     });
-    assert.match(fallbackMessage, /完整参数/);
+    // 仍然说明「已尝试过兼容参数」，让用户知道客户端已自行降级重试过，
+    // 但不再描述中转站的 MJ 渠道与账号池状态。
     assert.match(fallbackMessage, /兼容参数/);
+    assert.match(fallbackMessage, /没有可用的生成通道/);
+    for (const leak of ['RavenHash', '中转站', '账号池', 'MJ 通道']) {
+        assert.equal(fallbackMessage.includes(leak), false, `不应泄漏 ${leak}`);
+    }
 });
 
 test('图片请求重试: 识别 Electron 连接异常并排除永久请求错误', () => {

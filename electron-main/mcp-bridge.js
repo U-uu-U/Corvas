@@ -6,6 +6,9 @@ const crypto = require('crypto');
 const sharp = require('sharp');
 const { app, net } = require('electron');
 const { PlanService, DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
+const { WORKFLOW_TOOL_DEFINITIONS } = require('../shared/workflow-tools.cjs');
+const { isGlobalAiOpcModel, buildGlobalAiOpcBody, GlobalAiOpcAssets, LIMITS: GLOBALAIOPC_LIMITS } = require('./globalaiopc-video.cjs');
+const { isStarFrameModel, buildStarFrameBody, starFrameContentUrl, starFrameDownloadRequest, STARFRAME_LIMITS } = require('./starframe-video.cjs');
 const {
     appendMidjourneyParameters,
     buildImageEditMultipart,
@@ -42,6 +45,7 @@ const { imageRequestFailure } = require('./image-request-diagnostics.cjs');
 const { namingPrompt, writeGeneratedMedia } = require('./generated-media-names.cjs');
 const { diagnostic: recordDiagnostic } = require('./diagnostics.cjs');
 const { mapLocalError, publicErrorResult, failureNode } = require('../shared/public-api-error.cjs');
+const { describeServiceRole } = require('../shared/error-redaction.cjs');
 const {
     buildMiniMaxH3RequestBody,
     buildSeedance25RequestBody,
@@ -149,6 +153,14 @@ function getReferenceCache() {
     }
     return referenceCache;
 }
+let globalAiOpcAssets;
+function getGlobalAiOpcAssets() {
+    const directory = path.join(app.getPath('userData'), 'data', 'reference-cache');
+    if (globalAiOpcAssets?.directory !== directory) globalAiOpcAssets = new GlobalAiOpcAssets({
+        directory, fetch: (...args) => net.fetch(...args), wait: sleep
+    });
+    return globalAiOpcAssets;
+}
 const ROUTE_TO_TOOL = {
     'GET /health': 'flow_canvas.health',
     'GET /config': 'flow_canvas.config.get',
@@ -180,27 +192,14 @@ const MANAGEMENT_TOOL_NAMES = [
     'flow_canvas.config.get',
     'flow_canvas.config.update'
 ];
-const LEGACY_DEFAULT_TOOL_NAMES = [
-    'flow_canvas.context.get_active_group',
-    'flow_canvas.plan.list',
-    'flow_canvas.plan.get',
-    'flow_canvas.plan.create',
-    'flow_canvas.plan.update',
-    'flow_canvas.plan.row.add',
-    'flow_canvas.plan.row.update',
-    'flow_canvas.plan.row.delete',
-    'flow_canvas.plan.delete',
-    'flow_canvas.plan.export',
-    'flow_canvas.image.generate',
-    'flow_canvas.item.add'
-];
+const WORKFLOW_TOOL_NAMES = new Set(WORKFLOW_TOOL_DEFINITIONS.map(tool => tool.name));
 const KNOWN_TOOL_NAMES = new Set([
     ...Object.values(ROUTE_TO_TOOL),
     ...DEFAULT_MCP_CONFIG.allowedTools
 ]);
 
 class FlowCanvasBridge {
-    constructor({ store, getMainWindow, getDefaultSaveFolder, getFallbackSaveDir, notifyRenderer, notifyTaskSubmitted, notifyTaskCompleted, notifyVideoProgress, boardToolRequestTimeoutMs, recoveryDirectory }) {
+    constructor({ store, getMainWindow, getDefaultSaveFolder, getFallbackSaveDir, notifyRenderer, notifyTaskSubmitted, notifyTaskCompleted, notifyVideoProgress, registerMediaFile, boardToolRequestTimeoutMs, recoveryDirectory }) {
         this.store = store;
         this.getMainWindow = getMainWindow;
         this.getDefaultSaveFolder = getDefaultSaveFolder;
@@ -208,6 +207,7 @@ class FlowCanvasBridge {
         this.notifyRenderer = notifyRenderer;
         this.notifyTaskSubmitted = notifyTaskSubmitted;
         this.notifyTaskCompleted = notifyTaskCompleted;
+        this.registerMediaFile = registerMediaFile;
         const progressStates = new Map();
         this.notifyVideoProgress = event => {
             const key = event.clientTaskId || 'unknown';
@@ -337,6 +337,9 @@ class FlowCanvasBridge {
         this.recoveryStore.update(body.clientTaskId, { result, state: 'downloaded', confirmedFailure: false, errorCode: null, error: null,
             ...(result.targetDir ? { targetDir: result.targetDir } : {}),
             ...(result.taskId ? { taskId: result.taskId } : {}) });
+        for (const filePath of new Set([result.filePath, ...(result.filePaths || [])].filter(Boolean))) {
+            this.registerMediaFile?.(filePath);
+        }
     }
 
     async recoverGenerationFromRenderer(body = {}) {
@@ -367,6 +370,7 @@ class FlowCanvasBridge {
         const work = this._runCancelableGeneration(`recover:${clientTaskId}`, async signal => {
             let result = existing?.result;
             const paths = result?.filePaths?.length ? result.filePaths : [result?.filePath].filter(Boolean);
+            for (const filePath of paths.filter(filePath => fs.existsSync(filePath))) this.registerMediaFile?.(filePath);
             if (!paths.length || !paths.every(filePath => fs.existsSync(filePath))) {
                 if (!taskId) throw new Error('没有上游任务 ID，请从服务商后台复制任务 ID 后拉取；不会重新提交生成');
                 if (!config.apiKey || !config.endpoint) throw new Error('请先恢复原任务使用的 API 配置');
@@ -571,9 +575,19 @@ class FlowCanvasBridge {
     }
 
     _matchRoute(method, pathname) {
+        if (method === 'POST' && pathname.startsWith('/workflow/tools/')) {
+            const toolName = decodeURIComponent(pathname.slice('/workflow/tools/'.length));
+            if (!WORKFLOW_TOOL_NAMES.has(toolName)) return null;
+            return { toolName, params: {}, handler: async (_, body) => {
+                if (!this.workflowExecutor) {
+                    throw createBridgeError('TOOL_UNAVAILABLE', 'Workflow executor unavailable', { toolName });
+                }
+                return { result: await this.workflowExecutor(toolName, body) };
+            } };
+        }
         if (method === 'POST' && pathname.startsWith('/agent/tools/')) {
             const toolName = decodeURIComponent(pathname.slice('/agent/tools/'.length));
-            if (!KNOWN_TOOL_NAMES.has(toolName)) return null;
+            if (!KNOWN_TOOL_NAMES.has(toolName) || WORKFLOW_TOOL_NAMES.has(toolName)) return null;
             return { toolName, params: {}, handler: async (_, body) => {
                 if (!this.agentExecutor) throw new Error('Agent runtime unavailable');
                 return { result: await this.agentExecutor(toolName, body) };
@@ -1043,6 +1057,10 @@ class FlowCanvasBridge {
         const sourceContext = collectImageSourceReferences(data, planService, body);
         const videoSourceContext = collectVideoSourceReferences(data, body.videoReferences);
         const audioSourceContext = collectAudioSourceReferences(data, body.audioReferences);
+        if ((isGlobalAiOpcModel(body?.providerConfig?.model || body?.model) || isStarFrameModel(body?.providerConfig?.model || body?.model))
+            && [...sourceContext.missing, ...videoSourceContext.missing, ...audioSourceContext.missing].length) {
+            throw new Error('参考素材不存在或格式不支持，请重新选择后再提交');
+        }
         const result = await tryGenerateWithOpenAIVideo(prompt, targetDir, {
             ...body,
             signal,
@@ -1314,6 +1332,7 @@ class FlowCanvasBridge {
             { id: taskId, task_id: taskId, status: 'pending', recovering: true },
             {
                 model,
+                clientTaskId: body.clientTaskId,
                 signal,
                 preferVideoTaskEndpoint: isMiniMaxH3Model(model) || isSeedanceVideoModel(model),
                 onTaskIdResolved: (resolvedTaskId) => this._rememberSubmitted(body, {
@@ -1340,7 +1359,8 @@ class FlowCanvasBridge {
             model,
             taskId: resolvedTaskId,
             preferVideoTaskEndpoint: isMiniMaxH3Model(model) || isSeedanceVideoModel(model),
-            signal
+            signal,
+            onProgress: progress => this.notifyVideoProgress?.({ clientTaskId: body.clientTaskId || null, ...progress })
         });
         this._rememberResult(body, { filePath, filePaths: [filePath], taskId: resolvedTaskId,
             mediaType: 'video', video: { url: completed.url }, targetDir });
@@ -1860,7 +1880,8 @@ async function resolveGeneratedImageBuffer(image, endpoint, apiKey = '', signal 
     try {
         imageUrl = new URL(source, endpoint).toString();
     } catch (_) {
-        throw new Error(`Image API returned an invalid image URL: ${source.slice(0, 160)}`);
+        // 不回显上游返回的地址片段：它既是产物地址也可能带签名参数。
+        throw new Error('图片生成服务返回的产物地址无法解析，请稍后重试或重新生成。');
     }
     const requestHeaders = { Accept: 'image/*, application/octet-stream' };
     try {
@@ -2260,18 +2281,20 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
                 finalPayload = completed.payload;
             }
         } else if (res.status === 202) {
-            const reason = imageTaskErrorMessage(json);
+            // 上游受理了任务却没给任务 ID：这属于转发配置问题，细节只进诊断日志。
+            recordDiagnostic('error', 'generation.image_task_id_missing', {
+                endpointRef: endpointReference(endpoint), model, status: res.status,
+                upstream: imageTaskErrorMessage(json)
+            });
             return {
-                success: false,
-                error: reason
-                    ? `图片中转接受了任务，但丢失了任务 ID：${reason}`
-                    : '图片中转接受了任务，但没有返回任务 ID；请检查 NewAPI 是否正确转发异步响应的 Location 和响应体。'
+                ...mapLocalError(502, '', { code: 'RH_SUBMISSION_UNKNOWN' }), requestId: options.clientTaskId
             };
         } else if (nativeMidjourney) {
-            return {
-                success: false,
-                error: `Midjourney 提交失败：${imageTaskErrorMessage(json) || `code ${String(json?.code ?? 'unknown')}`}`
-            };
+            recordDiagnostic('error', 'generation.midjourney_submit_failed', {
+                endpointRef: endpointReference(endpoint), model,
+                upstreamCode: String(json?.code ?? ''), upstream: imageTaskErrorMessage(json)
+            });
+            return { success: false, error: imageTaskErrorMessage(json) };
         }
         const imageEntries = getGeneratedImageDataList(finalPayload);
         if (!imageEntries.length && image) imageEntries.push(image);
@@ -2343,15 +2366,40 @@ function buildOpenAiTaskEndpoint(generationEndpoint, taskId) {
     return url.toString();
 }
 
-function describeRemoteEndpoint(value) {
+/**
+ * 面向用户时只说明「哪一类服务」，不回显 origin、路径或查询参数。
+ * 真实 endpoint 只进诊断日志（diagnostics.cjs 会再脱敏一次）。
+ */
+function describeRemoteEndpoint(value, role = 'video') {
+    return describeServiceRole(remoteEndpointRole(value) || role);
+}
+
+// 从 endpoint 推断服务类别，用于挑选展示标签；识别不出时由调用方给默认值。
+// 局部变量刻意不叫 path —— 模块作用域的 path 是 node 的 path 模块。
+function remoteEndpointRole(value) {
+    let route = '';
+    try { route = new URL(value).pathname.toLowerCase(); } catch (_) { return ''; }
+    if (!route) return '';
+    if (/video/.test(route)) return 'video';
+    if (/image|mj|midjourney/.test(route)) return 'image';
+    if (/chat|completion|responses/.test(route)) return 'text';
+    return '';
+}
+
+// 诊断用的稳定引用：让运营能把多条日志归到同一个 endpoint，又不落原始地址。
+function endpointReference(value) {
     try {
         const url = new URL(value);
-        return `${url.origin}${url.pathname}`;
+        return crypto.createHash('sha256').update(`${url.origin}${url.pathname}`).digest('hex').slice(0, 12);
     } catch (_) {
-        return '\u5df2\u914d\u7f6e\u7684\u89c6\u9891\u63a5\u53e3';
+        return 'unknown';
     }
 }
 
+/**
+ * 传输层失败只输出本地判定结论，不附加未经脱敏的 error.message。
+ * Chromium / undici 的文案里常带完整 URL 和主机名，直接附上就等于绕过脱敏。
+ */
 function describeRemoteFailure(error) {
     const detail = error?.message || String(error);
     const knownErrors = [
@@ -2364,13 +2412,29 @@ function describeRemoteFailure(error) {
         [/fetch failed/i, '\u7f51\u7edc\u8bf7\u6c42\u5931\u8d25']
     ];
     const match = knownErrors.find(([pattern]) => pattern.test(detail));
-    return match ? `${match[1]}\uff08${detail}\uff09` : detail;
+    return match ? match[1] : '\u7f51\u7edc\u8bf7\u6c42\u5931\u8d25';
 }
 
 function remoteConnectionError(stage, endpoint, error, attempts = 1) {
-    const detail = describeRemoteFailure(error);
+    // 本地构造的失败（image-request-diagnostics 的 imageRequestFailure）自带请求编号、
+    // 阶段、耗时，以及「不要连续重复生成」的防重复计费告诫——这些是安全且必需的信息，
+    // 不能被压成一句「网络请求失败」。它已在源头脱敏，这里原样保留。
+    const localFailure = error?.submissionUnknown === true ? String(error.message || '').trim() : '';
+    const detail = localFailure || describeRemoteFailure(error);
     const retryText = attempts > 1 ? `\uff0c\u5df2\u91cd\u8bd5 ${attempts - 1} \u6b21` : '';
-    return new Error(`${stage}\u8fde\u63a5\u5931\u8d25\uff08${describeRemoteEndpoint(endpoint)}${retryText}\uff09\uff1a${detail}`);
+    const failure = new Error(`${stage}\u8fde\u63a5\u5931\u8d25\uff08${describeRemoteEndpoint(endpoint)}${retryText}\uff09\uff1a${detail}`);
+    // 结果未知的语义必须透传，否则渲染层会把它当成可重试的普通失败并建议重新提交。
+    if (error?.submissionUnknown === true) failure.submissionUnknown = true;
+    if (error?.timedOut === true) failure.timedOut = true;
+    for (const key of ['code', 'requestId', 'taskId', 'retryable', 'status']) {
+        if (error?.[key] !== undefined) failure[key] = error[key];
+    }
+    // 真实 endpoint 与原始报错只写诊断日志，供运营按 endpointRef 关联排查。
+    recordDiagnostic('error', 'generation.remote_connection_failed', {
+        stage, endpointRef: endpointReference(endpoint), attempts,
+        cause: error?.message || String(error)
+    });
+    return failure;
 }
 
 async function fetchTextWithRetry(url, options, stage, attempts = 3) {
@@ -2902,7 +2966,10 @@ function sleep(ms, signal = null) {
 }
 
 async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialResponse, options = {}) {
-    const directUrl = getVideoResultUrl(initialResponse);
+    const resultUrl = payload => isStarFrameModel(options.model)
+        ? starFrameContentUrl(generationEndpoint, taskId || getVideoTaskId(payload), payload)
+        : isGlobalAiOpcModel(options.model) && getVideoTaskStatus(payload).toLowerCase() !== 'completed' ? '' : getVideoResultUrl(payload);
+    const directUrl = resultUrl(initialResponse);
     if (directUrl) {
         options.onProgress?.({ stage: 'download' });
         return { payload: initialResponse, url: directUrl, taskId };
@@ -3003,18 +3070,23 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
         transientFailures = 0;
         const payloadError = getVideoPayloadError(payload);
         if (payloadError && !getVideoResultUrl(payload)) {
+            recordDiagnostic('error', 'generation.video_task_failed', {
+                taskId: currentTaskId, clientTaskId: options.clientTaskId, model: options.model,
+                endpointRef: endpointReference(generationEndpoint), payload
+            });
             const mapped = mapLocalError(200, payload, { query: true, terminal: isFailedVideoStatus(getVideoTaskStatus(payload)), taskId: currentTaskId });
             throw Object.assign(new Error(mapped.error), mapped,
                 { code: mapped.code === 'RH_TASK_FAILED' ? 'UPSTREAM_TASK_FAILED' : mapped.code });
         }
         const resolvedTaskId = getVideoTaskId(payload);
         if (resolvedTaskId && resolvedTaskId !== currentTaskId) {
+            if (isStarFrameModel(options.model)) throw new Error('StarFrame 查询响应与原任务 ID 不符，未改绑任务');
             currentTaskId = resolvedTaskId;
             taskUrls = buildTaskUrls(currentTaskId);
             taskUrlIndex = 0;
             options.onTaskIdResolved?.(currentTaskId, payload);
         }
-        const url = getVideoResultUrl(payload);
+        const url = resultUrl(payload);
         const taskStatus = getVideoTaskStatus(payload);
         if (url && (isCompletedVideoStatus(taskStatus) || !taskStatus)) {
             options.onProgress?.({ stage: 'download', progress: 100 });
@@ -3049,9 +3121,9 @@ function videoExtensionFromUrl(url, contentType = '') {
     return '.mp4';
 }
 
-async function downloadVideo(url, targetDir, prompt, signal = null) {
+async function downloadVideo(url, targetDir, prompt, signal = null, headers = undefined) {
     const { buffer, contentType, finalUrl } = await downloadGeneratedBuffer(url, {
-        signal,
+        signal, headers,
         accept: 'video/*,application/octet-stream;q=0.9,*/*;q=0.1'
     });
     throwIfGenerationCanceled(signal);
@@ -3072,7 +3144,13 @@ async function downloadVideoWithAutoRefresh(completed, targetDir, prompt, option
     const wait = options.wait || sleep;
     while (true) {
         try {
-            return await download(current.url, targetDir, prompt, options.signal);
+            const starFrame = isStarFrameModel(options.model);
+            const request = starFrame ? starFrameDownloadRequest(options.generationEndpoint, taskId,
+                current.payload || { status: 'completed', metadata: { url: current.url } }) : { url: current.url };
+            const { url } = request;
+            if (!url) throw new Error('视频尚未完成，不能下载');
+            return await download(url, targetDir, prompt, options.signal,
+                request.requiresAuth ? { Authorization: `Bearer ${options.apiKey}` } : undefined);
         } catch (error) {
             const status = Number(error?.status);
             if (!taskId || !GENERATED_MEDIA_AUTO_REFRESH_STATUSES.has(status)
@@ -3081,6 +3159,8 @@ async function downloadVideoWithAutoRefresh(completed, targetDir, prompt, option
             }
             refreshAttempts += 1;
             options.onRefresh?.({ attempt: refreshAttempts, waitMs: GENERATED_MEDIA_AUTO_REFRESH_INTERVAL_MS, status });
+            options.onProgress?.({ stage: 'recovering', retryCount: refreshAttempts,
+                lastError: `下载地址暂不可用（HTTP ${status}），正在重新查询任务` });
             await wait(GENERATED_MEDIA_AUTO_REFRESH_INTERVAL_MS, options.signal);
             current = await poll(
                 options.generationEndpoint,
@@ -3163,7 +3243,14 @@ async function downloadGeneratedBuffer(url, {
         }
     }
     const fallbackText = http1FallbackAttempts > 0 ? `，其中 HTTP/1.1 回退 ${http1FallbackAttempts} 次` : '';
-    throw new Error(`下载生成产物失败（${describeRemoteEndpoint(url)}，已尝试 ${attemptsMade} 次${fallbackText}）：${describeRemoteFailure(lastError)}。可使用“继续下载”再次拉取产物。`);
+    // 真实产物地址（常带签名查询参数）只进诊断日志，不进面向用户的文案。
+    recordDiagnostic('error', 'generation.media_download_failed', {
+        endpointRef: endpointReference(url), attempts: attemptsMade,
+        http1FallbackAttempts, cause: lastError?.message || String(lastError)
+    });
+    throw Object.assign(new Error(`下载生成产物失败（${describeRemoteEndpoint(url, 'download')}，已尝试 ${attemptsMade} 次${fallbackText}）：${describeRemoteFailure(lastError)}。可使用“继续下载”再次拉取产物。`), {
+        code: 'DOWNLOAD_FAILED', status: lastError?.status, cause: lastError, retryable: true
+    });
 }
 
 function generatedMediaDownloadHttpError(status) {
@@ -3226,7 +3313,12 @@ async function downloadRemoteBinaryOverHttp1(
                     fail(new Error(`产物下载重定向超过 ${GENERATED_MEDIA_DOWNLOAD_REDIRECT_LIMIT} 次`));
                     return;
                 }
-                downloadRemoteBinaryOverHttp1(new URL(location, url).toString(), signal, accept, requestHeaders, redirects + 1)
+                const nextUrl = new URL(location, url);
+                const nextHeaders = { ...requestHeaders };
+                if (nextUrl.origin !== url.origin) {
+                    for (const key of Object.keys(nextHeaders)) if (/^(authorization|cookie)$/i.test(key)) delete nextHeaders[key];
+                }
+                downloadRemoteBinaryOverHttp1(nextUrl.toString(), signal, accept, nextHeaders, redirects + 1)
                     .then(value => finish(resolve, value), fail);
                 return;
             }
@@ -3289,9 +3381,14 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         if (!apiKey) return { success: false, error: '\u672a\u914d\u7f6e\u89c6\u9891 API Key' };
         if (!endpoint) return { success: false, error: '\u672a\u914d\u7f6e\u89c6\u9891 API \u5730\u5740' };
 
+        const { assertVideoGenerationAvailable } = await import('../shared/video-generation-availability.mjs');
+        assertVideoGenerationAvailable({ model, endpoint });
+
         const isMiniMaxH3 = isMiniMaxH3Model(model);
         const isSeedance = isSeedanceVideoModel(model);
-        const referenceLimits = isSeedance ? seedanceReferenceLimits(model) : { image: 9, video: 3, audio: 3 };
+        const isGlobalAiOpc = isGlobalAiOpcModel(model);
+        const isStarFrame = isStarFrameModel(model);
+        const referenceLimits = isStarFrame ? STARFRAME_LIMITS : isGlobalAiOpc ? GLOBALAIOPC_LIMITS : isSeedance ? seedanceReferenceLimits(model) : { image: 9, video: 3, audio: 3 };
         const body = { model, prompt };
         const resolution = String(options.resolution || '').trim();
         let ratio = String(options.ratio || '').trim();
@@ -3307,7 +3404,15 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             }
             ratio = resolveSeedance25AspectRatio(ratio, width, height);
         }
-        if (isMiniMaxH3) {
+        const globalAiOpcParams = { model, prompt, duration: options.duration ?? 4, aspectRatio: ratio || '16:9',
+            resolution: resolution || '720p', seed: options.seed ?? -1, generateAudio: options.generateAudio ?? true };
+        const starFrameParams = { model, prompt, clientTaskId: options.clientTaskId, duration: options.duration ?? 4,
+            resolution: resolution || '720p', aspectRatio: ratio || undefined };
+        if (isStarFrame) {
+            Object.assign(body, buildStarFrameBody(starFrameParams));
+        } else if (isGlobalAiOpc) {
+            Object.assign(body, buildGlobalAiOpcBody(globalAiOpcParams));
+        } else if (isMiniMaxH3) {
             Object.assign(body, buildMiniMaxH3RequestBody({
                 endpoint,
                 model,
@@ -3322,6 +3427,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 model,
                 prompt,
                 duration: Number.isInteger(duration) ? duration : undefined,
+                resolution: resolution || undefined,
                 aspectRatio: ratio || undefined
             }));
         } else {
@@ -3353,28 +3459,48 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 isMiniMaxH3 ? 15 * 1024 * 1024 : 32 * 1024 * 1024
             );
         const uploadProviders = temporaryUploadProviders(providerConfig);
-        const imageUrls = await uploadVideoReferencesOrUseOriginals(
+        if (isGlobalAiOpc) {
+            for (const image of images) {
+                const { buffer } = decodeReferenceDataUri(image.url);
+                const metadata = await sharp(buffer).metadata();
+                const width = metadata.width, height = metadata.height;
+                if (buffer.length >= 30 * 1024 * 1024 || !(width > 300 && width < 6000 && height > 300 && height < 6000)
+                    || !(width / height > 0.4 && width / height < 2.5)) {
+                    throw new Error('GlobalAiOpc 参考图须小于 30 MB，宽高均大于 300 且小于 6000 像素，宽高比在 0.4 到 2.5 之间');
+                }
+            }
+        }
+        const uploadReferences = isGlobalAiOpc || isStarFrame ? uploadTemporaryReferences : uploadVideoReferencesOrUseOriginals;
+        const imageUrls = await uploadReferences(
             images.map(image => image.url),
             '参考图片',
             uploadProviders,
             options.onProgress
         );
         throwIfGenerationCanceled(options.signal);
-        const referenceVideoUrls = await uploadVideoReferencesOrUseOriginals(
+        const referenceVideoUrls = await uploadReferences(
             videos,
             '参考视频',
             uploadProviders,
             options.onProgress
         );
         throwIfGenerationCanceled(options.signal);
-        const referenceAudioUrls = await uploadVideoReferencesOrUseOriginals(
+        const referenceAudioUrls = await uploadReferences(
             audioUrls,
             '参考音频',
             uploadProviders,
             options.onProgress
         );
         throwIfGenerationCanceled(options.signal);
-        if (isMiniMaxH3) {
+        if (isStarFrame) {
+            Object.assign(body, buildStarFrameBody({ ...starFrameParams, referenceImages: imageUrls,
+                referenceVideos: referenceVideoUrls, referenceAudios: referenceAudioUrls }));
+        } else if (isGlobalAiOpc) {
+            const assets = await getGlobalAiOpcAssets().prepare({ endpoint, apiKey, imageUrls,
+                clientTaskId: options.clientTaskId, requestId: options.requestId,
+                videoUrls: referenceVideoUrls, audioUrls: referenceAudioUrls, signal: options.signal, onProgress: options.onProgress });
+            Object.assign(body, buildGlobalAiOpcBody({ ...globalAiOpcParams, ...assets }));
+        } else if (isMiniMaxH3) {
             Object.assign(body, buildMiniMaxH3RequestBody({
                 endpoint,
                 model,
@@ -3392,6 +3518,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 model,
                 prompt,
                 duration: Number.isInteger(duration) ? duration : undefined,
+                resolution: resolution || undefined,
                 aspectRatio: ratio || undefined,
                 referenceImages: imageUrls,
                 referenceVideos: referenceVideoUrls,
@@ -3415,6 +3542,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         let recoveringSubmission = false;
         options.onProgress?.({ stage: 'submit' });
         console.info('[FlowCanvasBridge] Video request:', JSON.stringify(summarizeVideoRequest(endpoint, body, recoveryId)));
+        const submissionTimeout = isGlobalAiOpc || isStarFrame ? createLinkedAbortController(options.signal, isStarFrame ? 120000 : 45000) : null;
         try {
             response = await net.fetch(endpoint, {
                 method: 'POST',
@@ -3422,16 +3550,21 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                     Authorization: `Bearer ${apiKey}`,
                     'Content-Type': 'application/json',
                     Accept: 'application/json',
-                    'X-Playground': '1',
-                    'X-Log-Id': recoveryId
+                    ...(!isGlobalAiOpc && !isStarFrame ? { 'X-Playground': '1', 'X-Log-Id': recoveryId } : {})
                 },
                 body: JSON.stringify(body),
-                redirect: 'follow',
-                signal: options.signal
+                redirect: isGlobalAiOpc || isStarFrame ? 'error' : 'follow',
+                signal: submissionTimeout?.controller.signal || options.signal
             });
             text = await response.text();
         } catch (error) {
             throwIfGenerationCanceled(options.signal);
+            if (isStarFrame) throw Object.assign(new Error(`StarFrame 提交响应中断，结果尚未确定；客户端任务 ID 为 ${body.client_task_id}，请保留此 ID 核对原任务，不能当作上游 task_id 查询`), {
+                code: 'VIDEO_SUBMISSION_UNKNOWN', submissionUnknown: true, confirmedFailure: false, requestId: body.client_task_id
+            });
+            if (isGlobalAiOpc) throw Object.assign(new Error('GlobalAiOpc 提交响应中断，任务结果尚未确定；请先核对供应商任务记录，不会使用本地编号冒充任务 ID 或自动重发'), {
+                code: 'VIDEO_SUBMISSION_UNKNOWN', submissionUnknown: true, confirmedFailure: false, requestId: recoveryId
+            });
             if (!isAmbiguousVideoSubmitError(error)) {
                 throw remoteConnectionError('\u63d0\u4ea4\u89c6\u9891\u751f\u6210\u4efb\u52a1', endpoint, error);
             }
@@ -3443,8 +3576,11 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 recovering: true
             };
             console.warn('[FlowCanvasBridge] Video submit response disconnected; recovering by log ID:', recoveryId);
-        }
+        } finally { submissionTimeout?.cleanup(); }
         if (response && !response.ok) {
+            if (isStarFrame && [409, 410].includes(response.status)) return { success: false,
+                error: `StarFrame 任务已存在或正在恢复产物，请核对原任务；client_task_id=${body.client_task_id}`,
+                code: 'VIDEO_SUBMISSION_UNKNOWN', submissionUnknown: true, confirmedFailure: false, requestId: body.client_task_id };
             const mapped = publicErrorResult(text);
             if (mapped) return mapped;
             const serverTraceId = response.headers.get('x-log-id')
@@ -3452,10 +3588,11 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 || response.headers.get('request-id')
                 || recoveryId;
             if (isMiniMaxH3 && isMiniMaxH3UnavailableResponse(response.status, text)) {
-                return {
-                    success: false,
-                    error: `MiniMax H3 在当前 API 的模型列表中可见，但没有可用生成渠道（${describeRemoteEndpoint(endpoint)}）。请检查中转站模型映射是否为 minimax-h3 -> MiniMax-H3-c1；Corvas 不会绕过中转站直连其他域名。`
-                };
+                // 部署侧的模型映射细节属于运维信息，只记诊断日志，凭排查编号追查。
+                recordDiagnostic('error', 'generation.video_model_unavailable', {
+                    model, endpointRef: endpointReference(endpoint), status: response.status, logId: serverTraceId
+                });
+                return mapLocalError(response.status, text, { code: 'RH_MODEL_UNAVAILABLE', requestId: serverTraceId });
             }
             return mapLocalError(response.status, text, { query: false, requestId: serverTraceId });
         }
@@ -3464,7 +3601,11 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             try {
                 initialResponse = JSON.parse(text);
             } catch (_) {
-                return { success: false, error: '\u63d0\u4ea4\u89c6\u9891\u4efb\u52a1\u540e\uff0c\u670d\u52a1\u5668\u672a\u8fd4\u56de\u6709\u6548 JSON' };
+                recordDiagnostic('error', 'generation.video_submission_unknown', {
+                    clientTaskId: options.clientTaskId, model, endpointRef: endpointReference(endpoint),
+                    status: response.status, bodyLength: text.length
+                });
+                return { ...mapLocalError(502, '', { code: 'RH_SUBMISSION_UNKNOWN' }), requestId: options.clientTaskId };
             }
         }
         const mapped = publicErrorResult(initialResponse);
@@ -3478,11 +3619,14 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             return mapLocalError(200, initialResponse, { query: false, taskId });
         }
         if (!taskId && !getVideoResultUrl(initialResponse)) {
-            const mapped = mapLocalError(200, initialResponse, { query: true, terminal: false });
+            recordDiagnostic('error', 'generation.video_submission_unknown', {
+                clientTaskId: options.clientTaskId, model, endpointRef: endpointReference(endpoint), payload: initialResponse
+            });
+            const mapped = mapLocalError(502, initialResponse, { code: 'RH_SUBMISSION_UNKNOWN' });
             const reason = mapped.error || '服务端没有返回任务 ID 或视频地址';
             return {
                 success: false,
-                error: reason, code: mapped.code, requestId: mapped.requestId,
+                error: reason, code: mapped.code, requestId: mapped.requestId || options.clientTaskId,
                 submissionUnknown: mapped.submissionUnknown, confirmedFailure: mapped.confirmedFailure
             };
         }
@@ -3500,6 +3644,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         }
         const completed = await pollOpenAiVideoTask(endpoint, apiKey, taskId, initialResponse, {
             model,
+            clientTaskId: options.clientTaskId,
             preferVideoTaskEndpoint: isMiniMaxH3 || isSeedance,
             signal: options.signal,
             onTaskIdResolved: (resolvedTaskId, payload) => options.onTaskSubmitted?.({
@@ -3518,7 +3663,8 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             model,
             taskId: completed.taskId || taskId,
             preferVideoTaskEndpoint: isMiniMaxH3 || isSeedance,
-            signal: options.signal
+            signal: options.signal,
+            onProgress: options.onProgress
         });
         options.onDownloaded?.({ filePath, filePaths: [filePath], taskId: completed.taskId || taskId,
             mediaType: 'video', video: { url: completed.url }, targetDir });
@@ -3717,11 +3863,6 @@ function sanitizeAllowedTools(allowedTools) {
     );
 
     MANAGEMENT_TOOL_NAMES.forEach(toolName => tools.add(toolName));
-
-    const isLegacyDefault = LEGACY_DEFAULT_TOOL_NAMES.every(toolName => tools.has(toolName));
-    if (isLegacyDefault) {
-        DEFAULT_MCP_CONFIG.allowedTools.forEach(toolName => tools.add(toolName));
-    }
 
     return [...tools];
 }

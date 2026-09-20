@@ -104,6 +104,16 @@ test('preview reuses transaction simulation without saving or activating the tar
     assert.equal(h.writes, 0);
 });
 
+test('Agent-created empty media generators are marked as reusable execution targets', async () => {
+    const h = harness();
+    const request = transaction('b', 0, 'media-target');
+    request.operations = [{ op: 'node.create', id: 'media-target-node', nodeType: 'image',
+        item: { title: '机械狗六视图 | 正视图', config: { prompt: 'front view' } } }];
+    await h.service.apply('b', request);
+    const created = h.data.folderGroups.find(group => group.id === 'b').savedItems.find(item => item.id === 'media-target-node');
+    assert.equal(created.metadata.agentPrepared, true);
+});
+
 test('background apply leaves every unrelated group and top-level field intact', async () => {
     const h = harness();
     const before = h.data;

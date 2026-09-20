@@ -487,12 +487,12 @@
                                 <span class="agent-execution-title">AGENT 模式</span>
                                 <button class="agent-execution-option" type="button" data-agent-execution-mode="auto">
                                     <svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-sparkles"></use></svg>
-                                    <span><strong>自动</strong><small>直接执行分析并返回可应用结果</small></span>
+                                    <span><strong>自动</strong><small>自动执行任务；混元模型生成后发送到 Rhino 整理</small></span>
                                     <svg class="flow-icon flow-icon-sm check" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-check"></use></svg>
                                 </button>
                                 <button class="agent-execution-option" type="button" data-agent-execution-mode="ask">
                                     <svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-help"></use></svg>
-                                    <span><strong>询问</strong><small>应用关键规划前先向你确认</small></span>
+                                    <span><strong>手动</strong><small>关键操作先确认；混元模型在顶部确认后发送</small></span>
                                     <svg class="flow-icon flow-icon-sm check" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-check"></use></svg>
                                 </button>
                             </section>
@@ -577,6 +577,10 @@
                             <button class="agent-shortcut-reset" id="agentShortcutResetBtn" type="button">恢复默认</button>
                         </div>
                         <div class="agent-shortcut-list" id="agentShortcutList"></div>
+                        <div class="agent-shortcut-fixed">
+                            <span>拖到网页上传框或其他应用</span>
+                            <kbd>Ctrl / ⌘ + 拖拽</kbd>
+                        </div>
                         <div class="agent-shortcut-fixed">
                             <span>复制到系统文件夹</span>
                             <kbd>Alt + 拖拽</kbd>
@@ -735,6 +739,14 @@
 
                 <div class="agent-input-area">
                     <div class="agent-input-wrapper">
+                        <div class="agent-material-toolbar">
+                            <button type="button" class="agent-add-material-btn" id="agentAddMaterialBtn"
+                                aria-label="添加素材" aria-pressed="false" title="从画布添加图片、视频或音频">
+                                <svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-add"></use></svg>
+                                <span>添加素材</span>
+                            </button>
+                            <span id="agentMaterialPickHint" hidden>点击画布素材，Esc 完成</span>
+                        </div>
                         <section class="agent-attachment-tray" id="agentAttachmentTray" aria-label="待发送的节点上下文" hidden>
                             <header class="agent-attachment-head">
                                 <span id="agentContextSummary">节点上下文</span>

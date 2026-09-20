@@ -1,6 +1,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const Bridge = require('./mcp-bridge');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const Module = require('node:module');
+let fetchFixture;
+let Bridge;
+const originalLoad = Module._load;
+try {
+    Module._load = function (name, ...args) {
+        return name === 'electron' ? { net: { fetch: (...args) => fetchFixture(...args) } }
+            : originalLoad.call(this, name, ...args);
+    };
+    Bridge = require('./mcp-bridge');
+} finally { Module._load = originalLoad; }
 
 test('视频产物下载鉴权失败后每15秒自动刷新任务地址', async () => {
     let downloads = 0;
@@ -33,4 +46,39 @@ test('视频产物下载鉴权失败后每15秒自动刷新任务地址', async 
     assert.equal(downloads, 2);
     assert.equal(polls, 1);
     assert.deepEqual(waits, [15_000]);
+});
+
+test('real download error retains HTTP status and refreshes an expired URL without resubmitting', async t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'corvas-download-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const fetched = [];
+    fetchFixture = async (url, options) => {
+        fetched.push(url);
+        assert.equal(options.method, 'GET');
+        if (url.endsWith('/expired.mp4')) return new Response('', { status: 401 });
+        return new Response('video-fixture', { headers: { 'content-type': 'video/mp4' } });
+    };
+    let polls = 0;
+    const result = await Bridge.downloadVideoWithAutoRefresh({ url: 'https://cdn.example/expired.mp4', taskId: 'task_test' },
+        directory, 'fixture', {
+            wait: async () => {}, poll: async (_endpoint, _key, id) => {
+                polls++;
+                assert.equal(id, 'task_test');
+                return { url: 'https://cdn.example/fresh.mp4', taskId: id };
+            }
+        });
+    assert.equal(polls, 1);
+    assert.deepEqual(fetched, ['https://cdn.example/expired.mp4', 'https://cdn.example/fresh.mp4']);
+    assert.equal(fs.readFileSync(result, 'utf8'), 'video-fixture');
+});
+
+test('persistent download denial stops refreshing after three queries and preserves recoverable error metadata', async () => {
+    fetchFixture = async () => new Response('', { status: 403 });
+    let polls = 0;
+    await assert.rejects(Bridge.downloadVideoWithAutoRefresh({ url: 'https://cdn.example/expired.mp4', taskId: 'task_test' },
+        'unused', 'fixture', { wait: async () => {}, poll: async () => {
+            polls++;
+            return { url: 'https://cdn.example/expired.mp4', taskId: 'task_test' };
+        } }), error => error.code === 'DOWNLOAD_FAILED' && error.status === 403 && error.retryable);
+    assert.equal(polls, 3);
 });

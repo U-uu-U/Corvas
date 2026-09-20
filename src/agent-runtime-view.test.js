@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
     AgentRuntimeClient, isRuntimeTerminal, mergeRuntimeSnapshot, runtimeActions,
     runtimeOutputFiles, runtimePriceText, runtimeScopeKey, settleRuntimeConversation, runtimeDisplayText, runtimeDisplayPlan,
-    runtimeTaskTitle, runtimeEstimateText, runtimeProgressText, runtimeStepSources, formatAgentElapsed
+    runtimeTaskTitle, runtimeEstimateText, runtimeProgressText, runtimeStepSources, formatAgentElapsed,
+    runtimeActivityLines
 } from './agent-runtime-view.js';
 
 const snapshot = (patch = {}) => ({
@@ -27,9 +28,17 @@ test('status controls expose one plan confirmation and recovery', () => {
     }
     for (const status of ['partial_failed', 'failed', 'interrupted']) {
         assert.equal(isRuntimeTerminal(status), true);
-        assert.deepEqual(runtimeActions(snapshot({ status })), status === 'interrupted' ? ['resume'] : ['resume', 'retry']);
+        assert.deepEqual(runtimeActions(snapshot({ status })), ['resume']);
     }
     for (const status of ['completed', 'canceled']) assert.deepEqual(runtimeActions(snapshot({ status })), []);
+});
+
+test('Rhino tool-only failures offer resume instead of retrying a nonexistent generation batch', () => {
+    const run = snapshot({ status: 'failed', taskKind: 'rhino', plan: null, steps: [] });
+    assert.deepEqual(runtimeActions(run), ['resume']);
+    assert.equal(runtimeTaskTitle(run), '整理 Rhino 模型');
+    assert.equal(runtimeProgressText(snapshot({ events: [{ type: 'tool_started', data: { tool: 'flow_canvas.rhino.cleanup', stage: 'quad' } }] })), '四边面重拓扑 · 正在执行');
+    assert.deepEqual(runtimeActions(snapshot({ status: 'failed', plan: { kind: 'generation' }, steps: [{ status: 'failed' }] })), ['resume', 'retry']);
 });
 
 test('snapshot merge rejects stale and cross-conversation data; events are deduplicated', () => {
@@ -116,6 +125,20 @@ test('stream text is shown before assistant completion without duplicating accum
         ...run.events, { seq: 3, type: 'assistant', data: { text: 'hello' } },
         { seq: 4, type: 'text_delta', data: { text: 'next' } }
     ] }), 'hello\n\nnext');
+});
+
+test('runtime activity keeps tool, plan, step and review events visible as a compact stream', () => {
+    const lines = runtimeActivityLines(snapshot({ status: 'running', plan: { steps: [{ id: 'step-1', title: '生成主视图' }] }, events: [
+        { seq: 1, type: 'status', data: { status: 'planning' } },
+        { seq: 2, type: 'tool_started', data: { tool: 'flow_canvas.board.get_snapshot' } },
+        { seq: 3, type: 'plan', data: { version: 'v1' } },
+        { seq: 4, type: 'step', data: { stepId: 'step-1', status: 'submitting' } },
+        { seq: 5, type: 'review', data: { text: '等待结果' } }
+    ] }));
+    assert.deepEqual(lines.map(line => line.text), [
+        '正在规划任务', '正在调用 flow_canvas.board.get_snapshot', '执行计划已生成，等待确认',
+        '正在提交 · 生成主视图', '审阅：等待结果'
+    ]);
 });
 
 test('completed plans rehydrate from plan events without re-enabling confirmation', () => {
@@ -295,7 +318,8 @@ test('cancel, revise and retry do not depend on the board flush hook', async () 
     client.accept(run);
     await client.act(run.id, 'cancel');
     await client.act(run.id, 'revise', 'Change the plan');
-    client.accept({ ...run, status: 'failed', lastSeq: 1 });
+    client.accept({ ...run, status: 'failed', lastSeq: 1,
+        plan: { ...run.plan, kind: 'generation' }, steps: [{ status: 'failed' }] });
     await client.act(run.id, 'retry');
     assert.deepEqual(calls, ['cancel', 'revise', 'retry']);
     client.dispose();
@@ -318,20 +342,24 @@ test('disposing during a flush prevents the delayed execution and clears the act
 test('unresolved remote tasks offer recovery without a new generation retry', () => {
     for (const status of ['failed', 'partial_failed']) {
         for (const step of [
+            { status: 'submitting' },
             { status: 'submitted', remoteTaskId: 'existing' },
             { status: 'failed', remoteTaskId: 'existing' },
             { status: 'failed', remoteTaskId: 'existing', confirmedFailure: false },
             { status: 'unknown' }
         ]) {
-            assert.deepEqual(runtimeActions(snapshot({ status, steps: [step] })), ['resume']);
+            assert.deepEqual(runtimeActions(snapshot({ status, plan: { kind: 'generation' }, steps: [step] })), ['resume']);
+            assert.deepEqual(runtimeActions(snapshot({ status, plan: { kind: 'generation' },
+                steps: [{ status: 'failed' }, step] })), ['resume']);
         }
         for (const step of [
             { status: 'failed' },
-            { status: 'failed', remoteTaskId: 'existing', confirmedFailure: true },
-            { status: 'completed', remoteTaskId: 'finished' }
+            { status: 'failed', remoteTaskId: 'existing', confirmedFailure: true }
         ]) {
-            assert.deepEqual(runtimeActions(snapshot({ status, steps: [step] })), ['resume', 'retry']);
+            assert.deepEqual(runtimeActions(snapshot({ status, plan: { kind: 'generation' }, steps: [step] })), ['resume', 'retry']);
         }
+        assert.deepEqual(runtimeActions(snapshot({ status, plan: { kind: 'generation' },
+            steps: [{ status: 'completed', remoteTaskId: 'finished' }] })), ['resume']);
     }
 });
 
@@ -346,7 +374,8 @@ test('retry failed items is a separate request and never automatically confirms 
         confirm: async args => { calls.push(['confirm', args]); },
         get: async () => pending
     });
-    client.accept(snapshot({ status: 'partial_failed', lastSeq: 7 }));
+    client.accept(snapshot({ status: 'partial_failed', lastSeq: 7,
+        plan: { kind: 'generation', version: 'failed-version' }, steps: [{ status: 'failed' }] }));
     const retry = client.act('run-1', 'retry');
     await client.act('run-1', 'retry');
     completeRetry(pending);

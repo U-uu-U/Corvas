@@ -1,3 +1,6 @@
+const { isGlobalAiOpcModel, globalAiOpcEndpoint } = require('./globalaiopc-video.cjs');
+const { isStarFrameModel, starFrameEndpoint } = require('./starframe-video.cjs');
+
 function isMiniMaxH3Model(model) {
     return /minimax[^a-z0-9]*h3/i.test(String(model || ''));
 }
@@ -17,6 +20,7 @@ function isSeedanceVideoModel(model) {
 
 function seedanceReferenceLimits(model) {
     const id = String(model || '').trim().toLowerCase();
+    if (id === 'seedance-2.5-pro') return { image: 30, video: 10, audio: 10 };
     if (id === 'seedance_v2.0-933') return { image: 9, video: 3, audio: 3 };
     if (id === 'seedance_v2.5-101010') return { image: 10, video: 10, audio: 10 };
     if (id === 'seedance_v2.5-301010') return { image: 30, video: 10, audio: 10 };
@@ -51,13 +55,28 @@ function videoPayloadObject(payload, key) {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 }
 
+function taskIdFromVideoQueryUrl(value) {
+    if (typeof value !== 'string' || !value.trim()) return '';
+    try {
+        const url = new URL(value, 'https://relative.invalid');
+        const match = url.pathname.match(/\/v1\/(?:videos(?:\/generations)?|video\/generations|tasks)\/([a-z0-9_-]+)\/?$/i);
+        return match?.[1] || '';
+    } catch { return ''; }
+}
+
 function getVideoTaskId(payload) {
     const data = videoPayloadObject(payload, 'data');
     const result = videoPayloadObject(payload, 'result');
     const value = payload?.task_id || payload?.id
         || data?.task_id || data?.id
         || result?.task_id || result?.id;
-    return value == null ? '' : String(value).trim();
+    if (value != null && String(value).trim()) return String(value).trim();
+    // Some relays wrap status_url as data[].url and drop the original task ID.
+    const candidates = [payload?.status_url, data?.status_url, result?.status_url,
+        payload?.url, data?.url, result?.url,
+        ...(Array.isArray(payload?.data) ? payload.data.flatMap(item => typeof item === 'string'
+            ? [item] : [item?.status_url, item?.url]) : [])];
+    return candidates.map(taskIdFromVideoQueryUrl).find(Boolean) || '';
 }
 
 function getVideoTaskStatus(payload) {
@@ -75,6 +94,8 @@ function getVideoTaskProgress(payload) {
 }
 
 function getVideoResultUrl(payload) {
+    const status = getVideoTaskStatus(payload).toLowerCase();
+    if (status && !['completed', 'succeeded', 'success'].includes(status)) return '';
     const data = videoPayloadObject(payload, 'data');
     const result = videoPayloadObject(payload, 'result');
     const output = videoPayloadObject(payload, 'output');
@@ -113,7 +134,7 @@ function getVideoResultUrl(payload) {
     return candidates.find(value => {
         if (typeof value !== 'string' || !value.trim()) return false;
         const normalized = value.trim();
-        if (statusUrls.has(normalized)) return false;
+        if (statusUrls.has(normalized) || taskIdFromVideoQueryUrl(normalized)) return false;
         if (!taskId) return true;
         try {
             const pathname = new URL(normalized).pathname.replace(/\/+$/, '');
@@ -125,8 +146,15 @@ function getVideoResultUrl(payload) {
     }) || '';
 }
 
+/**
+ * 判断视频响应是否表示失败，并给出**可展示**的失败文案。
+ *
+ * 调用方（mcp-bridge 的轮询与提交路径）同时依赖返回值的真假：非空表示确认失败。
+ * 因此这里保留原有的全部检测分支，只把「返回上游原文」换成 CATALOG 文案——
+ * 上游 message / failReason / errorText 仅用于让 mapLocalError 做分类，不再回显。
+ */
 function getVideoPayloadError(payload = {}) {
-    const { readPublicError, failureNode, errorText } = require('../shared/public-api-error.cjs');
+    const { readPublicError, failureNode, mapLocalError } = require('../shared/public-api-error.cjs');
     const mapped = readPublicError(payload);
     if (mapped) return mapped.message;
     const failure = failureNode(payload);
@@ -136,20 +164,24 @@ function getVideoPayloadError(payload = {}) {
     const message = typeof error === 'string'
         ? error
         : error?.message || payload?.message || payload?.msg || data?.message || result?.message || failure?.message || failure?.msg
-            || failure?.failReason || failure?.fail_reason || failure?.failure_reason || failure?.error_message || failure?.errorMessage || '';
+            || failure?.failReason || failure?.fail_reason || failure?.failure_reason || failure?.error_message || failure?.errorMessage
+            || payload?.metadata?.fail_reason || '';
     const status = getVideoTaskStatus(payload).toLowerCase();
+    // terminal: true 让分类结果落在确定失败一侧，与下游的 UPSTREAM_TASK_FAILED 归类一致。
+    const publicMessage = () => mapLocalError(200, payload, { query: true, terminal: true }).error;
+
     if (['failed', 'error', 'cancelled', 'canceled', 'rejected'].includes(status)) {
-        return String(message || '服务端未提供失败原因').trim();
+        return publicMessage();
     }
 
     // Some OpenAI-compatible video relays report upstream failures as HTTP 200
     // with only an error object and no top-level status/code.
-    if (error && message) return String(message).trim();
-    if (failure) return errorText(payload).trim() || '服务端未提供失败原因';
+    if (error && message) return publicMessage();
+    if (failure) return publicMessage();
 
     const code = String(payload?.code ?? data?.code ?? result?.code ?? '').trim().toLowerCase();
     if (message && code && !['0', '1', '200', 'success', 'ok'].includes(code)) {
-        return String(message).trim();
+        return publicMessage();
     }
     return '';
 }
@@ -159,6 +191,7 @@ function buildSeedance25RequestBody({
     prompt,
     duration,
     aspectRatio,
+    resolution,
     referenceImages = [],
     referenceVideos = [],
     referenceAudios = []
@@ -206,9 +239,10 @@ function buildSeedance25RequestBody({
     const body = {
         model: String(model || '').trim(),
         prompt: promptValue,
-        resolution: '720p',
+        resolution: String(model).toLowerCase() === 'seedance-2.5-pro' ? (resolution || '720p') : '720p',
         seconds: durationValue
     };
+    if (!['480p', '720p'].includes(body.resolution)) throw new Error(`${label} Pro 仅支持 480p 或 720p`);
     if (ratioValue) body.ratio = ratioValue;
     if (images.length > 0) body.image_urls = images;
     if (videos.length > 0) body.video_urls = videos;
@@ -300,6 +334,8 @@ function buildUnifiedVideoEndpoint(endpoint) {
 }
 
 function buildVideoGenerationEndpoint(endpoint, model) {
+    if (isStarFrameModel(model)) return starFrameEndpoint(endpoint);
+    if (isGlobalAiOpcModel(model)) return globalAiOpcEndpoint(endpoint);
     if (isSeedanceVideoModel(model)) {
         try {
             const url = new URL(String(endpoint || '').trim());

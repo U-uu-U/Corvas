@@ -11,6 +11,7 @@ import { hashPassword } from './lib/auth.mjs';
 
 const SILENT = { log() {}, warn() {}, error() {} };
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SEED_CONFIG = JSON.parse(fs.readFileSync(path.join(HERE, 'seed', 'model-config.default.json'), 'utf8'));
 const PASSWORD = 'smoke-admin-password';
 
 async function startServer(options = {}) {
@@ -82,7 +83,7 @@ test('/config：公开只读、带 ETag 与 CORS、首次启动就是播种版�
         assert.match(first.response.headers.get('content-type'), /application\/json/);
         assert.equal(first.response.headers.get('access-control-allow-origin'), '*');
         assert.match(first.response.headers.get('cache-control'), /no-cache/);
-        assert.equal(first.config.models.length, 15);
+        assert.deepEqual(first.config.models, SEED_CONFIG.models);
         assert.equal(first.config.revision, 0);
         assert.equal(first.config.refreshIntervalMs, 3600000);
 
@@ -168,7 +169,7 @@ test('保存 → 客户端可见 → 回滚，全链路走通', async () => {
         const afterSave = await fetchConfig(server.base);
         assert.equal(afterSave.config.revision, 1, '服务端要盖章递增 revision');
         assert.equal(afterSave.config.models[0].label, edited.models[0].label);
-        assert.equal(afterSave.config.models.length, 15);
+        assert.deepEqual(afterSave.config.models, edited.models);
         assert.match(afterSave.config.source, /artconfig\.ravenhash\.org/);
 
         const listHtml = (await openAdmin(server.base, cookie)).html;
@@ -183,7 +184,7 @@ test('保存 → 客户端可见 → 回滚，全链路走通', async () => {
 
         const rolledBack = await fetchConfig(server.base);
         assert.equal(rolledBack.config.revision, 0, '回滚后客户端应拿到旧 revision');
-        assert.equal(rolledBack.config.models[0].label, seeded.models[0].label);
+        assert.deepEqual(rolledBack.config.models, seeded.models);
     } finally {
         await server.cleanup();
     }
@@ -224,13 +225,13 @@ test('仅保存为版本：不动现行，但要能在列表里看到并之后�
         assert.equal(saved.status, 303);
         assert.match(decodeURIComponent(saved.headers.get('location')), /现行版本未改变/);
 
-        assert.equal((await fetchConfig(server.base)).config.models.length, 15, 'draft 不影响 /config');
+        assert.deepEqual((await fetchConfig(server.base)).config.models, config.models, 'draft 不影响 /config');
         const names = server.instance.store.listNames();
         assert.equal(names.length, 2);
         const draftName = names.at(-1);
 
         await postForm(server.base, '/admin/apply', { csrf, name: draftName }, { cookie });
-        assert.equal((await fetchConfig(server.base)).config.models.length, 3, '应用草稿版本后客户端拿到新内容');
+        assert.deepEqual((await fetchConfig(server.base)).config.models, edited.models, '应用草稿版本后客户端拿到新内容');
     } finally {
         await server.cleanup();
     }
@@ -332,6 +333,44 @@ test('表单脚本需要登录，且从 /admin 页面使用绝对路由', async 
         }
         const missing = await fetch(`${server.base}/admin/assets/server.mjs`, { headers: { cookie } });
         assert.equal(missing.status, 404);
+    } finally {
+        await server.cleanup();
+    }
+});
+
+test('管理面板渲染时长与参考素材控件，保存后 /config 下发新边界', async () => {
+    const { readEditorValues, applyEditorValues } = await import('./lib/admin-editor-model.mjs');
+    const server = await startServer();
+    try {
+        const { cookie } = await login(server.base);
+        const { html, csrf } = await openAdmin(server.base, cookie);
+        // 「后台调不了时长」就是这里缺控件造成的：面板必须真的渲染出来。
+        assert.match(html, /时长约束/);
+        assert.match(html, /参考素材限制/);
+        for (const field of ['durationMode', 'durationValue', 'durationMin', 'durationMax', 'durationValues',
+            'durationDefault', 'referenceImagesMode', 'referenceImagesMax', 'referenceVideosMax', 'referenceAudiosMode']) {
+            assert.ok(html.includes(`data-field="${field}"`), `管理面板缺少 ${field} 控件`);
+        }
+
+        const { config: before } = await fetchConfig(server.base);
+        const entry = before.models.find(model => model.id === 'ravenhash-video.sd2.5-route1');
+        const touched = new Set(['durationMode', 'durationMin', 'durationMax', 'durationDefault', 'referenceImagesMax']);
+        const edited = applyEditorValues(entry,
+            { ...readEditorValues(entry), durationMode: 'range', durationMin: '4', durationMax: '30',
+                durationDefault: '30', referenceImagesMax: '20' }, touched);
+        const edited_models = before.models.map(model => (model.id === entry.id ? edited : model));
+
+        const saved = await postForm(server.base, '/admin/save',
+            { csrf, content: JSON.stringify({ ...before, models: edited_models }), note: '调整时长与参考图上限' }, { cookie });
+        assert.equal(saved.status, 303, await saved.text());
+
+        const { config: after } = await fetchConfig(server.base);
+        const live = after.models.find(model => model.id === entry.id);
+        assert.deepEqual(live.options.duration, { type: 'range', min: 4, max: 30, integer: true,
+            unit: 'second', default: 30, note: entry.options.duration.note });
+        assert.equal(live.capabilities.referenceImages.max, 20);
+        assert.equal(live.notes, entry.notes, 'CSV 原文 notes 不应被表单改写');
+        assert.equal(after.models.length, before.models.length, '只应修改目标条目');
     } finally {
         await server.cleanup();
     }

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { DEFAULT_MODEL_CONFIG } from './model-config-default.js';
 import {
     MODEL_CONFIG_ISSUE_CODES,
@@ -270,6 +271,9 @@ test('CONFIG 翻译成图片 profile：档位来自 CONFIG，未收录返回 nul
 });
 
 test('每条 CONFIG 条目都有可编译的正则与唯一 id', () => {
+    const source = JSON.parse(readFileSync(new URL('../shared/model-config.default.json', import.meta.url), 'utf8'));
+    assert.ok(source.models.length > 0);
+    assert.deepEqual(config.models.map(entry => entry.id), source.models.map(entry => entry.id));
     const ids = new Set();
     for (const entry of config.models) {
         assert.ok(entry.id && !ids.has(entry.id), `id 重复或缺失: ${entry.id}`);
@@ -289,7 +293,6 @@ test('每条 CONFIG 条目都有可编译的正则与唯一 id', () => {
             assert.ok(matched.some(item => item.entry.id === entry.id), `${entry.id} 无法被探针 ${probe} 命中`);
         }
     }
-    assert.equal(config.models.length, 15);
 });
 
 test('live-probed image defaults remain accepted, including legacy incomplete allowlists', () => {
