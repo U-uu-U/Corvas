@@ -6,6 +6,8 @@
 
 Native file/folder selection and trusted OS drop events grant access in the main process. Grants are stored separately in `data/media-access.v1.json`. On the first upgrade only, supported existing board files and linked folders seed this registry. After that, changing a path in `board.json` does not create a new grant. Programmatic imports outside existing authorized directories must be authorized by native selection before previewing them.
 
+Files created or downloaded by the main-process generation pipeline are registered when their download checkpoint is saved. Reusing an existing completed checkpoint also restores its file grant before attaching it to the board. This permits generation into a newly selected output directory without granting access to arbitrary renderer-written board paths.
+
 `local-res` no longer bypasses CSP or returns wildcard CORS headers. It accepts application origins, rejects document/iframe embedding, sends `nosniff` and restrictive CSP, and keeps HEAD/range support for video. Streams verify the opened file against the authorized file identity. Main-frame shell IPC checks both the authorized path and a non-executable extension list. `.blend` and `.gh` files may be managed as assets but are not launched by the generic shell opener; application integrations have their own launch routes.
 
 ## Windows and credentials

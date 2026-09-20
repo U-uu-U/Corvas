@@ -33,7 +33,8 @@ test('client IDs remain stable and the native content URL cannot redirect API cr
     }
     assert.throws(() => starFrameContentUrl(endpoint, 'task_1', { ...response, id: 'task_2' }), /原任务 ID/);
     assert.throws(() => starFrameContentUrl(endpoint, '../tasks', response), /有效任务 ID/);
-    assert.equal(getVideoPayloadError({ status: 'failed', metadata: { fail_reason: 'reference rejected' } }), 'reference rejected');
+    assert.equal(getVideoPayloadError({ status: 'failed', metadata: { fail_reason: 'reference rejected' } }),
+        '任务未能完成，请根据排查编号联系管理员。');
 });
 
 test('verified signed storage URLs download without a key while other metadata uses the original API task', () => {

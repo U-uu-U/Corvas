@@ -56,12 +56,70 @@ test('asset audit is awaited and cached IDs survive restart without caching cred
 test('asset failures, unknown states and cancellation stop before a video submission', async t => {
     let status = 'FAILED'; let requests = 0;
     const h = setup(t, async () => { requests++; return json({ assetId: 'asset-1', status, errorMessage: 'fixture-secret rejected' }); });
-    await assert.rejects(h.assets.resolve(h.input), error => /审核未通过/.test(error.message) && !error.message.includes('fixture-secret'));
+    await assert.rejects(h.assets.resolve(h.input), error => error.code === 'RH_TASK_FAILED' && !error.message.includes('fixture-secret'));
     status = 'NEW_UNKNOWN';
-    await assert.rejects(h.assets.resolve(h.input), /未知素材状态/);
+    await assert.rejects(h.assets.resolve(h.input), error => error.code === 'RH_INVALID_RESPONSE');
     const controller = new AbortController(); controller.abort();
     await assert.rejects(h.assets.resolve({ ...h.input, signal: controller.signal }), { name: 'AbortError' });
     assert.equal(requests, 2);
+});
+
+test('upload, query and audit errors do not echo payloads and retain real correlation IDs', async t => {
+    const { setDiagnosticLog } = require('./diagnostics.cjs');
+    const events = [];
+    setDiagnosticLog({ record: (level, event, data) => events.push({ level, event, data }) });
+    t.after(() => setDiagnosticLog(null));
+    const privateDetail = 'GlobalAiOpc channel vendor-private https://supplier.test/private?token=hidden fixture-secret';
+    const cases = [
+        { action: 'assetUpload', status: 403, payload: { message: privateDetail }, code: 'RH_PERMISSION_DENIED' },
+        { action: 'assetDetail', status: 500, payload: { errorMessage: privateDetail }, code: 'RH_SERVICE_UNAVAILABLE' },
+        { action: 'assetUpload', status: 200, payload: { assetId: 'asset-rejected', status: 'FAILED', errorMessage: 'Reference video moderation rejected ' + privateDetail }, code: 'RH_REFERENCE_REJECTED' },
+        { action: 'assetUpload', status: 200, payload: { assetId: 'asset-invalid', status: 'FAILED', errorMessage: 'Reference audio duration exceeds maximum 15 seconds ' + privateDetail }, code: 'RH_INVALID_REQUEST' },
+        { action: 'assetUpload', status: 200, raw: '<html>' + privateDetail + '</html>', code: 'RH_INVALID_RESPONSE' }
+    ];
+    for (const entry of cases) {
+        const h = setup(t, async () => new Response(entry.raw || JSON.stringify(entry.payload), {
+            status: entry.status, headers: { 'x-request-id': 'supplier-request-123' }
+        }));
+        const identifiers = { taskId: 'task-existing', clientTaskId: 'client-existing', requestId: 'local-request' };
+        const work = entry.action === 'assetDetail'
+            ? h.assets.request(endpoint, h.input.apiKey, entry.action, { assetId: 'asset-existing' }, undefined, identifiers)
+            : h.assets.resolve({ ...h.input, ...identifiers });
+        await assert.rejects(work, error => {
+            assert.equal(error.code, entry.code);
+            assert.equal(error.taskId, 'task-existing');
+            assert.doesNotMatch(error.message, /GlobalAiOpc|vendor-private|supplier\.test|fixture-secret|<html>/);
+            return true;
+        });
+    }
+    assert.equal(events.length, cases.length);
+    for (const event of events) {
+        assert.equal(event.event, 'video.asset_failed');
+        assert.equal(event.data.taskId, 'task-existing');
+        assert.equal(event.data.clientTaskId, 'client-existing');
+        assert.equal(event.data.clientRequestId, 'local-request');
+        assert.equal(event.data.requestId, 'supplier-request-123');
+        assert.match(event.data.endpointRef, /^[a-f0-9]{12}$/);
+        assert.doesNotMatch(JSON.stringify(event.data), /supplier\.test|fixture-secret/);
+    }
+});
+
+test('asset transport failures are controlled and never invent upstream task identifiers', async t => {
+    const h = setup(t, async () => { throw new Error('fetch failed https://supplier.test/?token=secret fixture-secret'); });
+    await assert.rejects(h.assets.resolve(h.input), error => {
+        assert.equal(error.code, 'RH_SERVICE_UNAVAILABLE');
+        assert.equal(error.taskId, undefined);
+        assert.equal(error.requestId, undefined);
+        assert.doesNotMatch(error.message, /supplier|secret|https/);
+        return true;
+    });
+    const rejected = setup(t, async () => json({ assetId: 'asset-rejected', request_id: 'asset-request-only',
+        status: 'FAILED', errorMessage: 'Reference media moderation failed' }));
+    await assert.rejects(rejected.assets.resolve(rejected.input), error => {
+        assert.equal(error.code, 'RH_REFERENCE_REJECTED');
+        assert.equal(error.taskId, undefined);
+        return true;
+    });
 });
 
 test('pending audits retain IDs for later retries and different account keys never share cached assets', async t => {

@@ -1,10 +1,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const { mapLocalError, safeTaskId } = require('../shared/public-api-error.cjs');
+const { diagnostic, sanitize } = require('./diagnostics.cjs');
 
 const MODEL = 'sd_2.5_discount_v1';
 const RATIOS = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', 'adaptive'];
 const LIMITS = { image: 30, video: 10, audio: 10 };
+const RESPONSE_REQUEST_ID = Symbol('responseRequestId');
 const isGlobalAiOpcModel = model => String(model || '').trim().toLowerCase() === MODEL;
 
 function globalAiOpcEndpoint(endpoint) {
@@ -62,7 +65,7 @@ class GlobalAiOpcAssets {
     constructor({ directory, fetch, wait, maxPolls = 60 }) {
         Object.assign(this, { directory, fetch, wait, maxPolls });
         this.file = path.join(directory, 'globalaiopc-assets.json');
-        this.entries = {}; this.pending = new Map();
+        this.entries = {}; this.pending = new Map(); this.failures = new WeakSet();
         try { this.entries = JSON.parse(fs.readFileSync(this.file, 'utf8')).entries || {}; }
         catch (error) { if (error.code !== 'ENOENT') throw new Error('GlobalAiOpc 素材缓存无法读取，请检查缓存文件'); }
     }
@@ -73,28 +76,56 @@ class GlobalAiOpcAssets {
         fs.writeFileSync(`${this.file}.tmp`, JSON.stringify({ version: 1, entries: this.entries }));
         fs.renameSync(`${this.file}.tmp`, this.file);
     }
-    async request(endpoint, apiKey, action, body, signal) {
+    failure(status, payload, context, code) {
+        const { endpoint, apiKey, action, taskId, clientTaskId, requestId, clientRequestId, assetId } = context;
+        const url = new URL(globalAiOpcEndpoint(endpoint));
+        diagnostic('error', 'video.asset_failed', sanitize({
+            endpointRef: createHash('sha256').update(url.origin + url.pathname).digest('hex').slice(0, 12),
+            model: MODEL, action, status, taskId, clientTaskId, requestId, clientRequestId, assetId, detail: payload
+        }, [apiKey, encodeURIComponent(apiKey)]));
+        const mapped = mapLocalError(status, payload, { query: true, taskId, requestId, ...(code ? { code } : {}) });
+        // An asset ID or its request ID is not a submitted video task.
+        mapped.taskId = safeTaskId(taskId) || undefined;
+        const error = Object.assign(new Error(mapped.error), mapped, { status });
+        this.failures.add(error);
+        return error;
+    }
+    async request(endpoint, apiKey, action, body, signal, identifiers = {}) {
         signal?.throwIfAborted();
         const url = new URL(globalAiOpcEndpoint(endpoint));
         url.pathname = `/kyyReactApiServer/asset/seedance2/${action}`;
         const controller = new AbortController();
         const abort = () => controller.abort();
         signal?.addEventListener('abort', abort, { once: true });
-        const timer = setTimeout(abort, 45000);
+        let timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; abort(); }, 45000);
+        const context = { ...identifiers, clientRequestId: identifiers.requestId, endpoint, apiKey, action, assetId: body.assetId };
         try {
             const response = await this.fetch(url.toString(), { method: 'POST',
                 headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
                 body: JSON.stringify(body), redirect: 'error', signal: controller.signal });
-            const payload = await response.json();
+            context.requestId = response.headers?.get('x-request-id') || response.headers?.get('request-id')
+                || response.headers?.get('x-log-id') || context.requestId;
+            const text = await response.text();
+            let payload;
+            try { payload = JSON.parse(text); }
+            catch { throw this.failure(response.status, text, context, response.ok ? 'RH_INVALID_RESPONSE' : undefined); }
             const data = payload?.data || payload;
+            context.requestId = payload?.error?.request_id || payload?.request_id || payload?.requestId
+                || data?.request_id || data?.requestId || context.requestId;
             if (!response.ok || !data?.assetId || !data?.status) {
-                const detail = String(data?.errorMessage || payload?.message || `HTTP ${response.status}`).split(apiKey).join('[redacted]');
-                throw new Error(`GlobalAiOpc 素材${action === 'assetUpload' ? '提交' : '查询'}失败：${detail.slice(0, 500)}`);
+                throw this.failure(response.status, payload, context);
             }
+            if (context.requestId) data[RESPONSE_REQUEST_ID] = context.requestId;
             return data;
+        } catch (error) {
+            signal?.throwIfAborted();
+            if (this.failures.has(error)) throw error;
+            throw this.failure(timedOut ? 504 : 502, { error: { message: error?.message || String(error) } }, context,
+                timedOut ? 'RH_REQUEST_TIMEOUT' : 'RH_SERVICE_UNAVAILABLE');
         } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
     }
-    async resolve({ endpoint, apiKey, url, assetType, signal, onProgress }) {
+    async resolve({ endpoint, apiKey, url, assetType, signal, onProgress, taskId, clientTaskId, requestId }) {
         const key = createHash('sha256').update(JSON.stringify([globalAiOpcEndpoint(endpoint), apiKey, assetType, url])).digest('hex');
         // Concurrent jobs serialize the same source; each caller retains its own cancellation.
         if (this.pending.has(key)) {
@@ -107,41 +138,47 @@ class GlobalAiOpcAssets {
                 });
             });
             signal?.throwIfAborted();
-            return this.resolve({ endpoint, apiKey, url, assetType, signal, onProgress });
+            return this.resolve({ endpoint, apiKey, url, assetType, signal, onProgress, taskId, clientTaskId, requestId });
         }
-        const work = this.resolveOne({ key, endpoint, apiKey, url, assetType, signal, onProgress });
+        const work = this.resolveOne({ key, endpoint, apiKey, url, assetType, signal, onProgress, taskId, clientTaskId, requestId });
         this.pending.set(key, work);
         try { return await work; } finally { this.pending.delete(key); }
     }
-    async resolveOne({ key, endpoint, apiKey, url, assetType, signal, onProgress }) {
+    async resolveOne({ key, endpoint, apiKey, url, assetType, signal, onProgress, taskId, clientTaskId, requestId }) {
         signal?.throwIfAborted();
+        const identifiers = { taskId, clientTaskId, requestId };
+        const context = { endpoint, apiKey, action: 'assetReview', ...identifiers, clientRequestId: requestId };
         const cached = this.entries[key];
         let data = cached?.assetId
-            ? await this.request(endpoint, apiKey, 'assetDetail', { assetId: cached.assetId }, signal)
-            : await this.request(endpoint, apiKey, 'assetUpload', { assetType, url, model: 'sd_2.5' }, signal);
+            ? await this.request(endpoint, apiKey, 'assetDetail', { assetId: cached.assetId }, signal, identifiers)
+            : await this.request(endpoint, apiKey, 'assetUpload', { assetType, url, model: 'sd_2.5' }, signal, identifiers);
         this.entries[key] = { assetId: data.assetId, updatedAt: Date.now() }; this.save();
         for (let attempt = 0; attempt <= this.maxPolls; attempt++) {
             signal?.throwIfAborted();
+            context.requestId = data[RESPONSE_REQUEST_ID] || requestId;
             if (data.status === 'ACTIVE') return `assetId://${data.assetId}`;
             if (['FAILED', 'DELETED'].includes(data.status)) {
                 delete this.entries[key]; this.save();
-                const detail = String(data.errorMessage || data.status).split(apiKey).join('[redacted]');
-                throw new Error(`GlobalAiOpc 素材审核未通过：${detail.slice(0, 500)}`);
+                const payload = { ...data, error: { message: data.errorMessage || 'Reference media moderation failed' } };
+                throw this.failure(200, payload, { ...context, assetId: data.assetId });
             }
-            if (!['NONE', 'UPLOADING', 'PROCESSING', 'EXPIRED'].includes(data.status)) throw new Error('GlobalAiOpc 返回了未知素材状态');
+            if (!['NONE', 'UPLOADING', 'PROCESSING', 'EXPIRED'].includes(data.status)) {
+                throw this.failure(200, data, { ...context, assetId: data.assetId }, 'RH_INVALID_RESPONSE');
+            }
             if (attempt === this.maxPolls) break;
-            onProgress?.({ stage: 'upload', message: '等待 GlobalAiOpc 素材审核', remoteStatus: data.status });
+            onProgress?.({ stage: 'upload', message: '等待参考素材审核', remoteStatus: data.status });
             await this.wait(5000, signal);
-            data = await this.request(endpoint, apiKey, 'assetDetail', { assetId: data.assetId }, signal);
+            data = await this.request(endpoint, apiKey, 'assetDetail', { assetId: data.assetId }, signal, identifiers);
         }
-        throw new Error('GlobalAiOpc 素材仍在审核，尚未提交视频任务；稍后重试会复用素材 ID');
+        throw this.failure(200, data, { ...context, assetId: data.assetId }, 'RH_ASSET_PENDING');
     }
-    async prepare({ endpoint, apiKey, imageUrls, videoUrls, audioUrls, signal, onProgress }) {
+    async prepare({ endpoint, apiKey, imageUrls, videoUrls, audioUrls, signal, onProgress, taskId, clientTaskId, requestId }) {
         const result = {};
         for (const [field, assetType, urls] of [['referenceImages', 'Image', imageUrls],
             ['referenceVideos', 'Video', videoUrls], ['referenceAudios', 'Audio', audioUrls]]) {
             result[field] = [];
-            for (const url of urls) result[field].push(await this.resolve({ endpoint, apiKey, url, assetType, signal, onProgress }));
+            for (const url of urls) result[field].push(await this.resolve({ endpoint, apiKey, url, assetType, signal, onProgress,
+                taskId, clientTaskId, requestId }));
         }
         return result;
     }

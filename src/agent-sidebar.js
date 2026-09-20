@@ -3018,7 +3018,7 @@ export class AgentSidebar {
         if (this.recoveringGenerationTasks?.has(taskId)) return this.generationTasks.find(task => task.id === taskId);
         const current = this.generationTasks.find(task => task.id === taskId);
         if (current?.status === 'canceled') return current;
-        const message = formatClientGenerationError(error?.message || String(error || '请求失败'));
+        const message = formatClientGenerationError(error instanceof Error ? error : String(error || '请求失败'));
         const rejection = getGenerationRejectionInfo(error?.code);
         const promptModerationFailed = current?.kind === 'video'
             && Boolean(current?.taskId)

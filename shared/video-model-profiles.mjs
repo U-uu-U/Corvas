@@ -1,5 +1,7 @@
 import { describeModelPresentation } from './model-presentation.mjs';
 
+const RAVENHASH_VIDEO_HOSTS = new Set(['art.ravenhash.org', 'cart.ravenhash.org']);
+
 export const VIDEO_MODEL_PROFILES = [
     {
         matchModel: /^seedance-2\.5-pro$/i,
@@ -192,7 +194,7 @@ export function getVideoModelProfile(provider) {
         || DEFAULT_VIDEO_MODEL_PROFILE;
     let host = '';
     try { host = new URL(provider.endpoint).hostname; } catch (_) { /* Unconfigured endpoint. */ }
-    if (model.toLowerCase() === 'seedance-2.5-pro' && host === 'art.ravenhash.org') {
+    if (model.toLowerCase() === 'seedance-2.5-pro' && RAVENHASH_VIDEO_HOSTS.has(host)) {
         return { ...profile, price: { amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
             source: 'ravenhash configured sale', updatedAt: '2026-09-20T00:00:00Z' } };
     }
@@ -204,7 +206,7 @@ export function getVideoModelProfile(provider) {
     if (fixedSeedance) {
         profile = { ...profile, routeLabel: /-route1$/i.test(model) ? '线路一' : '线路二', recommended: /-route1$/i.test(model) };
     }
-    if (fixedSeedance && host === 'art.ravenhash.org') {
+    if (fixedSeedance && RAVENHASH_VIDEO_HOSTS.has(host)) {
         return {
             ...profile,
             price: {
@@ -219,7 +221,7 @@ export function getVideoModelProfile(provider) {
         'seedance_v2.5-101010': 7,
         'seedance_v2.5-301010': 10
     }[model.toLowerCase()];
-    if (hmPrice && host === 'art.ravenhash.org') {
+    if (hmPrice && RAVENHASH_VIDEO_HOSTS.has(host)) {
         return { ...profile, price: {
             amount: hmPrice, currency: 'CNY', unit: 'request', kind: 'sale',
             source: 'ravenhash configured sale', updatedAt: '2026-09-12T11:30:00Z'
@@ -233,14 +235,14 @@ export function getVideoModelGroup(provider) {
     try { host = new URL(provider?.endpoint).hostname.toLowerCase(); } catch { return {}; }
     const model = String(provider?.model || '').toLowerCase();
     const variant = /^artsdance2-0-(fast|mini|pro)-intl-260701$/.exec(model)?.[1];
-    if (host === 'art.ravenhash.org' && variant) {
+    if (RAVENHASH_VIDEO_HOSTS.has(host) && variant) {
         const label = `Seedance 2.0 ${variant[0].toUpperCase()}${variant.slice(1)}`;
         return { label, routeLabel: label, routeModelLabel: provider.model,
             routeGroup: 'seedance20-recommended', routeGroupLabel: 'Seedance 2.0 推荐渠道',
             routeGroupDescription: '可NSFW 无限制', routeGroupOrder: 100,
             routeOrder: ['fast', 'mini', 'pro'].indexOf(variant), routeGroupAlways: true };
     }
-    if (host === 'art.ravenhash.org' && model === 'sd2.5-route1') {
+    if (RAVENHASH_VIDEO_HOSTS.has(host) && model === 'sd2.5-route1') {
         return { routeGroup: 'seedance25-backup', routeGroupLabel: 'Seedance 2.5 备用渠道',
             routeLabel: 'Seedance 2.5 固定 30 秒（过人脸）', routeModelLabel: provider.model,
             routeGroupOrder: 20, routeGroupAlways: true, recommended: false };
@@ -254,7 +256,7 @@ export function getVideoModelGroup(provider) {
         'sd2.5': 'SD2.5 固定 30 秒（电商效果优化）'
     };
     const label = labels[model];
-    if (host !== 'video.zhubo.asia' && (host !== 'art.ravenhash.org' || !label)) return {};
+    if (host !== 'video.zhubo.asia' && (!RAVENHASH_VIDEO_HOSTS.has(host) || !label)) return {};
     return { label: label || provider.model, routeGroup: 'zhubo-video', routeGroupLabel: 'Seedance 2.5 推荐渠道',
         routeLabel: label || provider.model, routeModelLabel: provider.model, routeGroupAlways: true,
         routeGroupOrder: 10, routeOrder: ({ 'sd2.5': 0, 'seedance-2.5-pro': 1, 'seedance_v2.5': 2,

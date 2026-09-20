@@ -318,7 +318,8 @@ test('cancel, revise and retry do not depend on the board flush hook', async () 
     client.accept(run);
     await client.act(run.id, 'cancel');
     await client.act(run.id, 'revise', 'Change the plan');
-    client.accept({ ...run, status: 'failed', lastSeq: 1 });
+    client.accept({ ...run, status: 'failed', lastSeq: 1,
+        plan: { ...run.plan, kind: 'generation' }, steps: [{ status: 'failed' }] });
     await client.act(run.id, 'retry');
     assert.deepEqual(calls, ['cancel', 'revise', 'retry']);
     client.dispose();
@@ -341,20 +342,24 @@ test('disposing during a flush prevents the delayed execution and clears the act
 test('unresolved remote tasks offer recovery without a new generation retry', () => {
     for (const status of ['failed', 'partial_failed']) {
         for (const step of [
+            { status: 'submitting' },
             { status: 'submitted', remoteTaskId: 'existing' },
             { status: 'failed', remoteTaskId: 'existing' },
             { status: 'failed', remoteTaskId: 'existing', confirmedFailure: false },
             { status: 'unknown' }
         ]) {
-            assert.deepEqual(runtimeActions(snapshot({ status, steps: [step] })), ['resume']);
+            assert.deepEqual(runtimeActions(snapshot({ status, plan: { kind: 'generation' }, steps: [step] })), ['resume']);
+            assert.deepEqual(runtimeActions(snapshot({ status, plan: { kind: 'generation' },
+                steps: [{ status: 'failed' }, step] })), ['resume']);
         }
         for (const step of [
             { status: 'failed' },
-            { status: 'failed', remoteTaskId: 'existing', confirmedFailure: true },
-            { status: 'completed', remoteTaskId: 'finished' }
+            { status: 'failed', remoteTaskId: 'existing', confirmedFailure: true }
         ]) {
-            assert.deepEqual(runtimeActions(snapshot({ status, steps: [step] })), ['resume', 'retry']);
+            assert.deepEqual(runtimeActions(snapshot({ status, plan: { kind: 'generation' }, steps: [step] })), ['resume', 'retry']);
         }
+        assert.deepEqual(runtimeActions(snapshot({ status, plan: { kind: 'generation' },
+            steps: [{ status: 'completed', remoteTaskId: 'finished' }] })), ['resume']);
     }
 });
 
@@ -369,7 +374,8 @@ test('retry failed items is a separate request and never automatically confirms 
         confirm: async args => { calls.push(['confirm', args]); },
         get: async () => pending
     });
-    client.accept(snapshot({ status: 'partial_failed', lastSeq: 7 }));
+    client.accept(snapshot({ status: 'partial_failed', lastSeq: 7,
+        plan: { kind: 'generation', version: 'failed-version' }, steps: [{ status: 'failed' }] }));
     const retry = client.act('run-1', 'retry');
     await client.act('run-1', 'retry');
     completeRetry(pending);

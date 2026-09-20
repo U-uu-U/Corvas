@@ -270,7 +270,7 @@ class AgentRuntime {
         if (!run.turns && run.messages.reduce((size, m) => size + String(m.content || '').length, 0) > 28000) {
             const older = run.messages.slice(0, -12);
             const provider = this.providerSessions.get(run.id) || this.resolveProvider(run.providerRef, 'text');
-            const summary = await this.callProvider({ provider, tools: [], signal: this._signal(run), maxTokens: 1800,
+            const summary = await this.callProvider({ provider, clientTaskId: run.id, tools: [], signal: this._signal(run), maxTokens: 1800,
                 messages: [{ role: 'system', content: '概括早期创作对话。保留用户明确的主体、文字、角色、风格要求以及已确认结果和待办。区分用户要求与助手建议，不增补事实。' },
                     { role: 'user', content: JSON.stringify(older) }] });
             this._check(run);
@@ -292,7 +292,7 @@ class AgentRuntime {
             ] });
             this.visuals.delete(run.id);
             run.mcpBindings = Object.fromEntries((this.mcpClient?.definitions() || []).map(tool => [tool.name, this.mcpClient.binding(tool.name)]));
-            const result = await this.callProvider({ provider, messages, tools: this.tools(run), signal: this._signal(run),
+            const result = await this.callProvider({ provider, clientTaskId: run.id, messages, tools: this.tools(run), signal: this._signal(run),
                 onDelta: text => { this._check(run); this._event(run, 'text_delta', { text }); } });
             this._check(run);
             if (result.text) result.text = this._redact(result.text);
@@ -581,7 +581,7 @@ class AgentRuntime {
             }
             if (!visuals.length) { run.review = '产物已保存，但没有可读取的视觉画面，未完成视觉审阅。'; return; }
             const provider = this.providerSessions.get(run.id) || this.resolveProvider(run.providerRef, 'text');
-            const result = await this.callProvider({ provider, tools: [], signal: this._signal(run), messages: [
+            const result = await this.callProvider({ provider, clientTaskId: run.id, tools: [], signal: this._signal(run), messages: [
                 { role: 'system', content: '审阅这些生成产物，逐项核对用户明确要求。区分观察与推断；无法确认的标为未验证。视频只有抽样帧，不能判断完整运动与声音。不要声称一定通过，不执行或要求自动重生成。用简短中文列出问题及节点。' },
                 { role: 'user', content: [{ type: 'text', text: JSON.stringify({ instruction: run.messages.filter(m => m.role === 'user'), plan: run.plan.steps.map(s => ({ title: s.title, prompt: s.prompt, references: s.references })) }) }, ...visuals] }
             ] });

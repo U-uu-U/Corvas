@@ -8,7 +8,7 @@ import { createAudioPlayer } from './canvas-audio-player.js';
 import { GraphView } from './graph-view.js';
 import { collectUpstreamMediaAttachments, collectUpstreamPromptContext } from './agent-attachments.js';
 import { NODE_TYPES } from './node-types.js';
-import { formatClientGenerationError } from './generation-progress.js';
+import { formatClientGenerationError, formatClientStatusMessage, generationFailureError } from './generation-progress.js';
 import { nodeIconSvg } from './node-icons.js';
 import { GraphRunner, STATUS } from './graph-runner.js';
 import { generationNodeSignature } from '../shared/generation-node-state.mjs';
@@ -5024,7 +5024,7 @@ export class CanvasManager {
                             : errorLabel === '图片损坏或不支持'
                                 ? '原文件无法生成兼容预览，请检查文件是否完整，或重接原图'
                                 : '点击错误标记可手动重接';
-                this._showCanvasStatus(`${errorLabel}：${this._fileNameFromPath(data.filePath)}，${guidance}`, 0, 'error');
+                this._showCanvasStatus(`${errorLabel}：${this._fileNameFromPath(data.filePath)}，${guidance}`, 0, 'error', true);
             }
             if (this._countPlanReferencesToItem(data.id, data.filePath) > 0) {
                 this._setHoveredReferenceItem(data.id, data.filePath);
@@ -14188,11 +14188,11 @@ export class CanvasManager {
                 addToCanvas: true,
                 includePlanAssets: false
             });
-            if (!result?.success && result?.error) throw new Error(result.error);
+            if (!result?.success && result?.error) throw generationFailureError(result);
             this._showCanvasStatus(result?.item ? '已生成并连接结果图' : '已生成图片');
         } catch (error) {
             console.error('[Canvas] plan row image generation failed:', error);
-            this._showCanvasStatus(`生图失败：${error.message || error}`, 0, 'error');
+            this._showCanvasStatus(error, 0, 'error');
         } finally {
             this._isGeneratingPlanRow = false;
         }
@@ -14350,8 +14350,8 @@ export class CanvasManager {
         return selectedEntries.map(item => item.filePath);
     }
 
-    _showCanvasStatus(text, timeoutMs = 1800, kind = 'info') {
-        showStatusNotification(formatClientGenerationError(text), { kind, duration: timeoutMs });
+    _showCanvasStatus(text, timeoutMs = 1800, kind = 'info', local = false) {
+        showStatusNotification(kind === 'error' && !local ? formatClientGenerationError(text) : formatClientStatusMessage(text), { kind, duration: timeoutMs });
     }
 
     _capturePlanInlineFocus(planId) {

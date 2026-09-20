@@ -362,12 +362,46 @@ test('malformed response JSON, incomplete SSE and stream error events reject ins
         ['openai', 'text/event-stream', sse('broken'), /Malformed provider JSON/],
         ['openai', 'text/event-stream', sse({ choices: [{ delta: { content: 'partial' } }] }), /Incomplete provider stream/],
         ['anthropic', 'text/event-stream', sse({ type: 'message_start', message: { usage: {} } }), /Incomplete provider stream/],
-        ['openai', 'text/event-stream', sse({ error: { message: 'stream failed' } }), /stream failed/],
-        ['anthropic', 'text/event-stream', sse({ type: 'error', error: { message: 'overloaded' } }, 'error'), /overloaded/]
+        ['openai', 'text/event-stream', sse({ error: { message: 'stream failed' } }), /服务暂时不可用/],
+        ['anthropic', 'text/event-stream', sse({ type: 'error', error: { message: 'overloaded' } }, 'error'), /服务暂时不可用/]
     ];
     for (const [type, contentType, text, expected] of cases) await t.test(`${type} ${text.slice(0, 30)}`, async () => {
         await assert.rejects(call({ provider: { ...provider, type }, fetchImpl: async () => streamResponse(text, { contentType }) }), expected);
     });
+});
+
+test('JSON and SSE error payloads use catalog messages and retain request identity in diagnostics', async t => {
+    const { setDiagnosticLog } = require('./diagnostics.cjs');
+    const events = [];
+    setDiagnosticLog({ record: (level, event, data) => events.push({ level, event, data }) });
+    t.after(() => setDiagnosticLog(null));
+    const privateMessage = `StarFrame channel ch0107 account_pool customer-42 exhausted https://supplier.example/key?token=private ${provider.apiKey}`;
+    const trace = 'rh_' + 'b'.repeat(32);
+    for (const { streaming, status } of [{ streaming: false, status: 200 }, { streaming: true, status: 200 },
+        { streaming: false, status: 503 }]) for (const recognized of [false, true]) {
+        const payload = { error: { message: privateMessage, ...(recognized
+            ? { type: 'ravenhash_error', code: 'RH_QUOTA_EXHAUSTED', request_id: trace } : {}) } };
+        await assert.rejects(callAgentProvider({ provider, messages, taskId: 'task-existing', clientTaskId: 'client-existing',
+            requestId: 'client-request', fetchImpl: async () => new Response(streaming ? sse(payload) : JSON.stringify(payload), {
+                status, headers: { 'content-type': streaming ? 'text/event-stream' : 'application/json', 'x-request-id': 'upstream-request' }
+            }) }), error => {
+            assert.equal(error.code, recognized ? 'RH_QUOTA_EXHAUSTED' : 'RH_SERVICE_UNAVAILABLE');
+            assert.equal(error.taskId, 'task-existing');
+            assert.equal(error.requestId, recognized ? trace : undefined);
+            assert.doesNotMatch(error.message, /StarFrame|ch0107|account_pool|supplier\.example|private|test-secret/);
+            return true;
+        });
+    }
+    assert.equal(events.length, 6);
+    for (const event of events) {
+        assert.equal(event.event, 'agent.provider_failed');
+        assert.equal(event.data.taskId, 'task-existing');
+        assert.equal(event.data.clientTaskId, 'client-existing');
+        assert.equal(event.data.clientRequestId, 'client-request');
+        assert.match(event.data.endpointRef, /^[a-f0-9]{12}$/);
+        assert.ok(['upstream-request', trace].includes(event.data.requestId));
+        assert.doesNotMatch(JSON.stringify(event.data), /supplier\.example|test-secret-do-not-log/);
+    }
 });
 
 test('unknown tool names and duplicate IDs are rejected', async t => {

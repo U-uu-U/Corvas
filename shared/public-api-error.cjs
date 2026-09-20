@@ -1,4 +1,5 @@
 const CATALOG = Object.freeze({
+    RH_ASSET_PENDING: [409, '参考素材仍在审核，尚未提交视频任务；稍后重试会复用素材 ID。'],
     RH_MODEL_ENDPOINT_MISMATCH: [400, '当前模型不支持这类调用。请检查节点或 Agent 选择的模型；文字分析需要文字或视觉理解模型，不能使用图片生成模型。'],
     RH_REFERENCE_COPYRIGHT: [400, '参考素材触发版权保护，审核未通过。请更换为有权使用且符合模型要求的素材后重新提交。'],
     RH_COPYRIGHT_REJECTED: [400, '本次生成触发版权保护，审核未通过。请检查提示词与参考素材，调整后重新提交。'],
@@ -24,7 +25,7 @@ const CATALOG = Object.freeze({
     RH_INVALID_RESPONSE: [502, '\u670d\u52a1\u54cd\u5e94\u5f02\u5e38\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u67e5\u8be2\u6216\u8054\u7cfb\u7ba1\u7406\u5458\u3002'],
     RH_TOOLS_UNSUPPORTED: [400, '\u5f53\u524d\u6a21\u578b\u4e0d\u652f\u6301\u5de5\u5177\u8c03\u7528\uff0c\u53ef\u4f7f\u7528\u666e\u901a\u5bf9\u8bdd\u6216\u66f4\u6362\u6a21\u578b\u3002']
 });
-const WRAPPERS = ['data', 'result', 'output', 'task', 'response', 'Response', 'base_resp'];
+const WRAPPERS = ['data', 'result', 'output', 'task', 'response', 'Response', 'base_resp', 'metadata'];
 const FAILED = new Set(['failed', 'failure', 'error', 'rejected', 'cancelled', 'canceled', 'expired']);
 const REASON_FIELDS = ['failReason', 'fail_reason', 'failure_reason', 'error_message', 'errorMessage', 'status_msg'];
 const CONTENT_REJECTION_CODES = new Set(['RH_PORTRAIT_SELF_REQUIRED', 'RH_PORTRAIT_RESTRICTED',
@@ -128,6 +129,9 @@ function classify(status, value, { query = false, terminal = false, transport = 
         if (/提示词|\bprompt\b|prompt[_ .-]/i.test(text)) return 'RH_PROMPT_REJECTED';
         return 'RH_CONTENT_REJECTED';
     }
+    const referenceDuration = /(?:reference|input|uploaded)[_ -]?(?:audio|video)|audio[_ -]?duration|video[_ -]?duration|参考(?:音频|视频)|音频.{0,12}时长|视频.{0,12}时长/i;
+    const durationLimit = /duration.{0,80}(?:exceed|too long|too short|out of range|maximum|minimum|between|greater than|less than|at most|at least)|(?:exceed|maximum|minimum|too long|too short).{0,40}duration|时长.{0,40}(?:超|大于|小于|不足|范围|限制|最多|至少)|(?:超出|超过).{0,30}(?:秒|时长)/i;
+    if (referenceDuration.test(text) && durationLimit.test(text)) return 'RH_INVALID_REQUEST';
     if (/insufficient[_ -]?(quota|balance|credit)|quota[_ -]?exceeded|\u4f59\u989d\u4e0d\u8db3|\u989d\u5ea6\u4e0d\u8db3/i.test(text) || status === 402) return 'RH_QUOTA_EXHAUSTED';
     if (/invalid[_ -]?(api[_ -]?key|token)|authentication|unauthorized|\u8ba4\u8bc1.*\u5931\u8d25|\u65e0\u6548.*(?:key|token)/i.test(text)) return 'RH_AUTH_FAILED';
     if (/\b(tools?|tool_choice|function[_ -]?calling)\b.*(unsupported|not supported|unknown|not allowed)/i.test(text)) return 'RH_TOOLS_UNSUPPORTED';

@@ -1,4 +1,4 @@
-import { DISPLAY_FIELDS } from './admin-editor-model.mjs';
+import { DISPLAY_FIELDS, REFERENCE_KINDS, DURATION_PRESERVED } from './admin-editor-model.mjs';
 
 export const EDITOR_STYLE = `
 [hidden] { display: none !important; }
@@ -37,6 +37,8 @@ button:disabled { cursor: default; opacity: .5; }
 .form-section { border: 0; border-top: 1px solid #29303b; padding: 18px 0 0; margin: 20px 0 0; }
 .form-section h3 { font-size: 13px; font-weight: 600; color: #d3d9e1; margin: 0 0 14px; }
 .price-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; font-size: 11px; color: #939caa; }
+.reference-block + .reference-block { margin-top: 16px; padding-top: 16px; border-top: 1px dashed #262d38; }
+.reference-block + .reference-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid #21272f; }
 .publish-bar { padding: 16px 0; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
 .publish-bar input[type=text] { flex: 1 1 220px; min-width: 0; }
 #editorState { font-size: 12px; color: #a2c9b1; }
@@ -109,6 +111,54 @@ export function modelEditorMarkup() {
                   <label class="field"><span>价格来源</span><input type="text" data-field="source" maxlength="200"></label>
                 </div>
                 <div class="price-meta"><span>价格更新时间</span><output id="priceUpdatedAt"></output></div>
+              </div>
+              <div class="form-section">
+                <h3>时长约束</h3>
+                <div class="field-grid">
+                  <label class="field"><span>约束类型</span><select data-field="durationMode">
+                    <option value="none">不声明（客户端不限制）</option>
+                    <option value="fixed">固定时长</option>
+                    <option value="range">连续区间</option>
+                    <option value="enum">可选值</option>
+                    <option value="unsupported">不支持该参数</option>
+                    <option value="unknown">边界未确认</option>
+                    <option value="${DURATION_PRESERVED}">保持原样（现有类型不在表单编辑范围，改用 JSON 视图修改）</option>
+                  </select></label>
+                </div>
+                <div id="durationFixed" class="field-grid" style="margin-top:16px" hidden>
+                  <label class="field"><span>固定秒数</span><input type="number" data-field="durationValue" min="0" max="3600" step="any" inputmode="decimal"></label>
+                </div>
+                <div id="durationRange" class="field-grid" style="margin-top:16px" hidden>
+                  <label class="field"><span>最短秒数</span><input type="number" data-field="durationMin" min="0" max="3600" step="any" inputmode="decimal"></label>
+                  <label class="field"><span>最长秒数</span><input type="number" data-field="durationMax" min="0" max="3600" step="any" inputmode="decimal"></label>
+                  <label class="field"><span>仅整数秒</span><select data-field="durationInteger"><option value="true">是</option><option value="false">否</option></select></label>
+                </div>
+                <div id="durationEnum" class="field-grid" style="margin-top:16px" hidden>
+                  <label class="field full"><span>可选秒数（逗号或空格分隔）</span><input type="text" data-field="durationValues" autocomplete="off" placeholder="5, 10, 12"></label>
+                  <label class="field"><span>允许「自动」</span><select data-field="durationAllowAuto"><option value="false">否</option><option value="true">是</option></select></label>
+                </div>
+                <div id="durationDefaultField" class="field-grid" style="margin-top:16px" hidden>
+                  <label class="field"><span>默认秒数</span><input type="number" data-field="durationDefault" min="0" max="3600" step="any" inputmode="decimal" placeholder="不设置"></label>
+                </div>
+                <div id="durationNoteField" class="field-grid" style="margin-top:16px" hidden>
+                  <label class="field full"><span id="durationNoteLabel">补充说明</span><input type="text" data-field="durationNote" maxlength="200" autocomplete="off" placeholder="未设置"></label>
+                </div>
+              </div>
+              <div class="form-section">
+                <h3>参考素材限制</h3>
+                ${REFERENCE_KINDS.map(kind => `<div class="reference-block" data-reference="${kind.key}">
+                  <div class="field-grid">
+                    <label class="field"><span>${kind.label}支持状态</span><select data-field="${kind.key}Mode">
+                      <option value="none">不声明（沿用客户端默认）</option>
+                      <option value="supported">支持</option>
+                      <option value="unsupported">不支持</option>
+                    </select></label>
+                    <label class="field" data-reference-max hidden><span>数量上限（${kind.unit}）</span><input type="number" data-field="${kind.key}Max" min="0" max="1000" step="1" inputmode="numeric" placeholder="不限制"></label>
+                    ${kind.bytes ? `<label class="field" data-reference-bytes hidden><span>单个体积上限（MB）</span><input type="number" data-field="${kind.key}Bytes" min="1" max="1024" step="1" inputmode="numeric" placeholder="不限制"></label>` : ''}
+                    <label class="field full" data-reference-note hidden><span data-reference-note-label>补充说明</span><input type="text" data-field="${kind.key}Note" maxlength="200" autocomplete="off" placeholder="未设置"></label>
+                  </div>
+                </div>`).join('')}
+                <p class="muted" style="margin:14px 0 0;font-size:11px">数量上限留空表示不限制：客户端会沿用本地默认值，不做拦截。</p>
               </div>
             </fieldset>
           </div>

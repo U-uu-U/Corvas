@@ -78,7 +78,8 @@ test('StarFrame persists task IDs, queries native status and authenticates conte
     await bridge.resumeVideoFromRenderer({ ...request, taskId: 'task-real-1' });
     assert.deepEqual([posts, polls, downloads], [1, 2, 2]);
     mode = 'failed';
-    await assert.rejects(bridge.resumeVideoFromRenderer({ ...request, taskId: 'task-real-1' }), /reference rejected/);
+    await assert.rejects(bridge.resumeVideoFromRenderer({ ...request, taskId: 'task-real-1' }), error =>
+        error.code === 'UPSTREAM_TASK_FAILED' && error.confirmedFailure === true && !error.message.includes('reference rejected'));
     for (const failure of ['disconnected', 'duplicate']) {
         mode = failure;
         await assert.rejects(bridge.generateVideoFromRenderer(request), error => error.submissionUnknown === true);

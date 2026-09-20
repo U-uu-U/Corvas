@@ -82,8 +82,8 @@ async function setup(t, { items = [op('image')], connections = [], providers, mo
 }
 
 describe('AgentGeneration planning', () => {
-    test('StarFrame estimates per-second sale using approved duration and expanded count', async t => {
-        const p = { ...provider('videos', 'video', 'ch0107-sd-2.5-720p'), endpoint: 'https://api.xzapi.vip/v1' };
+    test('Seedance Pro estimates per-second sale using approved duration and expanded count', async t => {
+        const p = { ...provider('videos', 'video', 'seedance-2.5-pro'), endpoint: 'https://art.ravenhash.org/v1' };
         const h = await setup(t, { providers: [p], items: [op('video', 'video', { count: 2, duration: 5 })] });
         const run = h.plan(['video']);
         assert.equal(run.plan.priceKnown, true);

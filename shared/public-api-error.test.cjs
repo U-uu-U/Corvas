@@ -186,3 +186,25 @@ test('public review errors cannot lose terminal state or echo a substituted sens
         }
     }
 });
+
+test('StarFrame metadata failure reasons classify reference duration limits without exposing details', () => {
+    for (const reason of [
+        'Reference audio duration exceeds maximum 15 seconds: received 71.745 seconds',
+        'Input video duration must be between 2 and 15 seconds',
+        '参考音频总时长超过 15 秒限制',
+        '参考视频时长不足 2 秒'
+    ]) {
+        const result = mapLocalError(200, { id: 'task-starframe', status: 'failed',
+            metadata: { fail_reason: reason + privateDetail } }, { query: true });
+        assert.equal(result.code, 'RH_INVALID_REQUEST');
+        assert.equal(result.taskId, 'task-starframe');
+        assert.equal(result.confirmedFailure, true);
+        assert.equal(result.retryable, false);
+        assert.doesNotMatch(result.error, /supplier-secret|71\.745|sk-private/);
+    }
+    const rejected = mapLocalError(200, { data: { id: 'task-starframe', status: 'failed',
+        metadata: { fail_reason: 'Reference image rejected: copyrighted content ' + privateDetail } } }, { query: true });
+    assert.equal(rejected.code, 'RH_REFERENCE_COPYRIGHT');
+    assert.equal(rejected.taskId, 'task-starframe');
+    assert.equal(failureNode({ status: 'completed', metadata: { prompt: 'Reference audio duration exceeds limit', content: privateDetail } }), null);
+});

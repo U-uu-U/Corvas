@@ -1,4 +1,4 @@
-import { parseEditorConfig, readEditorValues, applyEditorValues } from './admin-editor-model.mjs';
+import { parseEditorConfig, readEditorValues, applyEditorValues, REFERENCE_KINDS } from './admin-editor-model.mjs';
 
 export function initAdminEditor(document) {
     const window = document.defaultView;
@@ -40,6 +40,52 @@ export function initAdminEditor(document) {
             controls[key].disabled = key === 'hosts' ? status === 'inherit' : status !== 'known';
             controls[key].required = !controls[key].disabled;
         }
+    };
+    // Hidden inputs stay disabled so the browser never blocks submit on a control nobody can see.
+    // `required` is listed explicitly: an optional field may still carry an example placeholder.
+    const toggleGroup = (element, shown, keys, required = []) => {
+        element.hidden = !shown;
+        for (const key of keys) {
+            controls[key].disabled = !shown;
+            controls[key].required = shown && required.includes(key);
+        }
+    };
+    const updateDurationFields = () => {
+        // Named distinctly from the editor's own `mode` to keep the two from being confused.
+        const constraint = controls.durationMode.value;
+        // 'other' = 现有约束不在表单编辑范围：不展开任何明细，交给 JSON 视图处理。
+        const editable = !['none', 'other'].includes(constraint);
+        toggleGroup(document.getElementById('durationFixed'), constraint === 'fixed', ['durationValue'], ['durationValue']);
+        toggleGroup(document.getElementById('durationRange'), constraint === 'range',
+            ['durationMin', 'durationMax', 'durationInteger'], ['durationMin', 'durationMax']);
+        toggleGroup(document.getElementById('durationEnum'), constraint === 'enum',
+            ['durationValues', 'durationAllowAuto'], ['durationValues']);
+        toggleGroup(document.getElementById('durationDefaultField'), ['range', 'enum'].includes(constraint), ['durationDefault']);
+        toggleGroup(document.getElementById('durationNoteField'), editable, ['durationNote']);
+        document.getElementById('durationNoteLabel').textContent = ['unsupported', 'unknown'].includes(constraint)
+            ? '原因说明' : '补充说明';
+    };
+    const updateReferenceFields = entryKind => {
+        for (const reference of REFERENCE_KINDS) {
+            const block = document.querySelector(`[data-reference="${reference.key}"]`);
+            const applies = !entryKind || reference.kinds.includes(entryKind);
+            const support = controls[`${reference.key}Mode`].value;
+            block.hidden = !applies;
+            controls[`${reference.key}Mode`].disabled = !applies;
+            for (const [selector, key] of [['[data-reference-max]', 'Max'], ['[data-reference-bytes]', 'Bytes'],
+                ['[data-reference-note]', 'Note']]) {
+                const field = block.querySelector(selector);
+                if (!field) continue;
+                const shown = applies && (key === 'Note' ? support !== 'none' : support === 'supported');
+                toggleGroup(field, shown, [`${reference.key}${key}`]);
+            }
+            const label = block.querySelector('[data-reference-note-label]');
+            if (label) label.textContent = support === 'unsupported' ? '原因说明' : '补充说明';
+        }
+    };
+    const updateConstraintFields = () => {
+        updateDurationFields();
+        updateReferenceFields(selected()?.kind || '');
     };
     const renderList = () => {
         const scroll = list.scrollTop;
@@ -89,6 +135,7 @@ export function initAdminEditor(document) {
         document.getElementById('restoreModelBtn').disabled = !original?.models.some(model => model.id === entry.id);
         document.getElementById('priceUpdatedAt').textContent = current.updatedAt || '未设置';
         updatePriceFields();
+        updateConstraintFields();
     };
     function flushSelected(report = true) {
         if (mode !== 'form' || !selected() || !touched.size) return true;
@@ -140,6 +187,7 @@ export function initAdminEditor(document) {
         if (!event.target.dataset.field) return;
         touched.add(event.target.dataset.field);
         updatePriceFields();
+        updateConstraintFields();
         if (flushSelected(false)) renderList();
     });
     // Selects also emit input in current desktop browsers.

@@ -398,7 +398,7 @@ export function createRuntimeCard({ onAction, onLocate }) {
         } catch (failure) {
             localError = formatClientGenerationError(failure?.message || failure);
         }
-        error.textContent = localError || formatClientGenerationError(current.error?.message || current.error || '');
+        error.textContent = localError || formatClientGenerationError(current.error || '');
         error.hidden = !error.textContent;
     };
     feedback.addEventListener('submit', event => {
@@ -485,7 +485,7 @@ export function createRuntimeCard({ onAction, onLocate }) {
             output.hidden = !output.textContent;
             review.textContent = run.review ? `审阅：${run.review}` : '';
             review.hidden = !review.textContent;
-            error.textContent = localError || formatClientGenerationError(run.error?.message || run.error || '');
+            error.textContent = localError || formatClientGenerationError(run.error || '');
             error.hidden = !error.textContent;
             submit.disabled = busy;
             if (!runtimeActions(run).includes('revise')) feedback.hidden = true;

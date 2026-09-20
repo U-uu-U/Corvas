@@ -45,6 +45,7 @@ const { imageRequestFailure } = require('./image-request-diagnostics.cjs');
 const { namingPrompt, writeGeneratedMedia } = require('./generated-media-names.cjs');
 const { diagnostic: recordDiagnostic } = require('./diagnostics.cjs');
 const { mapLocalError, publicErrorResult, failureNode } = require('../shared/public-api-error.cjs');
+const { describeServiceRole } = require('../shared/error-redaction.cjs');
 const {
     buildMiniMaxH3RequestBody,
     buildSeedance25RequestBody,
@@ -198,7 +199,7 @@ const KNOWN_TOOL_NAMES = new Set([
 ]);
 
 class FlowCanvasBridge {
-    constructor({ store, getMainWindow, getDefaultSaveFolder, getFallbackSaveDir, notifyRenderer, notifyTaskSubmitted, notifyTaskCompleted, notifyVideoProgress, boardToolRequestTimeoutMs, recoveryDirectory }) {
+    constructor({ store, getMainWindow, getDefaultSaveFolder, getFallbackSaveDir, notifyRenderer, notifyTaskSubmitted, notifyTaskCompleted, notifyVideoProgress, registerMediaFile, boardToolRequestTimeoutMs, recoveryDirectory }) {
         this.store = store;
         this.getMainWindow = getMainWindow;
         this.getDefaultSaveFolder = getDefaultSaveFolder;
@@ -206,6 +207,7 @@ class FlowCanvasBridge {
         this.notifyRenderer = notifyRenderer;
         this.notifyTaskSubmitted = notifyTaskSubmitted;
         this.notifyTaskCompleted = notifyTaskCompleted;
+        this.registerMediaFile = registerMediaFile;
         const progressStates = new Map();
         this.notifyVideoProgress = event => {
             const key = event.clientTaskId || 'unknown';
@@ -335,6 +337,9 @@ class FlowCanvasBridge {
         this.recoveryStore.update(body.clientTaskId, { result, state: 'downloaded', confirmedFailure: false, errorCode: null, error: null,
             ...(result.targetDir ? { targetDir: result.targetDir } : {}),
             ...(result.taskId ? { taskId: result.taskId } : {}) });
+        for (const filePath of new Set([result.filePath, ...(result.filePaths || [])].filter(Boolean))) {
+            this.registerMediaFile?.(filePath);
+        }
     }
 
     async recoverGenerationFromRenderer(body = {}) {
@@ -365,6 +370,7 @@ class FlowCanvasBridge {
         const work = this._runCancelableGeneration(`recover:${clientTaskId}`, async signal => {
             let result = existing?.result;
             const paths = result?.filePaths?.length ? result.filePaths : [result?.filePath].filter(Boolean);
+            for (const filePath of paths.filter(filePath => fs.existsSync(filePath))) this.registerMediaFile?.(filePath);
             if (!paths.length || !paths.every(filePath => fs.existsSync(filePath))) {
                 if (!taskId) throw new Error('没有上游任务 ID，请从服务商后台复制任务 ID 后拉取；不会重新提交生成');
                 if (!config.apiKey || !config.endpoint) throw new Error('请先恢复原任务使用的 API 配置');
@@ -1326,6 +1332,7 @@ class FlowCanvasBridge {
             { id: taskId, task_id: taskId, status: 'pending', recovering: true },
             {
                 model,
+                clientTaskId: body.clientTaskId,
                 signal,
                 preferVideoTaskEndpoint: isMiniMaxH3Model(model) || isSeedanceVideoModel(model),
                 onTaskIdResolved: (resolvedTaskId) => this._rememberSubmitted(body, {
@@ -1873,7 +1880,8 @@ async function resolveGeneratedImageBuffer(image, endpoint, apiKey = '', signal 
     try {
         imageUrl = new URL(source, endpoint).toString();
     } catch (_) {
-        throw new Error(`Image API returned an invalid image URL: ${source.slice(0, 160)}`);
+        // 不回显上游返回的地址片段：它既是产物地址也可能带签名参数。
+        throw new Error('图片生成服务返回的产物地址无法解析，请稍后重试或重新生成。');
     }
     const requestHeaders = { Accept: 'image/*, application/octet-stream' };
     try {
@@ -2273,18 +2281,20 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
                 finalPayload = completed.payload;
             }
         } else if (res.status === 202) {
-            const reason = imageTaskErrorMessage(json);
+            // 上游受理了任务却没给任务 ID：这属于转发配置问题，细节只进诊断日志。
+            recordDiagnostic('error', 'generation.image_task_id_missing', {
+                endpointRef: endpointReference(endpoint), model, status: res.status,
+                upstream: imageTaskErrorMessage(json)
+            });
             return {
-                success: false,
-                error: reason
-                    ? `图片中转接受了任务，但丢失了任务 ID：${reason}`
-                    : '图片中转接受了任务，但没有返回任务 ID；请检查 NewAPI 是否正确转发异步响应的 Location 和响应体。'
+                ...mapLocalError(502, '', { code: 'RH_SUBMISSION_UNKNOWN' }), requestId: options.clientTaskId
             };
         } else if (nativeMidjourney) {
-            return {
-                success: false,
-                error: `Midjourney 提交失败：${imageTaskErrorMessage(json) || `code ${String(json?.code ?? 'unknown')}`}`
-            };
+            recordDiagnostic('error', 'generation.midjourney_submit_failed', {
+                endpointRef: endpointReference(endpoint), model,
+                upstreamCode: String(json?.code ?? ''), upstream: imageTaskErrorMessage(json)
+            });
+            return { success: false, error: imageTaskErrorMessage(json) };
         }
         const imageEntries = getGeneratedImageDataList(finalPayload);
         if (!imageEntries.length && image) imageEntries.push(image);
@@ -2356,15 +2366,40 @@ function buildOpenAiTaskEndpoint(generationEndpoint, taskId) {
     return url.toString();
 }
 
-function describeRemoteEndpoint(value) {
+/**
+ * 面向用户时只说明「哪一类服务」，不回显 origin、路径或查询参数。
+ * 真实 endpoint 只进诊断日志（diagnostics.cjs 会再脱敏一次）。
+ */
+function describeRemoteEndpoint(value, role = 'video') {
+    return describeServiceRole(remoteEndpointRole(value) || role);
+}
+
+// 从 endpoint 推断服务类别，用于挑选展示标签；识别不出时由调用方给默认值。
+// 局部变量刻意不叫 path —— 模块作用域的 path 是 node 的 path 模块。
+function remoteEndpointRole(value) {
+    let route = '';
+    try { route = new URL(value).pathname.toLowerCase(); } catch (_) { return ''; }
+    if (!route) return '';
+    if (/video/.test(route)) return 'video';
+    if (/image|mj|midjourney/.test(route)) return 'image';
+    if (/chat|completion|responses/.test(route)) return 'text';
+    return '';
+}
+
+// 诊断用的稳定引用：让运营能把多条日志归到同一个 endpoint，又不落原始地址。
+function endpointReference(value) {
     try {
         const url = new URL(value);
-        return `${url.origin}${url.pathname}`;
+        return crypto.createHash('sha256').update(`${url.origin}${url.pathname}`).digest('hex').slice(0, 12);
     } catch (_) {
-        return '\u5df2\u914d\u7f6e\u7684\u89c6\u9891\u63a5\u53e3';
+        return 'unknown';
     }
 }
 
+/**
+ * 传输层失败只输出本地判定结论，不附加未经脱敏的 error.message。
+ * Chromium / undici 的文案里常带完整 URL 和主机名，直接附上就等于绕过脱敏。
+ */
 function describeRemoteFailure(error) {
     const detail = error?.message || String(error);
     const knownErrors = [
@@ -2377,13 +2412,29 @@ function describeRemoteFailure(error) {
         [/fetch failed/i, '\u7f51\u7edc\u8bf7\u6c42\u5931\u8d25']
     ];
     const match = knownErrors.find(([pattern]) => pattern.test(detail));
-    return match ? `${match[1]}\uff08${detail}\uff09` : detail;
+    return match ? match[1] : '\u7f51\u7edc\u8bf7\u6c42\u5931\u8d25';
 }
 
 function remoteConnectionError(stage, endpoint, error, attempts = 1) {
-    const detail = describeRemoteFailure(error);
+    // 本地构造的失败（image-request-diagnostics 的 imageRequestFailure）自带请求编号、
+    // 阶段、耗时，以及「不要连续重复生成」的防重复计费告诫——这些是安全且必需的信息，
+    // 不能被压成一句「网络请求失败」。它已在源头脱敏，这里原样保留。
+    const localFailure = error?.submissionUnknown === true ? String(error.message || '').trim() : '';
+    const detail = localFailure || describeRemoteFailure(error);
     const retryText = attempts > 1 ? `\uff0c\u5df2\u91cd\u8bd5 ${attempts - 1} \u6b21` : '';
-    return new Error(`${stage}\u8fde\u63a5\u5931\u8d25\uff08${describeRemoteEndpoint(endpoint)}${retryText}\uff09\uff1a${detail}`);
+    const failure = new Error(`${stage}\u8fde\u63a5\u5931\u8d25\uff08${describeRemoteEndpoint(endpoint)}${retryText}\uff09\uff1a${detail}`);
+    // 结果未知的语义必须透传，否则渲染层会把它当成可重试的普通失败并建议重新提交。
+    if (error?.submissionUnknown === true) failure.submissionUnknown = true;
+    if (error?.timedOut === true) failure.timedOut = true;
+    for (const key of ['code', 'requestId', 'taskId', 'retryable', 'status']) {
+        if (error?.[key] !== undefined) failure[key] = error[key];
+    }
+    // 真实 endpoint 与原始报错只写诊断日志，供运营按 endpointRef 关联排查。
+    recordDiagnostic('error', 'generation.remote_connection_failed', {
+        stage, endpointRef: endpointReference(endpoint), attempts,
+        cause: error?.message || String(error)
+    });
+    return failure;
 }
 
 async function fetchTextWithRetry(url, options, stage, attempts = 3) {
@@ -3019,11 +3070,10 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
         transientFailures = 0;
         const payloadError = getVideoPayloadError(payload);
         if (payloadError && !getVideoResultUrl(payload)) {
-            if (isStarFrameModel(options.model) && getVideoTaskStatus(payload) === 'failed') {
-                throw Object.assign(new Error(String(payloadError).split(apiKey).join('[redacted]')), {
-                    code: 'UPSTREAM_TASK_FAILED', confirmedFailure: true, taskId: currentTaskId
-                });
-            }
+            recordDiagnostic('error', 'generation.video_task_failed', {
+                taskId: currentTaskId, clientTaskId: options.clientTaskId, model: options.model,
+                endpointRef: endpointReference(generationEndpoint), payload
+            });
             const mapped = mapLocalError(200, payload, { query: true, terminal: isFailedVideoStatus(getVideoTaskStatus(payload)), taskId: currentTaskId });
             throw Object.assign(new Error(mapped.error), mapped,
                 { code: mapped.code === 'RH_TASK_FAILED' ? 'UPSTREAM_TASK_FAILED' : mapped.code });
@@ -3193,7 +3243,12 @@ async function downloadGeneratedBuffer(url, {
         }
     }
     const fallbackText = http1FallbackAttempts > 0 ? `，其中 HTTP/1.1 回退 ${http1FallbackAttempts} 次` : '';
-    throw Object.assign(new Error(`下载生成产物失败（${describeRemoteEndpoint(url)}，已尝试 ${attemptsMade} 次${fallbackText}）：${describeRemoteFailure(lastError)}。可使用“继续下载”再次拉取产物。`), {
+    // 真实产物地址（常带签名查询参数）只进诊断日志，不进面向用户的文案。
+    recordDiagnostic('error', 'generation.media_download_failed', {
+        endpointRef: endpointReference(url), attempts: attemptsMade,
+        http1FallbackAttempts, cause: lastError?.message || String(lastError)
+    });
+    throw Object.assign(new Error(`下载生成产物失败（${describeRemoteEndpoint(url, 'download')}，已尝试 ${attemptsMade} 次${fallbackText}）：${describeRemoteFailure(lastError)}。可使用“继续下载”再次拉取产物。`), {
         code: 'DOWNLOAD_FAILED', status: lastError?.status, cause: lastError, retryable: true
     });
 }
@@ -3442,6 +3497,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 referenceVideos: referenceVideoUrls, referenceAudios: referenceAudioUrls }));
         } else if (isGlobalAiOpc) {
             const assets = await getGlobalAiOpcAssets().prepare({ endpoint, apiKey, imageUrls,
+                clientTaskId: options.clientTaskId, requestId: options.requestId,
                 videoUrls: referenceVideoUrls, audioUrls: referenceAudioUrls, signal: options.signal, onProgress: options.onProgress });
             Object.assign(body, buildGlobalAiOpcBody({ ...globalAiOpcParams, ...assets }));
         } else if (isMiniMaxH3) {
@@ -3532,10 +3588,11 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 || response.headers.get('request-id')
                 || recoveryId;
             if (isMiniMaxH3 && isMiniMaxH3UnavailableResponse(response.status, text)) {
-                return {
-                    success: false,
-                    error: `MiniMax H3 在当前 API 的模型列表中可见，但没有可用生成渠道（${describeRemoteEndpoint(endpoint)}）。请检查中转站模型映射是否为 minimax-h3 -> MiniMax-H3-c1；Corvas 不会绕过中转站直连其他域名。`
-                };
+                // 部署侧的模型映射细节属于运维信息，只记诊断日志，凭排查编号追查。
+                recordDiagnostic('error', 'generation.video_model_unavailable', {
+                    model, endpointRef: endpointReference(endpoint), status: response.status, logId: serverTraceId
+                });
+                return mapLocalError(response.status, text, { code: 'RH_MODEL_UNAVAILABLE', requestId: serverTraceId });
             }
             return mapLocalError(response.status, text, { query: false, requestId: serverTraceId });
         }
@@ -3544,7 +3601,11 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             try {
                 initialResponse = JSON.parse(text);
             } catch (_) {
-                return { success: false, error: '\u63d0\u4ea4\u89c6\u9891\u4efb\u52a1\u540e\uff0c\u670d\u52a1\u5668\u672a\u8fd4\u56de\u6709\u6548 JSON' };
+                recordDiagnostic('error', 'generation.video_submission_unknown', {
+                    clientTaskId: options.clientTaskId, model, endpointRef: endpointReference(endpoint),
+                    status: response.status, bodyLength: text.length
+                });
+                return { ...mapLocalError(502, '', { code: 'RH_SUBMISSION_UNKNOWN' }), requestId: options.clientTaskId };
             }
         }
         const mapped = publicErrorResult(initialResponse);
@@ -3558,11 +3619,14 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             return mapLocalError(200, initialResponse, { query: false, taskId });
         }
         if (!taskId && !getVideoResultUrl(initialResponse)) {
-            const mapped = mapLocalError(200, initialResponse, { query: true, terminal: false });
+            recordDiagnostic('error', 'generation.video_submission_unknown', {
+                clientTaskId: options.clientTaskId, model, endpointRef: endpointReference(endpoint), payload: initialResponse
+            });
+            const mapped = mapLocalError(502, initialResponse, { code: 'RH_SUBMISSION_UNKNOWN' });
             const reason = mapped.error || '服务端没有返回任务 ID 或视频地址';
             return {
                 success: false,
-                error: reason, code: mapped.code, requestId: mapped.requestId,
+                error: reason, code: mapped.code, requestId: mapped.requestId || options.clientTaskId,
                 submissionUnknown: mapped.submissionUnknown, confirmedFailure: mapped.confirmedFailure
             };
         }
@@ -3580,6 +3644,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         }
         const completed = await pollOpenAiVideoTask(endpoint, apiKey, taskId, initialResponse, {
             model,
+            clientTaskId: options.clientTaskId,
             preferVideoTaskEndpoint: isMiniMaxH3 || isSeedance,
             signal: options.signal,
             onTaskIdResolved: (resolvedTaskId, payload) => options.onTaskSubmitted?.({
