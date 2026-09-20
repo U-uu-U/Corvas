@@ -14,7 +14,7 @@ class HunyuanRhinoWorkflow {
         Object.assign(this, { directory, getAccounts, getRhino, getRuntime, getProjectId, onChange });
         this.file = path.join(directory, 'hunyuan-rhino-jobs.json');
         this.mode = readMode() === 'ask' ? 'ask' : 'auto'; this.context = null; this.jobs = [];
-        this.running = false; this.closed = false;
+        this.running = false; this.runningJobId = null; this.closed = false;
         this.cleanup = new RhinoCleanup(directory);
         getRuntime().rhinoCleanup = (run, input) => this.executeCleanup(run, input);
         getRuntime().prepareRhinoResume = run => this.prepareResume(run);
@@ -24,6 +24,12 @@ class HunyuanRhinoWorkflow {
                 !/^[a-f0-9]{32}$/.test(job?.id || '') || !/^[a-f0-9]{32}$/.test(job?.generationId || '')
                 || typeof job.accountId !== 'string' || typeof job.worksId !== 'string')) throw new Error('Invalid workflow records');
             this.jobs = saved.jobs;
+            // The runtime may have been persisted just before its ID reached the
+            // workflow record. Recover that binding before exposing resume.
+            for (const job of this.jobs) if (!job.runId) {
+                const run = [...getRuntime().runs.values()].find(run => run.source?.hunyuanJobId === job.id);
+                if (run) job.runId = run.id;
+            }
             for (const job of this.jobs) if (ACTIVE.has(job.status)) {
                 job.status = 'interrupted'; job.error = '应用退出时处理尚未完成，请先检查 Rhino 和 Agent 中的已有结果。';
             }
@@ -74,18 +80,21 @@ class HunyuanRhinoWorkflow {
         if (this.closed || this.loadError || typeof task?.worksId !== 'string' || task.worksId.length > 200
             || !['generating', 'ready', 'generation_failed'].includes(task.status)) return;
         if (!/^[a-f0-9]{32}$/.test(task.generationId || '')) return;
+        const context = this.context || { projectId: this.getProjectId() ?? null, conversationId: 'hunyuan-rhino' };
         let id = keyFor(`${accountId}:${task.generationId}`);
-        let job = task.explicitImport === true
-            ? this.jobs.findLast(entry => entry.accountId === accountId && entry.generationId === task.generationId)
-            : this.jobs.find(entry => entry.id === id);
-        if (task.explicitImport === true && job?.status === 'completed') {
+        // Watcher events repeat across project switches; only an explicit import
+        // requests another project's copy of the same source.
+        let job = this.jobs.findLast(entry => (task.explicitImport !== true || entry.projectId === context.projectId)
+            && entry.accountId === accountId && entry.generationId === task.generationId);
+        if (task.explicitImport === true && ['completed', 'canceled'].includes(job?.status)) {
             // A later explicit click is a new requested pass; keep the earlier
             // result and automatic-delivery key, while coalescing clicks during a run.
             id = keyFor(`${id}:${randomUUID()}`); job = null;
         }
         if (!job) {
+            if (this.jobs.some(entry => entry.id === id)) id = keyFor(randomUUID());
             job = { id, accountId, worksId: task.worksId, generationId: task.generationId, status: 'generating', createdAt: Date.now(),
-                ...(this.context || { projectId: this.getProjectId() ?? null, conversationId: 'hunyuan-rhino' }) };
+                ...context };
             this.jobs.push(job); this.changed();
         }
         if (task.explicitImport === true && task.status === 'ready') {
@@ -94,8 +103,7 @@ class HunyuanRhinoWorkflow {
             job.dismissed = false;
             if (['generating', 'awaiting_confirmation', 'queued', 'waiting_rhino'].includes(job.status)
                 || (job.status === 'failed' && !job.importStarted && !job.runId)) {
-                const context = this.context || { projectId: this.getProjectId() ?? null, conversationId: 'hunyuan-rhino' };
-                this.update(job, 'queued', { ...context, approved: true, error: '' });
+                this.update(job, 'queued', { approved: true, error: '' });
             } else this.changed();
             return;
         }
@@ -123,25 +131,50 @@ class HunyuanRhinoWorkflow {
             if (!run) continue;
             if (!job.runId) job.runId = run.id;
             if (!TERMINAL.has(run.status) && job.status === 'interrupted') this.update(job, 'processing', { error: '' });
-            if (TERMINAL.has(run.status) && job.runtimeStatus !== run.status) {
-                this.update(job, run.status === 'completed' ? 'completed' : 'interrupted',
+            const settledStatus = run.status === 'completed' ? 'completed' : run.status === 'canceled' ? 'canceled' : 'interrupted';
+            if (TERMINAL.has(run.status) && (job.runtimeStatus !== run.status || job.status !== settledStatus)) {
+                this.update(job, settledStatus,
                     { runtimeStatus: run.status, error: run.status === 'completed' ? '' : '整理任务未完成，请在 Agent 中查看执行过程，检查已有结果后再继续。' });
             }
         }
     }
     async drain() {
         if (this.closed || this.running || this.loadError || this.jobs.some(job => job.status === 'processing'
-            || (job.status === 'interrupted' && !job.dismissed))) return;
+            || (job.status === 'interrupted' && !job.dismissed))
+            || this.jobs.some(job => job.runId && this.getRuntime().controllers?.has(job.runId))) return;
         const job = this.jobs.find(entry => ['queued', 'waiting_rhino'].includes(entry.status) && !entry.dismissed);
         if (!job) return;
         if (!job.approved && this.mode !== 'auto') { this.update(job, 'awaiting_confirmation'); return; }
         this.running = true;
+        this.runningJobId = job.id;
         try {
+            if (job.resumeRequested) {
+                if (job.runId) {
+                    const snapshot = this.getRuntime().resume({ runId: job.runId, projectId: job.projectId });
+                    this.update(job, snapshot.status === 'completed' ? 'completed' : 'processing', { resumeRequested: false });
+                } else {
+                    const rhino = await this.connectedRhino();
+                    if (!this.assertProceed(job)) return;
+                    await this.restoreSourceIfEmpty(job, rhino);
+                    if (!this.assertProceed(job)) return;
+                    const resultDirectory = path.join(this.directory, 'rhino-model-results', job.id);
+                    const report = path.join(resultDirectory, 'import-result.json');
+                    await this.startCleanup(job, rhino, { imported: JSON.parse(fs.readFileSync(report, 'utf8')), resultDirectory, report });
+                }
+                return;
+            }
             if (job.status === 'waiting_rhino') {
                 const rhino = this.getRhino();
                 let state = await rhino.status();
-                if (!state.connected && await rhino.probe(rhino.config.endpoint)) {
-                    rhino.open({ connectOnly: true }); await rhino.pending; state = rhino.snapshot();
+                if (!this.assertProceed(job)) return;
+                if (!state.connected) {
+                    const available = await rhino.probe(rhino.config.endpoint);
+                    if (!this.assertProceed(job)) return;
+                    if (available) {
+                        rhino.open({ connectOnly: true }); await rhino.pending;
+                        if (!this.assertProceed(job)) return;
+                        state = rhino.snapshot();
+                    }
                 }
                 if (!state.connected) {
                     if (state.state === 'error') this.update(job, 'failed', { error: state.message });
@@ -151,12 +184,13 @@ class HunyuanRhinoWorkflow {
             await this.process(job);
         }
         catch (error) {
-            if (!this.closed) this.update(job, job.importStarted ? 'interrupted' : 'failed',
+            if (!this.closed && !job.cancelRequested) this.update(job, job.importStarted ? 'interrupted' : 'failed',
                 { error: job.importStarted ? 'Rhino 操作未取得完整结果，请检查模型与 Agent 记录，不会自动重复导入。' : error.message });
-        } finally { this.running = false; }
+        } finally { this.running = false; this.runningJobId = null; }
     }
     assertProceed(job) {
         if (this.closed) throw new Error('应用正在关闭');
+        if (job.cancelRequested || job.status === 'canceled') return false;
         if (!job.approved && this.mode !== 'auto') {
             this.update(job, 'awaiting_confirmation'); return false;
         }
@@ -176,13 +210,19 @@ class HunyuanRhinoWorkflow {
     }
     async executeCleanup(run, input) {
         const job = this.jobForRun(run);
+        if (job.cancelRequested || this.getRuntime()._signal?.(run)?.aborted) throw new Error('任务已取消');
         const rhino = await this.connectedRhino();
-        return this.cleanup.execute(job, input, rhino.mcpClient, rhino.server().id);
+        if (job.cancelRequested || this.getRuntime()._signal?.(run)?.aborted) throw new Error('任务已取消');
+        const parameters = input.stage === 'quad' && job.workflowParameters?.targetQuads
+            ? { ...input, targetQuads: job.workflowParameters.targetQuads } : input;
+        return this.cleanup.execute(job, parameters, rhino.mcpClient, rhino.server().id);
     }
     async prepareResume(run) {
         const job = this.jobForRun(run);
         const rhino = await this.connectedRhino();
+        if (job.cancelRequested) throw new Error('任务已取消');
         await this.restoreSourceIfEmpty(job, rhino);
+        if (job.cancelRequested) throw new Error('任务已取消');
         const { RHINO_EDIT_SKILL } = await import('../shared/rhino-model-skill.mjs');
         run.skillInstructions = [RHINO_EDIT_SKILL.instruction];
         run.source.rhinoSkillVersion = RHINO_EDIT_SKILL.version;
@@ -196,7 +236,10 @@ class HunyuanRhinoWorkflow {
     async restoreSourceIfEmpty(job, rhino) {
         const directory = path.join(this.directory, 'rhino-model-results', job.id);
         const imported = JSON.parse(fs.readFileSync(path.join(directory, 'import-result.json'), 'utf8'));
+        if (!imported.ok || imported.jobId !== job.id || !Array.isArray(imported.meshIds) || !imported.meshIds.length
+            || (job.importInvocationId && imported.invocationId !== job.importInvocationId)) throw new Error('Rhino 导入记录不完整，请先核对场景');
         const scene = await verifyRhinoObjects(job.id, imported.meshIds, rhino.mcpClient, rhino.server().id);
+        if (job.cancelRequested) throw new Error('任务已取消');
         if (imported.meshIds.every(id => scene.foundIds.includes(id))) return;
         if (!scene.documentEmpty) throw new Error('当前 Rhino 文档里找不到此任务的原模型。请打开原文档，或新建空白文档后继续，不会覆盖其他模型。');
         const archive = path.join(directory, `previous-session-${Date.now()}`);
@@ -205,9 +248,11 @@ class HunyuanRhinoWorkflow {
             if (fs.existsSync(path.join(directory, file))) fs.renameSync(path.join(directory, file), path.join(archive, file));
         }
         job.filePath = await this.getAccounts().downloadModel(job.accountId, job.generationId);
+        if (job.cancelRequested) throw new Error('任务已取消');
         await this.importModel(job, rhino);
     }
     async importModel(job, rhino) {
+        if (job.cancelRequested) throw new Error('任务已取消');
         const scriptDir = path.join(os.tmpdir(), 'corvas-hunyuan-rhino', job.id);
         const resultDirectory = path.join(this.directory, 'rhino-model-results', job.id);
         fs.mkdirSync(scriptDir, { recursive: true }); fs.mkdirSync(resultDirectory, { recursive: true });
@@ -216,7 +261,7 @@ class HunyuanRhinoWorkflow {
         const invocationId = randomUUID();
         fs.copyFileSync(path.join(__dirname, 'rhino', 'import-hunyuan.py'), script);
         fs.writeFileSync(path.join(scriptDir, 'import-options.json'), JSON.stringify({ jobId: job.id, filePath: job.filePath, resultDirectory, invocationId }));
-        this.update(job, 'importing', { importStarted: true });
+        this.update(job, 'importing', { importStarted: true, importInvocationId: invocationId });
         await rhino.mcpClient.call(toolId(rhino.server().id, 'rhino_scene'), { action: 'script', cmd: `_-RunPythonScript "${script}"` });
         const imported = JSON.parse(fs.readFileSync(report, 'utf8'));
         if (!imported.ok || imported.jobId !== job.id || imported.invocationId !== invocationId || !imported.meshIds?.length) throw new Error('Rhino 导入结果不完整');
@@ -224,6 +269,7 @@ class HunyuanRhinoWorkflow {
         return { imported, resultDirectory, report };
     }
     async process(job) {
+        if (!this.assertProceed(job)) return;
         const runtime = this.getRuntime();
         runtime.board.readProject(job.projectId);
         this.update(job, 'downloading', { error: '' });
@@ -232,15 +278,22 @@ class HunyuanRhinoWorkflow {
         this.update(job, 'connecting');
         const rhino = this.getRhino();
         rhino.open(); await rhino.pending;
+        if (!this.assertProceed(job)) return;
         if (!rhino.snapshot().connected && rhino.snapshot().state === 'waiting') {
             this.update(job, 'waiting_rhino', { error: 'Rhino 正在等待启动完成。关闭插件提示后会自动继续，也可以点击“重试连接”。' });
             return;
         }
         if (!rhino.snapshot().connected) throw new Error(rhino.snapshot().message || 'Rhino 尚未连接');
         if (!this.assertProceed(job)) return;
+        const landing = await this.importModel(job, rhino);
+        if (!this.assertProceed(job)) return;
+        await this.startCleanup(job, rhino, landing);
+    }
+    async startCleanup(job, rhino, { imported, resultDirectory, report }) {
+        const runtime = this.getRuntime();
         const mcp = rhino.mcpClient;
-        const { imported, resultDirectory, report } = await this.importModel(job, rhino);
         const { RHINO_EDIT_SKILL } = await import('../shared/rhino-model-skill.mjs');
+        if (!this.assertProceed(job)) return;
         const sourceDescription = imported.meshIds.length <= 128 ? JSON.stringify(imported.meshIds)
             : `共有 ${imported.meshIds.length} 个网格，完整 meshIds 数组见 ${JSON.stringify(report)}，请通过 Rhino 脚本读取该数组后按批处理，不要枚举整个场景代替它`;
         const importSummary = { totalMeshes: imported.meshIds.length, totalFaces: imported.faceCount,
@@ -260,7 +313,7 @@ class HunyuanRhinoWorkflow {
         // Record the launch boundary before starting: recovery searches source.hunyuanJobId.
         this.update(job, 'processing');
         const run = runtime.start(request);
-        this.update(job, 'processing', { runId: run.id });
+        this.update(job, 'processing', { runId: run.id, resumeRequested: false });
     }
     close() { this.closed = true; clearInterval(this.timer); }
 }

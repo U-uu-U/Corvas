@@ -236,6 +236,22 @@ test('rehydrating results-only snapshots saves files and keeps the final reply u
     sidebar.runtimeClient.dispose();
 });
 
+test('MCP Rhino workflow snapshots restore a dedicated conversation without moving the active chat', () => {
+    const { sidebar } = harness(async () => {});
+    const run = { id: 'workflow-run', projectId: 'project-1', conversationId: 'external-workflows',
+        taskKind: 'rhino', external: false, status: 'completed', outputText: 'Rhino cleanup completed', lastSeq: 6, events: [] };
+    sidebar._onAgentRuntimeChange(run);
+    sidebar._onAgentRuntimeChange(run);
+    const project = sidebar._loadAgentConversationStore()['project-1'];
+    const conversations = project.conversations.filter(entry => entry.id === 'external-workflows');
+    assert.equal(conversations.length, 1);
+    assert.equal(conversations[0].title, 'MCP 工作流');
+    assert.equal(conversations[0].messages.filter(message => message.role === 'assistant').length, 1);
+    assert.equal(project.activeConversationId, 'chat-1');
+    assert.equal(sidebar.activeConversationId, 'chat-1');
+    sidebar.runtimeClient.dispose();
+});
+
 const imageAttachment = name => ({ mediaType: 'image', filePath: `C:/refs/${name}.png`, name });
 const imageContext = attachments => ({ nodeId: 'image-node', nodeType: 'image',
     originalPrompt: 'original', effectivePrompt: 'latest prompt', parameters: { quality: 'high' }, attachments });

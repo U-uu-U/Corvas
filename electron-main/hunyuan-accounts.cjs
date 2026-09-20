@@ -128,9 +128,20 @@ class HunyuanAccounts {
             if (this.windows.get(id) !== record || record.closing) return;
             if (message?.type === 'model-task') return this.onModelTask(id, message.task);
             if (message?.type === 'workflow-action') return this.onWorkflowAction(id, message);
+            if (message?.type === 'current-model-described') {
+                const pending = this.downloadRequests.get(message.requestId);
+                if (!pending || pending.kind !== 'current' || pending.child !== child) return;
+                clearTimeout(pending.timer); this.downloadRequests.delete(message.requestId);
+                if (message.error) pending.reject(new Error(message.error));
+                else {
+                    try { pending.resolve(this.modelSource(id, message.model?.generationId)); }
+                    catch (error) { pending.reject(error); }
+                }
+                return;
+            }
             if (message?.type === 'model-downloaded') {
                 const pending = this.downloadRequests.get(message.requestId);
-                if (!pending || pending.accountId !== id) return;
+                if (!pending || pending.kind === 'current' || pending.accountId !== id) return;
                 clearTimeout(pending.timer); this.downloadRequests.delete(message.requestId);
                 if (message.error) pending.reject(new Error(message.error));
                 else {
@@ -155,6 +166,33 @@ class HunyuanAccounts {
 
     syncWorkflow() {
         for (const id of this.windows.keys()) this.send(id, { type: 'workflow-state', state: this.workflowState(id) });
+    }
+
+    modelSource(accountId, generationId) {
+        this.account(accountId);
+        if (!/^[a-f0-9]{32}$/.test(generationId || '')) throw new Error('模型来源标识无效');
+        const profile = path.join(this.profilesDir, accountId);
+        let source;
+        try { source = JSON.parse(fs.readFileSync(path.join(profile, 'rhino-watch.json'), 'utf8')).seen?.[generationId]; }
+        catch { /* Completed local downloads can outlive the watch history. */ }
+        const cached = path.join(profile, 'rhino-models', keyFor(generationId), 'model.fbx');
+        let downloaded = false;
+        try { const stat = fs.statSync(cached); downloaded = stat.isFile() && stat.size > 32; } catch { /* Not downloaded. */ }
+        if (!downloaded && (source?.status !== 2 || !source.url)) throw new Error('未找到该模型，请先从已打开的混元窗口读取当前模型');
+        return { accountId, generationId, worksId: source?.worksId || generationId,
+            label: source?.label || '混元模型', downloaded };
+    }
+
+    currentModel(accountId) {
+        this.account(accountId);
+        const child = this.windows.get(accountId)?.child;
+        if (!child?.connected) throw new Error('请先打开对应混元账号窗口并选中模型');
+        const requestId = crypto.randomUUID();
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => { this.downloadRequests.delete(requestId); reject(new Error('读取当前模型超时，请保持混元窗口打开')); }, 15000);
+            this.downloadRequests.set(requestId, { kind: 'current', accountId, child, resolve, reject, timer });
+            this.send(accountId, { type: 'describe-current-model', requestId });
+        });
     }
 
     downloadModel(accountId, worksId) {

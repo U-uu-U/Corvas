@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const sharp = require('sharp');
 const { app, net } = require('electron');
 const { PlanService, DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
+const { WORKFLOW_TOOL_DEFINITIONS } = require('../shared/workflow-tools.cjs');
 const {
     appendMidjourneyParameters,
     buildImageEditMultipart,
@@ -180,20 +181,7 @@ const MANAGEMENT_TOOL_NAMES = [
     'flow_canvas.config.get',
     'flow_canvas.config.update'
 ];
-const LEGACY_DEFAULT_TOOL_NAMES = [
-    'flow_canvas.context.get_active_group',
-    'flow_canvas.plan.list',
-    'flow_canvas.plan.get',
-    'flow_canvas.plan.create',
-    'flow_canvas.plan.update',
-    'flow_canvas.plan.row.add',
-    'flow_canvas.plan.row.update',
-    'flow_canvas.plan.row.delete',
-    'flow_canvas.plan.delete',
-    'flow_canvas.plan.export',
-    'flow_canvas.image.generate',
-    'flow_canvas.item.add'
-];
+const WORKFLOW_TOOL_NAMES = new Set(WORKFLOW_TOOL_DEFINITIONS.map(tool => tool.name));
 const KNOWN_TOOL_NAMES = new Set([
     ...Object.values(ROUTE_TO_TOOL),
     ...DEFAULT_MCP_CONFIG.allowedTools
@@ -571,9 +559,19 @@ class FlowCanvasBridge {
     }
 
     _matchRoute(method, pathname) {
+        if (method === 'POST' && pathname.startsWith('/workflow/tools/')) {
+            const toolName = decodeURIComponent(pathname.slice('/workflow/tools/'.length));
+            if (!WORKFLOW_TOOL_NAMES.has(toolName)) return null;
+            return { toolName, params: {}, handler: async (_, body) => {
+                if (!this.workflowExecutor) {
+                    throw createBridgeError('TOOL_UNAVAILABLE', 'Workflow executor unavailable', { toolName });
+                }
+                return { result: await this.workflowExecutor(toolName, body) };
+            } };
+        }
         if (method === 'POST' && pathname.startsWith('/agent/tools/')) {
             const toolName = decodeURIComponent(pathname.slice('/agent/tools/'.length));
-            if (!KNOWN_TOOL_NAMES.has(toolName)) return null;
+            if (!KNOWN_TOOL_NAMES.has(toolName) || WORKFLOW_TOOL_NAMES.has(toolName)) return null;
             return { toolName, params: {}, handler: async (_, body) => {
                 if (!this.agentExecutor) throw new Error('Agent runtime unavailable');
                 return { result: await this.agentExecutor(toolName, body) };
@@ -3723,11 +3721,6 @@ function sanitizeAllowedTools(allowedTools) {
     );
 
     MANAGEMENT_TOOL_NAMES.forEach(toolName => tools.add(toolName));
-
-    const isLegacyDefault = LEGACY_DEFAULT_TOOL_NAMES.every(toolName => tools.has(toolName));
-    if (isLegacyDefault) {
-        DEFAULT_MCP_CONFIG.allowedTools.forEach(toolName => tools.add(toolName));
-    }
 
     return [...tools];
 }

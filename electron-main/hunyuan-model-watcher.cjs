@@ -50,7 +50,8 @@ class HunyuanModelWatcher {
         const generationId = keyFor(original && identity(original) === identity(url) ? version : `${version}:${identity(url)}`);
         const token = keyFor(`${generationId}:${identity(url)}`);
         if (remember) {
-            this.seen[generationId] = { ...this.seen[generationId], status: 2, url, updatedAt: Date.now() };
+            this.seen[generationId] = { ...this.seen[generationId], worksId,
+                label: String(selection.label || '当前页面模型').slice(0, 60), status: 2, url, updatedAt: Date.now() };
             this.persist();
         }
         return { ready: true, worksId, generationId, token, label: String(selection.label || '当前页面模型').slice(0, 60) };
@@ -94,7 +95,8 @@ class HunyuanModelWatcher {
                 const response = work.modelInfo?.geometryGenerationRsp || {};
                 const url = response.fbxUrl || response.glbUrl || work.fbxUrl || work.glbUrl;
                 // Baseline completed history is remembered without being sent to Rhino.
-                this.seen[generationId] = { status, tracked, updatedAt: Date.now(), ...(previous?.url ? { url: previous.url } : {}) };
+                this.seen[generationId] = { worksId: id, label: previous?.label || '混元几何模型', status, tracked,
+                    updatedAt: Date.now(), ...(previous?.url ? { url: previous.url } : {}) };
                 if (!tracked) continue;
                 if (url) this.seen[generationId].url = modelUrl(url);
                 if ((status === 0 || status === 1) && !previous?.tracked) {

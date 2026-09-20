@@ -1594,9 +1594,11 @@ export class AgentSidebar {
         const key = this._projectCacheKey(run.projectId);
         const store = this._loadAgentConversationStore();
         let project = store[key];
-        if (run.external && !project?.conversations?.some(entry => entry.id === run.conversationId)) {
+        const workflowTask = run.taskKind === 'rhino' && run.conversationId === 'external-workflows';
+        if ((run.external || workflowTask) && !project?.conversations?.some(entry => entry.id === run.conversationId)) {
             project ||= { conversations: [], activeConversationId: run.conversationId };
-            project.conversations.push(createAgentConversation({ id: run.conversationId, title: '外部助手任务', customTitle: true }));
+            project.conversations.push(createAgentConversation({ id: run.conversationId,
+                title: workflowTask ? 'MCP 工作流' : '外部助手任务', customTitle: true }));
             this._saveAgentConversationProject(key, project, store);
             if (key === this.activeProjectCacheKey) this._renderAgentConversationHeader();
         }

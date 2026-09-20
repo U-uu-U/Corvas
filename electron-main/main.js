@@ -23,6 +23,7 @@ const { launchHunyuanBrowser } = require('./hunyuan-browser-process.cjs');
 const { RhinoDesktop } = require('./rhino-desktop.cjs');
 const { RhinoWorkbench } = require('./rhino-workbench.cjs');
 const { HunyuanRhinoWorkflow } = require('./hunyuan-rhino-workflow.cjs');
+const { WorkflowService } = require('./workflow-service.cjs');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -605,6 +606,10 @@ async function initServices() {
     const { createAgentServices } = require('./agent-services.cjs');
     agentServices = await createAgentServices({ store, bridge: flowCanvasBridge, apiConfigStore,
         dataDir: path.join(app.getPath('userData'), 'data'), getSaveDir, getMainWindow: () => mainWindow, BrowserWindow, net, safeStorage });
+    const workflows = new WorkflowService({ directory: path.join(app.getPath('userData'), 'data'),
+        getAccounts: getHunyuanAccounts, getWorkflow: () => { getHunyuanAccounts(); return hunyuanRhinoWorkflow; },
+        getRuntime: () => agentServices.runtime });
+    flowCanvasBridge.workflowExecutor = (name, input) => workflows.execute(name, input);
     flowCanvasBridge.start(mcpConfig);
 
     const activeGroup = (boardData.folderGroups || []).find(group => group.id === boardData.activeGroupId);

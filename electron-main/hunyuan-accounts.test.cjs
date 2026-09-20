@@ -50,8 +50,8 @@ test('multiple accounts launch separate browsers with separate profiles and reus
     assert.notEqual(launches[0].child, launches[1].child);
     assert.notEqual(launches[0].profileDir, launches[1].profileDir);
     assert.equal(path.basename(launches[0].profileDir), a.id);
-    assert.deepEqual(launches[0].child.messages, [{ type: 'focus' }]);
-    assert.deepEqual(launches[1].child.messages, []);
+    assert.deepEqual(launches[0].child.messages.filter(message => message.type !== 'workflow-state'), [{ type: 'focus' }]);
+    assert.deepEqual(launches[1].child.messages.filter(message => message.type !== 'workflow-state'), []);
     launches[0].child.emit('close', 0);
     service.open({ id: a.id });
     assert.equal(launches[2].profileDir, launches[0].profileDir);
@@ -125,4 +125,33 @@ test('cached model resumes a delayed Rhino handoff after the browser window has 
     assert.equal(await service.downloadModel(account.id, generationId), model);
     assert.equal(launches.length, 0);
     assert.throws(() => service.downloadModel(account.id, '../foreign'), /任务标识无效/);
+});
+
+test('current model source is obtained from the owning browser and does not expose download URLs', async t => {
+    const { service, launches } = setup(t);
+    const account = (await service.save({ name: 'Model account' })).account;
+    service.open({ id: account.id });
+    const pending = service.currentModel(account.id);
+    const request = launches[0].child.messages.at(-1);
+    assert.equal(request.type, 'describe-current-model');
+    const generationId = 'b'.repeat(32);
+    fs.mkdirSync(launches[0].profileDir, { recursive: true });
+    fs.writeFileSync(path.join(launches[0].profileDir, 'rhino-watch.json'), JSON.stringify({ seen: {
+        [generationId]: { status: 2, worksId: 'selected-work', label: 'Selected model', url: 'https://fixture.myqcloud.com/private-model.fbx?signature=private' }
+    } }));
+    launches[0].child.emit('message', { type: 'current-model-described', requestId: request.requestId, model: { generationId } });
+    const source = await pending;
+    assert.equal(source.worksId, 'selected-work'); assert.equal(source.label, 'Selected model');
+    assert.equal(JSON.stringify(source).includes('signature'), false);
+    assert.equal(service.downloadRequests.size, 0);
+});
+
+test('closing the source browser settles pending discovery instead of leaving an MCP request hanging', async t => {
+    const { service, launches } = setup(t);
+    const account = (await service.save({ name: 'Closing account' })).account;
+    service.open({ id: account.id });
+    const pending = service.currentModel(account.id);
+    launches[0].child.emit('close', 0);
+    await assert.rejects(pending, /混元窗口已关闭/);
+    assert.equal(service.downloadRequests.size, 0);
 });

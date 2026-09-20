@@ -4,6 +4,8 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const FlowCanvasBridge = require('./mcp-bridge');
+const { DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
+const { WORKFLOW_TOOL_DEFINITIONS } = require('../shared/workflow-tools.cjs');
 
 function createBridge(options = {}) {
     const requests = [];
@@ -188,6 +190,75 @@ function getFreePort() {
         });
     });
 }
+
+test('workflow routes execute independently of the Agent and renderer', async () => {
+    const { bridge, requests } = createBridge();
+    const executions = [];
+    bridge.agentExecutor = () => { throw new Error('The Agent must not run'); };
+    bridge.workflowExecutor = async (toolName, body) => {
+        executions.push({ toolName, body });
+        return { jobId: 'a'.repeat(32), status: 'queued' };
+    };
+    for (const tool of WORKFLOW_TOOL_DEFINITIONS) {
+        const route = bridge._matchRoute('POST', `/workflow/tools/${tool.name}`);
+        assert.equal(route.toolName, tool.name);
+        const body = { projectId: null, jobId: 'a'.repeat(32) };
+        assert.deepEqual(await route.handler({}, body), { result: { jobId: 'a'.repeat(32), status: 'queued' } });
+        assert.deepEqual(executions.at(-1), { toolName: tool.name, body });
+        assert.equal(bridge._matchRoute('POST', `/agent/tools/${tool.name}`), null);
+    }
+    assert.equal(requests.length, 0);
+    assert.equal(bridge._matchRoute('POST', '/workflow/tools/flow_canvas.agent.start'), null);
+    assert.equal(bridge._matchRoute('POST', '/agent/tools/flow_canvas.rhino.cleanup'), null);
+    assert.equal(bridge._matchRoute('POST', '/workflow/tools/flow_canvas.workflow.unknown'), null);
+});
+
+test('workflow HTTP errors preserve status, code, and recovery details', async () => {
+    const port = await getFreePort();
+    const { bridge } = createBridge();
+    bridge.start({ enabled: true, host: '127.0.0.1', port });
+    await waitForListening(bridge.server);
+    const call = () => fetch(`http://127.0.0.1:${port}/workflow/tools/flow_canvas.workflow.resume`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: null, jobId: 'a'.repeat(32) })
+    });
+    try {
+        const unavailable = await call();
+        assert.equal(unavailable.status, 503);
+        assert.equal((await unavailable.json()).code, 'TOOL_UNAVAILABLE');
+        bridge.workflowExecutor = async () => {
+            throw Object.assign(new Error('Request inputs changed'), {
+                status: 409, code: 'WORKFLOW_CONFLICT', details: { jobId: 'a'.repeat(32), recovery: 'Read status' }
+            });
+        };
+        const failed = await call();
+        assert.equal(failed.status, 409);
+        assert.deepEqual(await failed.json(), { success: false, error: 'Request inputs changed',
+            code: 'WORKFLOW_CONFLICT', details: { jobId: 'a'.repeat(32), recovery: 'Read status' } });
+    } finally {
+        bridge.stop();
+    }
+});
+
+test('workflow HTTP allowlist rejects disabled tools without restoring legacy defaults', async () => {
+    const port = await getFreePort();
+    const { bridge } = createBridge();
+    let executions = 0;
+    bridge.workflowExecutor = async () => { executions++; };
+    bridge.start({ enabled: true, host: '127.0.0.1', port,
+        allowedTools: DEFAULT_MCP_CONFIG.allowedTools.filter(name => name !== 'flow_canvas.workflow.run') });
+    await waitForListening(bridge.server);
+    try {
+        const response = await fetch(`http://127.0.0.1:${port}/workflow/tools/flow_canvas.workflow.run`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+        });
+        assert.equal(response.status, 403);
+        assert.match((await response.json()).error, /not allowed/);
+        assert.equal(executions, 0);
+    } finally {
+        bridge.stop();
+    }
+});
 
 function waitForListening(server) {
     if (server.listening) return Promise.resolve();

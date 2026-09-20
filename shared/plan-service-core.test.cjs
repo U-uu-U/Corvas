@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const {
     BOARD_TRANSACTION_MCP_TOOLS,
     MCP_BOARD_TOOLS_VERSION,
+    MCP_WORKFLOW_TOOLS_VERSION,
+    WORKFLOW_MCP_TOOLS,
     normalizeMcpConfig
 } = require('./plan-service-core.cjs');
 
@@ -20,7 +22,28 @@ test('legacy custom MCP allowlists receive board transaction tools once', () => 
 test('versioned MCP allowlists preserve later manual tool removals', () => {
     const configured = normalizeMcpConfig({
         boardToolsVersion: MCP_BOARD_TOOLS_VERSION,
+        workflowToolsVersion: MCP_WORKFLOW_TOOLS_VERSION,
         allowedTools: ['flow_canvas.board.get_snapshot']
     });
     assert.deepEqual(configured.allowedTools, ['flow_canvas.board.get_snapshot']);
+});
+
+test('workflow tool migration only adds workflow tools to an already versioned allowlist', () => {
+    const migrated = normalizeMcpConfig({
+        boardToolsVersion: MCP_BOARD_TOOLS_VERSION,
+        allowedTools: ['flow_canvas.plan.list', 'flow_canvas.rhino.cleanup']
+    });
+    assert.equal(migrated.workflowToolsVersion, MCP_WORKFLOW_TOOLS_VERSION);
+    assert.deepEqual(migrated.allowedTools, ['flow_canvas.plan.list', ...WORKFLOW_MCP_TOOLS]);
+    assert.equal(migrated.allowedTools.includes('flow_canvas.agent.start'), false);
+    assert.deepEqual(normalizeMcpConfig(migrated), migrated);
+});
+
+test('current workflow config keeps all explicitly disabled tools disabled', () => {
+    const configured = normalizeMcpConfig({
+        boardToolsVersion: MCP_BOARD_TOOLS_VERSION,
+        workflowToolsVersion: MCP_WORKFLOW_TOOLS_VERSION,
+        allowedTools: []
+    });
+    assert.deepEqual(configured.allowedTools, []);
 });

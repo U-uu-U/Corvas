@@ -178,6 +178,15 @@ process.on('message', message => {
                 error: '模型下载未完成，请保持混元窗口登录并稍后重试' });
         });
     }
+    if (message?.type === 'describe-current-model' && typeof message.requestId === 'string') {
+        void readCurrentModel().then(selection => {
+            const model = modelWatcher.currentModel(selection, { remember: true });
+            if (process.connected) process.send({ type: 'current-model-described', requestId: message.requestId, model });
+        }).catch(() => {
+            if (process.connected) process.send({ type: 'current-model-described', requestId: message.requestId,
+                error: '请在对应混元窗口选中已生成且已保存的模型，等待加载后重试' });
+        });
+    }
 });
 process.on('disconnect', () => { if (app.isReady()) void close(); else app.quit(); });
 app.on('window-all-closed', () => { if (!quitting) void close(); });
