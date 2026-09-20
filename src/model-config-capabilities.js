@@ -605,7 +605,7 @@ export function toVideoProfileOverrides(config, entry, provider = {}) {
         const ratios = resolutionValues(ratioOption);
         Object.assign(overrides, {
             ratios, defaultRatio: pickDefault(ratioOption, ratios),
-            resolveAdaptiveRatio: ratios.includes('adaptive'), adaptiveFallbackRatio: '16:9'
+            resolveAdaptiveRatio: ratios.includes('adaptive') && ratioOption.resolveAdaptiveRatio !== false, adaptiveFallbackRatio: '16:9'
         });
     }
     if (['enum', 'fixed', 'unsupported'].includes(resolutionOption?.type)) {

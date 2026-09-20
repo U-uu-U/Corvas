@@ -1,3 +1,5 @@
+const { isGlobalAiOpcModel, globalAiOpcEndpoint } = require('./globalaiopc-video.cjs');
+
 function isMiniMaxH3Model(model) {
     return /minimax[^a-z0-9]*h3/i.test(String(model || ''));
 }
@@ -317,6 +319,7 @@ function buildUnifiedVideoEndpoint(endpoint) {
 }
 
 function buildVideoGenerationEndpoint(endpoint, model) {
+    if (isGlobalAiOpcModel(model)) return globalAiOpcEndpoint(endpoint);
     if (isSeedanceVideoModel(model)) {
         try {
             const url = new URL(String(endpoint || '').trim());

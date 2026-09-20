@@ -2,6 +2,24 @@ import { describeModelPresentation } from './model-presentation.mjs';
 
 export const VIDEO_MODEL_PROFILES = [
     {
+        matchModel: /^sd_2\.5_discount_v1$/i,
+        label: 'Seedance 2.5',
+        routeLabel: 'GlobalAiOpc',
+        ratios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', 'adaptive'],
+        resolutions: ['480p', '720p', '1080p'],
+        durations: Array.from({ length: 27 }, (_, index) => index + 4),
+        durationControl: 'slider',
+        supportsWebSearch: false,
+        supportsCameraFixed: false,
+        supportsGeneratedAudio: true,
+        supportsWatermark: false,
+        referenceLimits: { image: 30, video: 10, audio: 10 },
+        defaultRatio: '16:9',
+        resolveAdaptiveRatio: false,
+        defaultResolution: '720p',
+        defaultDuration: 4
+    },
+    {
         matchModel: /^sd2(?:\.5|_5|-5)(?:-route[12]|-haidiyue-face)?$/i,
         label: 'Seedance 2.5',
         routeLabel: '线路二',
@@ -138,7 +156,7 @@ export function getVideoModelProfile(provider) {
         || DEFAULT_VIDEO_MODEL_PROFILE;
     let host = '';
     try { host = new URL(provider.endpoint).hostname; } catch (_) { /* Unconfigured endpoint. */ }
-    const fixedSeedance = profile === VIDEO_MODEL_PROFILES[0];
+    const fixedSeedance = profile.routeGroup === 'seedance25-fixed';
     if (fixedSeedance) {
         profile = { ...profile, routeLabel: /-route1$/i.test(model) ? '线路一' : '线路二', recommended: /-route1$/i.test(model) };
     }

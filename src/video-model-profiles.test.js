@@ -1,9 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_VIDEO_MODEL_PROFILE, getVideoModelProfile, describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
 import { DEFAULT_MODEL_CONFIG } from './model-config-default.js';
 import { resolveModelConfigEntry, toVideoProfileOverrides } from './model-config-capabilities.js';
-import { inferProviderCapability } from './provider-capabilities.js';
+import { canUseTextProvider, inferProviderCapability } from './provider-capabilities.js';
+import { DEFAULT_VIDEO_MODEL_PROFILE, getVideoModelProfile, describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
+
+test('GlobalAiOpc retains native controls with built-in config and an older remote catalog', () => {
+    const provider = { model: 'sd_2.5_discount_v1', endpoint: 'https://zcbservice.aizfw.cn/kyyReactApiServer', name: 'GlobalAiOpc' };
+    const fallback = getVideoModelProfile(provider);
+    assert.deepEqual(fallback.referenceLimits, { image: 30, video: 10, audio: 10 });
+    assert.deepEqual(fallback.resolutions, ['480p', '720p', '1080p']);
+    assert.equal(fallback.defaultDuration, 4);
+    assert.equal(fallback.supportsGeneratedAudio, true);
+    assert.equal(fallback.ratios.includes('21:9'), true);
+    assert.equal(fallback.routeLabel, 'GlobalAiOpc');
+    assert.equal(getVideoModelProfile({ ...provider, endpoint: 'https://art.ravenhash.org/v1' }).price, undefined);
+    const { entry } = resolveModelConfigEntry(DEFAULT_MODEL_CONFIG, provider);
+    const resolved = toVideoProfileOverrides(DEFAULT_MODEL_CONFIG, entry, provider);
+    assert.equal(resolved.resolveAdaptiveRatio, false);
+    assert.equal(resolved.defaultRatio, '16:9');
+    assert.deepEqual(resolved.referenceLimits, fallback.referenceLimits);
+    assert.equal(inferProviderCapability({ model: provider.model }), 'video');
+    assert.equal(canUseTextProvider({ model: provider.model }), false);
+});
 
 test('HM profile advertises confirmed CNY sale, not upstream cost', () => {
     const profile = getVideoModelProfile({ model: 'seedance_v2.5', endpoint: 'https://art.ravenhash.org/v1' });

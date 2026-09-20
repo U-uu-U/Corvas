@@ -1836,6 +1836,118 @@ export const DEFAULT_MODEL_CONFIG = {
             "notes": "当前固定发送720p；支持参考图片和音频；不支持参考视频"
         },
         {
+            "id": "globalaiopc.sd-2.5-discount-v1",
+            "label": "sd_2.5_discount_v1",
+            "presentation": {
+                "label": "Seedance 2.5",
+                "routeLabel": "GlobalAiOpc"
+            },
+            "kind": "video",
+            "channel": "GlobalAiOpc视频",
+            "route": "Seedance2.5官方折扣版",
+            "priority": 150,
+            "match": {
+                "model": [
+                    "^sd_2\\.5_discount_v1$"
+                ]
+            },
+            "parameters": {
+                "accepts": [
+                    "model",
+                    "prompt",
+                    "duration",
+                    "aspect_ratio",
+                    "resolution",
+                    "seed",
+                    "generate_audio",
+                    "reference_images",
+                    "reference_videos",
+                    "reference_audios",
+                    "first_image",
+                    "last_image"
+                ],
+                "required": [
+                    "model",
+                    "prompt",
+                    "duration"
+                ]
+            },
+            "options": {
+                "duration": {
+                    "type": "range",
+                    "min": 4,
+                    "max": 30,
+                    "integer": true,
+                    "unit": "second",
+                    "default": 4
+                },
+                "ratio": {
+                    "type": "enum",
+                    "values": [
+                        "16:9",
+                        "9:16",
+                        "1:1",
+                        "4:3",
+                        "3:4",
+                        "21:9",
+                        "adaptive"
+                    ],
+                    "default": "16:9",
+                    "resolveAdaptiveRatio": false
+                },
+                "resolutionTier": {
+                    "type": "enum",
+                    "values": [
+                        "480p",
+                        "720p",
+                        "1080p"
+                    ],
+                    "default": "720p"
+                }
+            },
+            "capabilities": {
+                "referenceImages": {
+                    "supported": true,
+                    "max": 30,
+                    "maxBytesPerImage": 31457279
+                },
+                "referenceVideos": {
+                    "supported": true,
+                    "max": 10,
+                    "note": "单个2-30秒，总时长不超过30秒"
+                },
+                "referenceAudios": {
+                    "supported": true,
+                    "max": 10,
+                    "note": "单个2-30秒，总时长不超过30秒"
+                },
+                "firstFrame": {
+                    "supported": true,
+                    "note": "仅有1-2张图片时按首尾帧提交"
+                },
+                "lastFrame": {
+                    "supported": true,
+                    "note": "仅有2张图片时第二张为尾帧"
+                },
+                "generatedAudio": {
+                    "supported": true
+                },
+                "webSearch": {
+                    "supported": false
+                },
+                "cameraFixed": {
+                    "supported": false
+                },
+                "watermark": {
+                    "supported": false
+                }
+            },
+            "prompt": {
+                "required": true
+            },
+            "notes": "4-30秒；480p/720p/1080p；最多30图/10视频/10音频；图片小于30MB且宽高在300-6000像素开区间、宽高比在0.4-2.5开区间；音视频各自总时长不超过30秒；素材审核ACTIVE后提交；不支持Base64；价格待确认"
+        },
+        {
             "id": "text.openai.gpt-5.6-terra",
             "label": "gpt-5.6-terra / gpt-5.5",
             "kind": "text",
