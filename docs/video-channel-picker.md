@@ -16,6 +16,6 @@
 
 后两项为直连供应商，只停用 Corvas 的新生成入口。保存的账户、凭据、历史任务及恢复接口不删除。恢复上架时移除对应暂停项；不要通过删除 API 配置来停用渠道。
 
-老站已运行 `server/seedance-hm/pause-models.py`，仅将两条 HM 模型的 `is_active` 改为 `0`。前后模型配置及定向回退 SQL 位于服务器私有目录 `/opt/tokensbyte-backups/pause-hm-20260920T155206Z/`。鉴权 `/v1/models` 已确认返回其余九个原有视频模型。恢复老站时使用该目录的 `restore.sql`，不用整库恢复。新站 `cart.ravenhash.org` 未调整。
+老站已运行 `server/seedance-hm/pause-models.py`，仅将两条 HM 模型的 `is_active` 改为 `0`。前后模型配置及定向回退 SQL 位于服务器私有目录 `/opt/tokensbyte-backups/pause-hm-20260920T155206Z/`。鉴权 `/v1/models` 已确认返回其余九个原有视频模型。恢复老站时使用该目录的 `restore.sql`，不用整库恢复。新站 `cart.ravenhash.org` 于 2026-09-21 同步了模型目录，详见 `docs/tkeapi-deployment.md`。
 
 验证：`node --test src/video-model-profiles.test.js electron-main/video-generation-availability.test.cjs`；`node scripts/video-channel-picker-smoke.cjs`。界面检查覆盖分组顺序、单条备用分组、暂停过滤、搜索、模型绑定和窄窗口定位；没有提交付费生成。
