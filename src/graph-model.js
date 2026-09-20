@@ -185,7 +185,7 @@ export function canConnect(fromItem, fromPort, toItem, toPort, connections = [])
         c.from.nodeId === fromItem.id && c.from.port === fromPort &&
         c.to.nodeId === toItem.id && c.to.port === toPort
     );
-    if (duplicate) return { ok: false, reason: '该连线已存在' };
+    if (duplicate) return { ok: false, reason: '该连线已存在', duplicate };
 
     if (reachable(toItem.id, fromItem.id, connections)) {
         return { ok: false, reason: '不能形成环形依赖' };

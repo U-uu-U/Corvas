@@ -37,10 +37,12 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
     const click = async id => { const p = await point(id); await page.mouse.click(p.x, p.y); };
     try {
         await fs.mkdir(path.join(profile, 'data')); await fs.mkdir(screenshots, { recursive: true });
-        const firstPath = path.join(profile, 'original.png'), secondPath = path.join(profile, 'second.png');
+        const mediaDirectory = path.join(profile, 'data', 'captured');
+        await fs.mkdir(mediaDirectory);
+        const firstPath = path.join(mediaDirectory, 'original.png'), secondPath = path.join(mediaDirectory, 'second.png');
         for (const [index, file] of [firstPath, secondPath].entries()) await sharp({ create: { width: 160, height: 200, channels: 3,
             background: index ? '#998772' : '#6d8a85' } }).png().toFile(file);
-        const videoPath = path.join(profile, 'motion.mp4'), audioPath = path.join(profile, 'voice.wav');
+        const videoPath = path.join(mediaDirectory, 'motion.mp4'), audioPath = path.join(mediaDirectory, 'voice.wav');
         execFileSync(process.env.FFMPEG_PATH || 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=gray:s=160x90:d=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', videoPath]);
         execFileSync(process.env.FFMPEG_PATH || 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono', '-t', '1', audioPath]);
         const items = [

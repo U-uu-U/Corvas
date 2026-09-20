@@ -2,6 +2,24 @@ import { describeModelPresentation } from './model-presentation.mjs';
 
 export const VIDEO_MODEL_PROFILES = [
     {
+        matchModel: /^seedance-2\.5-pro$/i,
+        label: 'Seedance 2.5 Pro',
+        ratios: ['adaptive', '16:9', '9:16', '1:1', '4:3', '3:4'],
+        resolutions: ['480p', '720p'],
+        durations: Array.from({ length: 27 }, (_, index) => index + 4),
+        durationControl: 'slider',
+        supportsWebSearch: false,
+        supportsCameraFixed: false,
+        supportsGeneratedAudio: false,
+        supportsWatermark: false,
+        referenceLimits: { image: 30, video: 10, audio: 10 },
+        defaultRatio: 'adaptive',
+        resolveAdaptiveRatio: true,
+        adaptiveFallbackRatio: '16:9',
+        defaultResolution: '720p',
+        defaultDuration: 4
+    },
+    {
         matchModel: /^ch0107-sd-2\.5-720p$/i,
         label: 'Seedance 2.5 720p',
         routeLabel: 'StarFrame CH0107',
@@ -174,6 +192,10 @@ export function getVideoModelProfile(provider) {
         || DEFAULT_VIDEO_MODEL_PROFILE;
     let host = '';
     try { host = new URL(provider.endpoint).hostname; } catch (_) { /* Unconfigured endpoint. */ }
+    if (model.toLowerCase() === 'seedance-2.5-pro' && host === 'art.ravenhash.org') {
+        return { ...profile, price: { amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
+            source: 'ravenhash configured sale', updatedAt: '2026-09-20T00:00:00Z' } };
+    }
     if (/^ch0107-sd-2\.5-720p$/i.test(model) && host === 'api.xzapi.vip') return { ...profile, price: {
         amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
         source: 'user configured sale', updatedAt: '2026-09-20T12:00:00Z'

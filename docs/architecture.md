@@ -1,6 +1,6 @@
-# 架构现状
+# 历史架构笔记
 
-本文记录 flow-canvas **既成事实的架构**，不是规划。规划见 [roadmap.md](roadmap.md)，节点体系设计见 [node-system-design.md](node-system-design.md)。
+本文记录早期 flow-canvas 架构，以下依赖数量、测试数量、服务目录和功能缺口清单已经过时，不应作为当前实现依据。当前项目包含 `server/` 渠道适配服务、`configserver/` 远端模型配置服务，以及 Agent Runtime 和桌面应用集成。依赖与构建以 `package.json` 为准，测试由 `scripts/run-tests.cjs` 收集；本轮桌面进程边界说明见 [desktop-security.md](desktop-security.md)。规划见 [roadmap.md](roadmap.md)，节点体系设计见 [node-system-design.md](node-system-design.md)。
 
 ## 技术栈
 

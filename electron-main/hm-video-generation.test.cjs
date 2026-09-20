@@ -54,6 +54,29 @@ test('HM submit wrapped as a status URL persists its task ID then polls with rel
     assert.equal(fs.readFileSync(result.filePath, 'utf8'), 'video fixture');
 });
 
+test('Zhubo Pro preserves 480p through the full submission and recovery pipeline', async t => {
+    profile = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-zhubo-pro-'));
+    t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+    const bridge = new Bridge({ store: { load: () => ({ items: [] }) }, recoveryDirectory: path.join(profile, 'records') });
+    bridge._loadWithPlanService = () => ({ data: { items: [] }, planService: {} });
+    let posts = 0;
+    fetchFixture = async (url, options = {}) => {
+        assert.equal(new URL(url).hostname, 'pro-fixture.test');
+        if (url.endsWith('/output.mp4')) return new Response('fixture video');
+        if (options.method === 'POST') {
+            posts++;
+            assert.deepEqual(JSON.parse(options.body), { model: 'seedance-2.5-pro', prompt: 'fixture', seconds: 4, ratio: '16:9', resolution: '480p' });
+        }
+        return json({ id: 'pro-task', status: 'completed', video_url: 'https://pro-fixture.test/output.mp4' });
+    };
+    const request = { prompt: 'fixture', duration: 4, resolution: '480p', ratio: '16:9', targetDir: profile, addToCanvas: false,
+        providerConfig: { endpoint: 'https://pro-fixture.test/v1', model: 'seedance-2.5-pro', apiKey: 'fixture-only' } };
+    const generated = await bridge._generateVideoFromRenderer(request);
+    assert.ok(fs.existsSync(generated.filePath));
+    await bridge._resumeVideoFromRenderer({ ...request, taskId: 'pro-task' });
+    assert.equal(posts, 1);
+});
+
 test('HM 301010 transports all 50 references, preserves order and supports task-ID recovery', { timeout: 15000 }, async t => {
     profile = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-hm-'));
     t.after(() => fs.rmSync(profile, { recursive: true, force: true }));

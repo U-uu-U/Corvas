@@ -40,6 +40,7 @@ import { canRecoverGenerationTask, generationFailureError, formatClientGeneratio
 import { showStatusNotification } from './status-notification.js';
 import { createApplicationLauncher, createHunyuanPanel } from './hunyuan-accounts.js';
 import { createRhinoPanel, RHINO_EDIT_SKILL } from './rhino-workbench.js';
+import { createBlenderPanel, BLENDER_ANIMATION_SKILL } from './blender-workbench.js';
 import { getVideoModelProfile, describeVideoModelProfile, getVideoModelGroup } from '../shared/video-model-profiles.mjs';
 import { isVideoGenerationAvailable } from '../shared/video-generation-availability.mjs';
 import { getModelPresentation, describeModelPresentation } from '../shared/model-presentation.mjs';
@@ -110,6 +111,7 @@ const AGENT_PENDING_ATTACHMENTS_STORAGE_KEY = 'flow-canvas-agent-pending-attachm
 const AGENT_PENDING_ATTACHMENT_LIMIT = 32;
 const AGENT_SKILLS = Object.freeze([
     RHINO_EDIT_SKILL,
+    BLENDER_ANIMATION_SKILL,
     {
         id: 'board-planning',
         name: '画板规划',
@@ -344,9 +346,16 @@ export class AgentSidebar {
             }
             this.inputEl?.focus();
         } });
+        this.blenderPanel = createBlenderPanel({ onClose: () => this.setMode('canvas'), onAgent: prompt => {
+            this.globalConfig.agentSkillIds = [...new Set([...this._selectedAgentSkillIds(), BLENDER_ANIMATION_SKILL.id])];
+            this._saveConfig(); this._renderAgentSkillList(); this.setMode('agent');
+            if (prompt && this.inputEl) { this.inputEl.value = this.inputEl.value.trim() ? `${this.inputEl.value}\n\n${prompt}` : prompt; this.inputEl.dispatchEvent(new Event('input', { bubbles: true })); }
+            this.inputEl?.focus();
+        } });
         this.applicationLauncher = createApplicationLauncher({ onSelect: mode => {
             this.setMode(mode);
             if (mode === 'rhino') this.rhinoPanel?.launch();
+            if (mode === 'blender') this.blenderPanel?.launch();
         } });
         this._bindAgentSidebarResize();
         this._syncHudState();
@@ -2672,7 +2681,7 @@ export class AgentSidebar {
 
     setMode(mode = 'canvas', settingsTab = null) {
         this._finishAgentSidebarResize?.();
-        const nextMode = ['agent', 'settings', 'hunyuan', 'rhino', 'canvas'].includes(mode) ? mode : 'canvas';
+        const nextMode = ['agent', 'settings', 'hunyuan', 'rhino', 'blender', 'canvas'].includes(mode) ? mode : 'canvas';
         this.applicationLauncher?.hide();
         const body = document.body;
         // 离开设置界面时必须解除快捷键录制状态。_captureShortcut 是 document 捕获
@@ -2693,7 +2702,7 @@ export class AgentSidebar {
             }[nextMode] || '';
         }
 
-        body.classList.remove('agent-mode', 'settings-mode', 'hunyuan-mode', 'rhino-mode');
+        body.classList.remove('agent-mode', 'settings-mode', 'hunyuan-mode', 'rhino-mode', 'blender-mode');
         if (nextMode === 'canvas') {
             body.classList.remove('creation-mode');
             this.close();
@@ -3802,6 +3811,7 @@ export class AgentSidebar {
     _syncHudState() {
         this.hunyuanPanel?.setVisible(this.currentMode === 'hunyuan' && document.body.classList.contains('agent-open'));
         this.rhinoPanel?.setVisible(this.currentMode === 'rhino' && document.body.classList.contains('agent-open'));
+        this.blenderPanel?.setVisible(this.currentMode === 'blender' && document.body.classList.contains('agent-open'));
         const settingsButton = document.getElementById('agentSettingsBtn');
         const settingsOpen = this.currentMode === 'settings' && document.body.classList.contains('agent-open');
         settingsButton?.classList.toggle('active', settingsOpen);
@@ -3813,7 +3823,7 @@ export class AgentSidebar {
             ? '左键关闭侧边栏，右键收起画布'
             : '左键打开 AI Agent，右键收起画布';
         button.setAttribute('aria-expanded', String(isOpen));
-        button.setAttribute('aria-controls', ({ hunyuan: 'hunyuanAccountsPanel', rhino: 'rhinoWorkbenchPanel' })[this.currentMode] || 'agentSidebar');
+        button.setAttribute('aria-controls', ({ hunyuan: 'hunyuanAccountsPanel', rhino: 'rhinoWorkbenchPanel', blender: 'blenderWorkbenchPanel' })[this.currentMode] || 'agentSidebar');
         button.setAttribute('aria-label', label);
         button.title = label;
     }
@@ -3876,15 +3886,22 @@ export class AgentSidebar {
     }
 
     _writeLocalApiConfig() {
-        localStorage.setItem(API_PROVIDERS_STORAGE_KEY, JSON.stringify(this.providers));
-        localStorage.setItem(API_GLOBAL_STORAGE_KEY, JSON.stringify(this.globalConfig));
-        localStorage.setItem(API_META_STORAGE_KEY, JSON.stringify({
-            version: 1,
-            revision: this.apiConfigRevision,
-            updatedAt: this.apiConfigUpdatedAt
-        }));
-        this.localApiConfigPresent = true;
+        if (!window.flowCanvas?.apiConfig?.save) {
+            localStorage.setItem(API_PROVIDERS_STORAGE_KEY, JSON.stringify(this.providers));
+            localStorage.setItem(API_GLOBAL_STORAGE_KEY, JSON.stringify(this.globalConfig));
+            localStorage.setItem(API_META_STORAGE_KEY, JSON.stringify({
+                version: 1,
+                revision: this.apiConfigRevision,
+                updatedAt: this.apiConfigUpdatedAt
+            }));
+            this.localApiConfigPresent = true;
+        }
         document.dispatchEvent(new CustomEvent('agent-providers-updated'));
+    }
+
+    _clearMigratedLocalApiConfig() {
+        for (const key of [API_PROVIDERS_STORAGE_KEY, API_GLOBAL_STORAGE_KEY, API_META_STORAGE_KEY]) localStorage.removeItem(key);
+        this.localApiConfigPresent = false;
     }
 
     async _restoreDurableApiConfig() {
@@ -3924,6 +3941,7 @@ export class AgentSidebar {
 
             const saved = await bridge.save(this._apiConfigSnapshot());
             if (!saved?.success) throw new Error(saved?.error || '耐久配置保存失败');
+            this._clearMigratedLocalApiConfig();
             if (this.pendingDurableApiConfigSave) this._queueDurableApiConfigSave();
             return {
                 success: true,
@@ -3933,6 +3951,7 @@ export class AgentSidebar {
         } catch (error) {
             this.apiConfigHydrated = true;
             console.warn('[Agent] API 自动恢复失败，已保留当前 Local Storage 配置', error);
+            showStatusNotification(`API 配置未能安全保存：${error?.message || '请检查系统凭据服务'}`, { kind: 'error' });
             return { success: false, error: error?.message || String(error) };
         }
     }
@@ -3947,9 +3966,13 @@ export class AgentSidebar {
         this.pendingDurableApiConfigSave = false;
         clearTimeout(this.apiConfigSaveTimer);
         this.apiConfigSaveTimer = setTimeout(async () => {
-            const result = await bridge.save(this._apiConfigSnapshot());
-            if (!result?.success) {
-                console.warn('[Agent] API 耐久配置保存失败', result?.error || '未知错误');
+            try {
+                const result = await bridge.save(this._apiConfigSnapshot());
+                if (!result?.success) throw new Error(result?.error || '请检查系统凭据服务');
+                this._clearMigratedLocalApiConfig();
+            } catch (error) {
+                console.warn('[Agent] API 耐久配置保存失败', error);
+                showStatusNotification(`API 配置未能安全保存：${error?.message || '请稍后重试'}`, { kind: 'error' });
             }
         }, 160);
     }

@@ -3,6 +3,13 @@
 // ============================================================
 
 const { contextBridge, ipcRenderer } = require('electron');
+// Native File paths are registered before the page starts loading dropped media.
+// This channel is deliberately not exposed through the renderer API.
+window.addEventListener('drop', event => {
+    if (!event.isTrusted) return;
+    const paths = Array.from(event.dataTransfer?.files || []).map(file => file.path).filter(Boolean);
+    if (paths.length) ipcRenderer.sendSync('media:grant-drop', paths);
+}, true);
 window.addEventListener('error', event => ipcRenderer.send('diagnostics:renderer', {
     type: 'error', message: event.message, stack: event.error?.stack
 }));
@@ -83,6 +90,18 @@ contextBridge.exposeInMainWorld('flowCanvas', {
             const listener = (_, data) => callback(data);
             ipcRenderer.on('rhino:changed', listener);
             return () => ipcRenderer.removeListener('rhino:changed', listener);
+        }
+    },
+
+    blender: {
+        status: () => ipcRenderer.invoke('blender:status'),
+        save: settings => ipcRenderer.invoke('blender:save', settings),
+        open: () => ipcRenderer.invoke('blender:open'),
+        choose: () => ipcRenderer.invoke('blender:choose'),
+        onChanged: callback => {
+            const listener = (_, data) => callback(data);
+            ipcRenderer.on('blender:changed', listener);
+            return () => ipcRenderer.removeListener('blender:changed', listener);
         }
     },
 

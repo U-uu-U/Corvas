@@ -20,6 +20,7 @@ function isSeedanceVideoModel(model) {
 
 function seedanceReferenceLimits(model) {
     const id = String(model || '').trim().toLowerCase();
+    if (id === 'seedance-2.5-pro') return { image: 30, video: 10, audio: 10 };
     if (id === 'seedance_v2.0-933') return { image: 9, video: 3, audio: 3 };
     if (id === 'seedance_v2.5-101010') return { image: 10, video: 10, audio: 10 };
     if (id === 'seedance_v2.5-301010') return { image: 30, video: 10, audio: 10 };
@@ -180,6 +181,7 @@ function buildSeedance25RequestBody({
     prompt,
     duration,
     aspectRatio,
+    resolution,
     referenceImages = [],
     referenceVideos = [],
     referenceAudios = []
@@ -227,9 +229,10 @@ function buildSeedance25RequestBody({
     const body = {
         model: String(model || '').trim(),
         prompt: promptValue,
-        resolution: '720p',
+        resolution: String(model).toLowerCase() === 'seedance-2.5-pro' ? (resolution || '720p') : '720p',
         seconds: durationValue
     };
+    if (!['480p', '720p'].includes(body.resolution)) throw new Error(`${label} Pro 仅支持 480p 或 720p`);
     if (ratioValue) body.ratio = ratioValue;
     if (images.length > 0) body.image_urls = images;
     if (videos.length > 0) body.video_urls = videos;

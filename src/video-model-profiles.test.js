@@ -3,7 +3,27 @@ import assert from 'node:assert/strict';
 import { DEFAULT_MODEL_CONFIG } from './model-config-default.js';
 import { resolveModelConfigEntry, toVideoProfileOverrides } from './model-config-capabilities.js';
 import { canUseTextProvider, inferProviderCapability } from './provider-capabilities.js';
-import { DEFAULT_VIDEO_MODEL_PROFILE, getVideoModelProfile, describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
+import { DEFAULT_VIDEO_MODEL_PROFILE, getVideoModelProfile, describeVideoModelProfile, getVideoModelGroup } from '../shared/video-model-profiles.mjs';
+
+test('Zhubo Pro has its own wire limits and joins only the matching supplier group', () => {
+    const provider = { model: 'seedance-2.5-pro', endpoint: 'https://art.ravenhash.org/v1' };
+    const profile = getVideoModelProfile(provider);
+    const { entry } = resolveModelConfigEntry(DEFAULT_MODEL_CONFIG, provider);
+    const configured = toVideoProfileOverrides(DEFAULT_MODEL_CONFIG, entry, provider);
+    assert.deepEqual(profile.resolutions, ['480p', '720p']);
+    assert.deepEqual(profile.referenceLimits, { image: 30, video: 10, audio: 10 });
+    assert.deepEqual(configured.referenceLimits, profile.referenceLimits);
+    assert.deepEqual(configured.durations, profile.durations);
+    assert.equal(profile.price.amount, 1.06);
+    assert.equal(profile.price.unit, 'second');
+    assert.equal(getVideoModelGroup(provider).routeGroup, 'zhubo-video');
+    for (const model of ['seedance_v2.5', 'seedance_v2.0-933', 'seedance_v2.5-101010', 'seedance_v2.5-301010', 'sd2.5']) {
+        assert.equal(getVideoModelGroup({ ...provider, model }).routeGroup, 'zhubo-video');
+    }
+    assert.equal(getVideoModelGroup({ ...provider, model: 'sd2.5-route1' }).routeGroup, 'seedance25-backup');
+    assert.deepEqual(getVideoModelGroup({ ...provider, endpoint: 'https://another.test' }), {});
+    assert.equal(getVideoModelProfile({ ...provider, endpoint: 'https://cart.ravenhash.org' }).price, undefined);
+});
 
 test('StarFrame keeps the configured per-second sale on its exact host with or without a remote catalog', () => {
     const provider = { model: 'ch0107-sd-2.5-720p', endpoint: 'https://api.xzapi.vip/v1', name: 'StarFrame API' };

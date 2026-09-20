@@ -4,6 +4,7 @@
 
 import Konva from 'konva';
 import { installMediaViewportCulling } from './canvas-media-culling.js';
+import { createAudioPlayer } from './canvas-audio-player.js';
 import { GraphView } from './graph-view.js';
 import { collectUpstreamMediaAttachments, collectUpstreamPromptContext } from './agent-attachments.js';
 import { NODE_TYPES } from './node-types.js';
@@ -2900,6 +2901,7 @@ export class CanvasManager {
         const coverControls = item.group?.findOne?.('.videoCoverControls');
         if (controls) this._layoutVideoControlGroup(controls, targetWidth, targetHeight);
         if (coverControls) this._layoutVideoControlGroup(coverControls, targetWidth, targetHeight);
+        item.audioPlayer?.layout(targetWidth, targetHeight);
         this._syncExternalNodeTitle(item.group, item.data, this._getItemMediaType(item.data));
         this.graphView?.scheduleSync(item.data.id);
         if (this.imageTransformer?.nodes?.()[0] === displayNode) this.imageTransformer.forceUpdate();
@@ -4326,6 +4328,7 @@ export class CanvasManager {
                 requestAnimationFrame(renderBatch);
             } else {
                 console.log('[Canvas] renderInitialItems 完成: this.items.size =', this.items.size);
+                this.graphView?.sync();
                 this.emit('initialRenderComplete', { itemCount: this.items.size });
                 requestAnimationFrame(() => this._loadAllContent());
             }
@@ -4615,13 +4618,21 @@ export class CanvasManager {
         }));
 
         if (editableMediaTitle) {
+            // Keep the first click from rebuilding the title or opening the composer
+            // before Konva can recognize the second click on the same target.
+            title.on('mousedown touchstart click tap', event => {
+                if (this._activeMediaReferencePick || this._activePlanReferencePick) return;
+                if (event.evt?.button != null && event.evt.button !== 0) return;
+                event.cancelBubble = true;
+            });
             title.on('mouseenter', () => {
-                document.body.style.cursor = 'text';
+                if (!this._activeMediaReferencePick && !this._activePlanReferencePick) document.body.style.cursor = 'text';
             });
             title.on('mouseleave', () => {
                 document.body.style.cursor = 'default';
             });
             title.on('dblclick dbltap', event => {
+                if (this._activeMediaReferencePick || this._activePlanReferencePick) return;
                 event.cancelBubble = true;
                 this.openMediaTitleEditor(data.id);
             });
@@ -4710,6 +4721,14 @@ export class CanvasManager {
         return group;
     }
 
+    _ensureAudioPlayer(item) {
+        if (!item?.data?.filePath || this._getItemMediaType(item.data) !== 'audio') return null;
+        item.audioPlayer ||= createAudioPlayer(this, item);
+        const size = this._mediaPlaceholderSize('audio', item.data);
+        item.audioPlayer.layout(size.width, size.height);
+        return item.audioPlayer;
+    }
+
     _createAudioWaveform(width, height, filePath) {
         const group = new Konva.Group({ name: 'audioWaveform', listening: false });
         const fileName = this._fileNameFromPath(filePath) || '未命名音频';
@@ -4752,17 +4771,17 @@ export class CanvasManager {
         }));
 
         const waveX = 14;
-        const waveY = Math.max(52, height - 32);
+        const waveY = Math.max(46, height - 48);
         const waveWidth = Math.max(40, width - 28);
         const barCount = Math.max(18, Math.min(42, Math.floor(waveWidth / 7)));
         const gap = waveWidth / barCount;
         const seed = [...fileName].reduce((total, char) => (total + char.charCodeAt(0)) % 997, 37);
         for (let index = 0; index < barCount; index += 1) {
             const value = Math.abs(Math.sin((index + 1) * 1.71 + seed * 0.013));
-            const barHeight = 4 + Math.round(value * Math.max(8, Math.min(22, height - 62)));
+            const barHeight = 4 + Math.round(value * Math.max(4, Math.min(10, height - 76)));
             group.add(new Konva.Rect({
                 x: waveX + index * gap,
-                y: waveY + (24 - barHeight) / 2,
+                y: waveY + (16 - barHeight) / 2,
                 width: Math.max(2, gap - 3),
                 height: barHeight,
                 cornerRadius: 1,
@@ -5057,7 +5076,7 @@ export class CanvasManager {
             } else {
                 this.selectItem(data.id, false);
                 const product = this._getMediaProduct(data);
-                if ((hasGenerationRecord(data) || fileType === 'image')
+                if (fileType !== 'audio' && (hasGenerationRecord(data) || fileType === 'image')
                     && (product?.filePath || product?.url)) {
                     this.openMediaGenerationComposer(data.id);
                 }
@@ -5102,7 +5121,11 @@ export class CanvasManager {
         });
 
         group.on('dblclick', () => {
-            if (this._activePlanReferencePick) return;
+            if (this._activePlanReferencePick || this._activeMediaReferencePick) return;
+            if (this._getItemMediaType(data) === 'audio') {
+                this._ensureAudioPlayer(this.items.get(data.id))?.toggle();
+                return;
+            }
             if (data.filePath) {
                 window.flowCanvas.shell.openFile(data.filePath);
             } else {
@@ -5135,6 +5158,7 @@ export class CanvasManager {
             loadErrorMessage: '',
             isHovered: false
         });
+        this._ensureAudioPlayer(this.items.get(data.id));
         void this._hydrateReferenceAnnotation(data);
 
         const pendingPlacement = this.pendingGenerationPlacements.get(data.id);
@@ -8455,6 +8479,7 @@ export class CanvasManager {
             return;
         }
 
+        this._closeGenerationComposer({ commit: true });
         this._closeInlineOpPromptEditor();
         this._closeMediaTitleEditor();
         const { data, group } = entry;
@@ -8479,6 +8504,11 @@ export class CanvasManager {
             originalCustomName,
             originalValue
         };
+        const closeOutside = event => {
+            if (!input.contains(event.target)) this._closeMediaTitleEditor();
+        };
+        this._activeMediaTitleEditor.closeOutside = closeOutside;
+        document.addEventListener('pointerdown', closeOutside, true);
         this._positionMediaTitleEditor();
 
         ['pointerdown', 'mousedown', 'click', 'dblclick', 'wheel'].forEach(type => {
@@ -8486,6 +8516,7 @@ export class CanvasManager {
         });
         input.addEventListener('keydown', keyEvent => {
             keyEvent.stopPropagation();
+            if (keyEvent.isComposing || keyEvent.keyCode === 229) return;
             if (keyEvent.key === 'Escape') {
                 keyEvent.preventDefault();
                 this._closeMediaTitleEditor({ commit: false });
@@ -8526,6 +8557,7 @@ export class CanvasManager {
         const active = this._activeMediaTitleEditor;
         if (!active) return;
         this._activeMediaTitleEditor = null;
+        document.removeEventListener('pointerdown', active.closeOutside, true);
 
         if (commit) {
             const nextName = String(active.element?.value || '').trim();
@@ -14412,8 +14444,8 @@ export class CanvasManager {
 
     _scheduleResourceSaverPromote(item) {
         if (this._activeCanvasPanStop || !this.resourceSaverMode || item.isResizing || !item.group.getLayer()) return;
-        // A video cover stays still on hover; decoding starts when playback is requested.
-        if (this._getItemMediaType(item.data) === 'video') return;
+        // Audio and video decode only when playback is requested, not on hover.
+        if (['video', 'audio'].includes(this._getItemMediaType(item.data))) return;
         clearTimeout(item.hoverTimer);
         item.hoverTimer = setTimeout(() => {
             item.hoverTimer = null;
@@ -14559,6 +14591,7 @@ export class CanvasManager {
                 this._loadVideoCover(item, token);
             }
         } else {
+            if (fileType === 'audio') this._ensureAudioPlayer(item);
             this._finishLoad(item, token);
         }
     }
@@ -14769,6 +14802,8 @@ export class CanvasManager {
      * 卸载节点内容 — 释放图片纹理和视频资源
      */
     _unloadContent(item) {
+        item.audioPlayer?.dispose();
+        item.audioPlayer = null;
         // Operation nodes use vector shapes instead of media textures. Treat them as
         // already unloaded so the shared deletion path never calls Image-only APIs.
         if (item?.data?.kind === 'op') {
@@ -15024,9 +15059,9 @@ export class CanvasManager {
         glyph?.find('.videoVolumeSlash').forEach(node => node.visible(muted));
     }
 
-    _layoutVideoControlGroup(controls, width, height) {
+    _layoutVideoControlGroup(controls, width, height, stageScale = this.stage?.scaleX?.()) {
         if (!controls) return;
-        const layout = getVideoControlLayout(this.stage?.scaleX?.(), width, height, this.uiScaleLimit);
+        const layout = getVideoControlLayout(stageScale, width, height, this.uiScaleLimit);
         controls.visible(layout.visible);
         const progressBg = controls.findOne('.videoProgressBg');
         const progressFg = controls.findOne('.videoProgressFg');
@@ -15087,6 +15122,7 @@ export class CanvasManager {
             const height = Number(displayNode?.height?.()) || Number(item.data?.height) || 0;
             this._layoutVideoControlGroup(item.group?.findOne('.videoControls'), width, height);
             this._layoutVideoControlGroup(item.group?.findOne('.videoCoverControls'), width, height);
+            item.audioPlayer?.layout(width, height);
         });
     }
 

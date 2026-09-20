@@ -5,9 +5,10 @@ let curvePoints;
 let getCompatibleNodeOptions;
 let boxIntersectsViewport;
 let viewportFixedScale;
+let GraphView;
 
 test.before(async () => {
-    ({ curvePoints, getCompatibleNodeOptions, boxIntersectsViewport, viewportFixedScale } = await import('./graph-view.js'));
+    ({ GraphView, curvePoints, getCompatibleNodeOptions, boxIntersectsViewport, viewportFixedScale } = await import('./graph-view.js'));
 });
 
 test('viewportFixedScale: 缩放补偿受上限约束，放大时保持屏幕尺寸', () => {
@@ -74,4 +75,59 @@ test('boxIntersectsViewport: 仅保留可见或边缘缓冲区内节点', () => 
     assert.equal(boxIntersectsViewport({ x: 120, y: 140, width: 80, height: 60 }, viewport), true);
     assert.equal(boxIntersectsViewport({ x: 520, y: 140, width: 80, height: 60 }, viewport), false);
     assert.equal(boxIntersectsViewport({ x: 520, y: 140, width: 80, height: 60 }, viewport, 40), true);
+});
+
+function delayedGraph() {
+    class Line {
+        constructor(attrs) { this.attrs = attrs; this.layer = null; }
+        destroy() { this.layer = null; }
+        getLayer() { return this.layer; }
+        on() {}
+        moveToBottom() {}
+        points(value) { if (value) this.attrs.points = value; return this.attrs.points; }
+        visible(value) { if (value != null) this.attrs.visible = value; return this.attrs.visible; }
+    }
+    const connection = { id: 'saved', from: { nodeId: 'audio', port: 'out' }, to: { nodeId: 'video', port: 'source' } };
+    const nodes = new Map();
+    const layer = { add(line) { line.layer = this; }, batchDraw() {} };
+    const view = Object.assign(Object.create(GraphView.prototype), {
+        canvas: { items: nodes, plans: new Map(), stage: { scaleX: () => 1 }, _syncCanvasViewDock() {} },
+        Konva: { Line }, connections: [connection], edgeShapes: new Map(), portShapes: new Map(),
+        connectionsVisible: true, edgeLayer: layer, portLayer: { batchDraw() {} }, _syncPending() {}
+    });
+    const attach = (id, data, x) => nodes.set(id, { data: { id, width: 300, height: 100, ...data },
+        group: { x: () => x, y: () => 0 } });
+    return { view, connection, attach };
+}
+
+test('saved edges render when their nodes arrive after the initial drawing pass', () => {
+    const h = delayedGraph();
+    h.view.drawEdge(h.connection);
+    assert.equal(h.view.edgeShapes.size, 0);
+    h.attach('audio', { mediaType: 'audio' }, 0);
+    h.attach('video', { kind: 'op', nodeType: 'video' }, 600);
+    h.view.sync();
+    const line = h.view.edgeShapes.get('saved');
+    assert.ok(line);
+    assert.equal(line.getLayer(), h.view.edgeLayer);
+    assert.deepEqual(line.points().slice(0, 2), [300, 50]);
+    h.view.sync();
+    assert.equal(h.view.edgeShapes.get('saved'), line, 'Normal sync reuses the rendered line');
+    line.destroy();
+    h.view.sync(new Set(['video']));
+    assert.notEqual(h.view.edgeShapes.get('saved'), line, 'A detached shape is recreated');
+});
+
+test('reconnecting a hidden existing edge reveals it without duplicating its record', () => {
+    const h = delayedGraph();
+    h.attach('audio', { mediaType: 'audio' }, 0);
+    h.attach('video', { kind: 'op', nodeType: 'video' }, 600);
+    h.view.setConnectionsVisible(false);
+    assert.equal(h.view.connect(h.connection.from, h.connection.to), null);
+    assert.equal(h.view.connections.length, 1);
+    assert.equal(h.view.edgeShapes.get('saved').visible(), true);
+    assert.equal(h.view.canvas._connectionsVisible, true);
+    h.view.setConnectionsVisible(false);
+    h.view.connect(h.connection.from, h.connection.to, { silent: true });
+    assert.equal(h.view.edgeShapes.get('saved').visible(), false, 'Background updates preserve the visibility preference');
 });

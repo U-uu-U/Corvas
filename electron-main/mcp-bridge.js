@@ -3372,6 +3372,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 model,
                 prompt,
                 duration: Number.isInteger(duration) ? duration : undefined,
+                resolution: resolution || undefined,
                 aspectRatio: ratio || undefined
             }));
         } else {
@@ -3461,6 +3462,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 model,
                 prompt,
                 duration: Number.isInteger(duration) ? duration : undefined,
+                resolution: resolution || undefined,
                 aspectRatio: ratio || undefined,
                 referenceImages: imageUrls,
                 referenceVideos: referenceVideoUrls,

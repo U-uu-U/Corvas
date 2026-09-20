@@ -284,6 +284,36 @@
             "notes": "2026-09-12用户确认：线路二固定30秒、720p、最多9张参考图；4-30秒仅属于独立的seedance_v2.5模型"
         },
         {
+            "id": "ravenhash-video.seedance-2.5-pro",
+            "presentation": { "label": "Seedance 2.5 Pro", "routeGroup": "zhubo-video", "routeGroupLabel": "主播视频", "routeLabel": "Seedance 2.5 Pro" },
+            "pricing": {
+                "status": "known", "hosts": ["art.ravenhash.org"],
+                "amount": 1.06, "currency": "CNY", "unit": "second", "kind": "sale",
+                "source": "ravenhash configured sale", "updatedAt": "2026-09-20T00:00:00Z"
+            },
+            "label": "seedance-2.5-pro", "kind": "video", "channel": "RavenHash视频",
+            "route": "主播 Seedance 2.5 Pro", "priority": 140,
+            "match": { "model": ["^seedance-2\\.5-pro$"] },
+            "parameters": {
+                "accepts": ["model", "prompt", "seconds", "ratio", "resolution", "image_urls", "video_urls", "audio_urls"],
+                "required": ["model", "prompt"]
+            },
+            "options": {
+                "duration": { "type": "range", "min": 4, "max": 30, "integer": true, "unit": "second", "default": 4 },
+                "ratio": { "type": "enum", "values": ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4"], "default": "adaptive", "allowAuto": true },
+                "resolutionTier": { "type": "enum", "values": ["480p", "720p"], "default": "720p" }
+            },
+            "capabilities": {
+                "referenceImages": { "supported": true, "max": 30 },
+                "referenceVideos": { "supported": true, "max": 10, "note": "参考视频时长不得超过输出时长" },
+                "referenceAudios": { "supported": true, "max": 10 },
+                "webSearch": { "supported": false }, "cameraFixed": { "supported": false },
+                "generatedAudio": { "supported": false }, "watermark": { "supported": false }
+            },
+            "prompt": { "required": true },
+            "notes": "2026-09-20核对video.zhubo.asia：4-30秒；480p/720p；最多30图/10视频/10音频；参考视频时长不得超过输出时长；老站售价CNY1.06/秒"
+        },
+        {
             "id": "ravenhash-video.seedance-v2.5",
             "presentation": { "label": "HM-Seedance 2.5" },
             "pricing": {

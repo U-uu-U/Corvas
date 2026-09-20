@@ -5,6 +5,7 @@ import './generation-recovery.css';
 import './light-theme.css';
 import './hunyuan-accounts.css';
 import './rhino-workbench.css';
+import './blender-workbench.css';
 import { initTheme } from './theme.js';
 import { initCanvasUiScaleSettings } from './canvas-ui-scale.js';
 import { showStatusNotification } from './status-notification.js';

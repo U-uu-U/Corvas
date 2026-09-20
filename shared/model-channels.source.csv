@@ -16,3 +16,4 @@
 "RavenHash视频","主播 HM 933","seedance_v2.0-933","model; prompt; seconds; ratio; resolution; image_urls; video_urls; audio_urls","2026-09-12核对video.zhubo.asia模型目录及统一视频API文档：720p、4-15秒、9图/3视频/3音频；固定按次计费；RavenHash售价CNY6.5/次"
 "RavenHash视频","主播 HM 101010","seedance_v2.5-101010","model; prompt; seconds; ratio; resolution; image_urls; video_urls; audio_urls","2026-09-12核对video.zhubo.asia模型目录及统一视频API文档：720p、4-30秒、10图/10视频/10音频；固定按次计费；RavenHash售价CNY7/次"
 "RavenHash视频","主播 HM 301010","seedance_v2.5-301010","model; prompt; seconds; ratio; resolution; image_urls; video_urls; audio_urls","2026-09-12核对video.zhubo.asia模型目录及统一视频API文档：720p、4-30秒、30图/10视频/10音频；固定按次计费；RavenHash售价CNY10/次；成本不是售价"
+"RavenHash视频","主播 Seedance 2.5 Pro","seedance-2.5-pro","model; prompt; seconds; ratio; resolution; image_urls; video_urls; audio_urls","2026-09-20核对video.zhubo.asia：4-30秒；480p/720p；最多30图/10视频/10音频；参考视频时长不得超过输出时长；老站售价CNY1.06/秒"

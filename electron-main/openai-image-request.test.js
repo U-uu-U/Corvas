@@ -4,6 +4,22 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+test('Zhubo Pro sends both supported resolutions and complete multimodal references', () => {
+    const refs = n => Array.from({ length: n }, (_, i) => `https://example.test/${i}`);
+    for (const resolution of ['480p', '720p']) {
+        const input = { model: 'seedance-2.5-pro', prompt: 'fixture', duration: 12, resolution,
+            referenceImages: refs(30), referenceVideos: refs(10), referenceAudios: refs(10) };
+        const body = buildSeedance25RequestBody(input);
+        assert.equal(body.resolution, resolution);
+        assert.equal(body.seconds, 12);
+        assert.deepEqual(body.image_urls, input.referenceImages);
+        assert.deepEqual(body.video_urls, input.referenceVideos);
+        assert.deepEqual(body.audio_urls, input.referenceAudios);
+        assert.throws(() => buildSeedance25RequestBody({ ...input, resolution: '1080p' }));
+        assert.throws(() => buildSeedance25RequestBody({ ...input, referenceImages: refs(31) }));
+    }
+});
+
 test('Seedance route alias retains fixed duration while preserving the relay model ID', () => {
     const { buildSeedance25RequestBody, seedance25ReferenceImageLimit } = require('./video-provider-adapters');
     const body = buildSeedance25RequestBody({ model: 'sd2.5-route1', prompt: 'test', duration: 30 });

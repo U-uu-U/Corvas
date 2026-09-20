@@ -1,0 +1,33 @@
+.corvas-blender-mark { display: inline-grid; width: 20px; height: 20px; place-items: center; border: 1px solid currentColor; border-radius: 5px; font-size: 13px; font-weight: 700; }
+body.blender-mode.agent-open .agent-sidebar-wrapper { width: 370px; max-width: calc(100vw - 24px); }
+body.blender-mode .agent-sidebar { display: none; }
+body.blender-mode.agent-open .agent-toggle-btn { right: min(386px, calc(100vw - 76px)); }
+.blender-workbench-panel .hunyuan-panel-head > button { font-size: 21px; }
+.blender-workbench-content { flex: 1; min-height: 0; padding-bottom: 28px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+.blender-workbench-content::-webkit-scrollbar { width: 5px; }
+.blender-workbench-content::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--scrollbar-thumb); }
+.blender-connection-card { margin: 0 18px 16px; padding: 14px; border: 1px solid var(--border-color); border-radius: 9px; }
+.blender-connection-state { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.blender-connection-state strong { font-weight: 500; }
+.blender-connection-state > span { margin-left: auto; color: var(--text-secondary); font-size: 10px; }
+.blender-connection-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-secondary); }
+.blender-workbench-panel[data-state="connected"] .blender-connection-state i { background: #87b79b; }
+.blender-workbench-panel[data-state="error"] .blender-connection-state i { background: #c98989; }
+.blender-workbench-panel[data-state="connecting"] .blender-connection-state i { animation: blender-connect-pulse 1.3s ease-in-out infinite; }
+.blender-connection-card > p { margin: 10px 0 14px; color: var(--text-secondary); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.blender-connection-actions button { padding: 7px 12px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--hover-bg); color: var(--text-primary); font: inherit; font-size: 11px; cursor: pointer; }
+.blender-workbench-tasks { display: grid; gap: 7px; margin: 0 18px 22px; }
+.blender-workbench-tasks button { padding: 11px 12px; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; color: var(--text-primary); text-align: left; font: inherit; cursor: pointer; }
+.blender-workbench-tasks button:hover:not(:disabled) { background: var(--hover-bg); }
+.blender-workbench-tasks strong { display: block; font-size: 12px; font-weight: 500; }
+.blender-workbench-tasks span { display: block; margin-top: 5px; color: var(--text-secondary); font-size: 10px; }
+.blender-workbench-settings { margin: 0 18px; border-top: 1px solid var(--border-color); padding-top: 14px; }
+.blender-workbench-settings summary { color: var(--text-secondary); cursor: pointer; font-size: 11px; }
+.blender-workbench-settings form { display: grid; gap: 10px; margin-top: 16px; }
+.blender-workbench-settings label { display: grid; gap: 7px; color: var(--text-secondary); font-size: 11px; }
+.blender-workbench-settings select { min-width: 0; width: 100%; height: 32px; border: 1px solid var(--border-color); border-radius: 5px; padding: 0 8px; background: var(--bg-color); color: var(--text-primary); font: inherit; font-size: 11px; }
+.blender-workbench-settings button { padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; color: var(--text-primary); font: inherit; font-size: 11px; cursor: pointer; }
+.blender-workbench-settings p { color: var(--text-secondary); font-size: 10px; line-height: 1.7; }
+@keyframes blender-connect-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .blender-connection-state i { animation: none !important; } }
+@media (max-width: 900px) { body.blender-mode.agent-open .agent-sidebar-wrapper { position: fixed; top: var(--titlebar-h); bottom: 0; right: 0; height: auto; } body.platform-win32 .blender-workbench-panel { padding-top: 0; } }
