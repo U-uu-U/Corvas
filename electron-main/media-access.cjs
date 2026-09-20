@@ -44,7 +44,14 @@ function collectBoardMediaScope(board = {}) {
 class MediaAccessPolicy {
     constructor({ getScope = () => ({}), userData, managedRoots = [], registryFile, legacyScope = {} } = {}) {
         this.getScope = getScope;
-        const canonical = value => { try { return fs.realpathSync(value); } catch { return path.resolve(value); } };
+        const canonical = value => { try { return fs.realpathSync.native(value); } catch { return path.resolve(value); } };
+        const savedCanonical = value => {
+            const stored = absolutePath(value);
+            try {
+                // Expand OS aliases only; a replaced symlink must not transfer a grant.
+                return pathKey(fs.realpathSync(stored)) === pathKey(stored) ? fs.realpathSync.native(stored) : stored;
+            } catch { return stored; }
+        };
         this.userData = userData ? canonical(userData) : null;
         this.managedRoots = managedRoots.map(canonical);
         this.files = new Set();
@@ -56,8 +63,8 @@ class MediaAccessPolicy {
             try {
                 const saved = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
                 if (saved.version !== 1 || !Array.isArray(saved.files) || !Array.isArray(saved.roots)) throw new Error('Invalid media registry');
-                this.files = new Set(saved.files.map(absolutePath).map(pathKey));
-                this.roots = new Set(saved.roots.map(absolutePath));
+                this.files = new Set(saved.files.map(savedCanonical).map(pathKey));
+                this.roots = new Set(saved.roots.map(savedCanonical));
             } catch (error) {
                 // Only the first upgrade imports legacy references. Corruption must not
                 // turn a renderer-written board into a fresh source of permissions.
@@ -92,7 +99,7 @@ class MediaAccessPolicy {
 
     grant(file, { directory = false, persist = true } = {}) {
         const requested = absolutePath(file);
-        const real = fs.realpathSync(requested);
+        const real = fs.realpathSync.native(requested);
         this._checkSensitive(requested);
         this._checkSensitive(real);
         const stat = fs.statSync(real);

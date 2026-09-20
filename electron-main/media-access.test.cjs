@@ -98,3 +98,31 @@ test('native authorization persists independently; later board edits do not gran
     await fs.writeFile(registryFile, '{broken');
     assert.throws(() => new MediaAccessPolicy({ registryFile, legacyScope: { files: [other] } }), /授权记录/);
 });
+
+test('registry canonicalization does not transfer grants through a replaced directory', async t => {
+    const f = await fixture(t);
+    const registryFile = path.join(f.userData, 'data', 'media-access.v1.json');
+    const policy = new MediaAccessPolicy({ registryFile });
+    policy.grant(f.file);
+    policy.grant(f.media, { directory: true });
+    const outside = path.join(f.root, 'outside');
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, 'image.png'), 'private');
+    await fs.rename(f.media, `${f.media}-original`);
+    await fs.symlink(outside, f.media, process.platform === 'win32' ? 'junction' : 'dir');
+    const restarted = new MediaAccessPolicy({ registryFile });
+    await assert.rejects(restarted.resolve(f.file), /授权/);
+    await assert.rejects(restarted.resolve(path.join(outside, 'image.png')), /授权/);
+});
+
+test('temporarily missing saved grants do not invalidate the registry', async t => {
+    const f = await fixture(t);
+    const registryFile = path.join(f.userData, 'data', 'media-access.v1.json');
+    const policy = new MediaAccessPolicy({ registryFile });
+    policy.grant(f.file);
+    await fs.rename(f.file, `${f.file}.disconnected`);
+    const restarted = new MediaAccessPolicy({ registryFile });
+    await assert.rejects(restarted.resolve(f.file), { code: 'ENOENT' });
+    await fs.rename(`${f.file}.disconnected`, f.file);
+    assert.equal((await restarted.resolve(f.file)).filePath, await fs.realpath(f.file));
+});
