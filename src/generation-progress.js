@@ -90,6 +90,9 @@ export function formatClientGenerationError(value) {
             : Number(httpStatus) === 404 ? '下载文件暂不可用' : '产物下载失败';
         return `${reason}，可在任务记录中继续拉取，无需重新生成${task ? `（任务 ${task}）` : ''}`;
     }
+    if (httpStatus === '404' && /请求参数不受支持|invalid\s+(?:url|request\s+path)/i.test(message)) {
+        return '提交接口地址不存在，请检查 API 地址；程序更新后需要重启以加载最新适配';
+    }
     if (httpStatus) return `${action}：${httpMessages[httpStatus]}${task ? `（任务 ${task}）` : ''}`;
     if (/ERR_CONNECTION|ERR_TIMED_OUT|ENOTFOUND|fetch failed|网络请求失败|连接超时/i.test(message)) {
         return `${action}：网络请求失败，请稍后重试${task ? `（任务 ${task}）` : ''}`;

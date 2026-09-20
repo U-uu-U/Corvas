@@ -15,6 +15,15 @@ test('结构化生成错误使用客户端转换后的文案', () => {
     assert.equal(error.message.includes('token=secret'), false);
 });
 
+test('a submit-path 404 is not described as a missing generated video', () => {
+    const error = generationFailureError({ code: 'RH_INVALID_REQUEST',
+        error: '请求参数不受支持，请检查模型、时长、尺寸和素材数量。（HTTP 404）' });
+    assert.match(error.message, /提交接口地址不存在/);
+    assert.equal(error.message.includes('任务或生成产物不存在'), false);
+    assert.match(formatClientGenerationError('查询视频任务 task_1：HTTP 404'), /查询任务失败：任务或生成产物不存在/);
+    assert.match(formatClientGenerationError('下载生成产物失败：HTTP 404'), /下载文件暂不可用/);
+});
+
 test('portrait rejection metadata survives IPC conversion and does not offer remote recovery', () => {
     const error = generationFailureError({ error: '肖像保护限制', code: 'RH_PORTRAIT_SELF_REQUIRED',
         confirmedFailure: true, retryable: false, requestId: 'trace-id' });
