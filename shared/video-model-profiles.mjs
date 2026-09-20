@@ -2,6 +2,24 @@ import { describeModelPresentation } from './model-presentation.mjs';
 
 export const VIDEO_MODEL_PROFILES = [
     {
+        matchModel: /^ch0107-sd-2\.5-720p$/i,
+        label: 'Seedance 2.5 720p',
+        routeLabel: 'StarFrame CH0107',
+        ratios: ['16:9'],
+        resolutions: ['720p'],
+        durations: Array.from({ length: 27 }, (_, index) => index + 4),
+        durationControl: 'slider',
+        supportsWebSearch: false,
+        supportsCameraFixed: false,
+        supportsGeneratedAudio: false,
+        supportsWatermark: false,
+        referenceLimits: { image: 30, video: 10, audio: 10 },
+        defaultRatio: '16:9',
+        resolveAdaptiveRatio: false,
+        defaultResolution: '720p',
+        defaultDuration: 4
+    },
+    {
         matchModel: /^sd_2\.5_discount_v1$/i,
         label: 'Seedance 2.5',
         routeLabel: 'GlobalAiOpc',
@@ -156,6 +174,10 @@ export function getVideoModelProfile(provider) {
         || DEFAULT_VIDEO_MODEL_PROFILE;
     let host = '';
     try { host = new URL(provider.endpoint).hostname; } catch (_) { /* Unconfigured endpoint. */ }
+    if (/^ch0107-sd-2\.5-720p$/i.test(model) && host === 'api.xzapi.vip') return { ...profile, price: {
+        amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
+        source: 'user configured sale', updatedAt: '2026-09-20T12:00:00Z'
+    } };
     const fixedSeedance = profile.routeGroup === 'seedance25-fixed';
     if (fixedSeedance) {
         profile = { ...profile, routeLabel: /-route1$/i.test(model) ? '线路一' : '线路二', recommended: /-route1$/i.test(model) };

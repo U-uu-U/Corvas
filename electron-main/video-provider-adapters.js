@@ -1,4 +1,5 @@
 const { isGlobalAiOpcModel, globalAiOpcEndpoint } = require('./globalaiopc-video.cjs');
+const { isStarFrameModel, starFrameEndpoint } = require('./starframe-video.cjs');
 
 function isMiniMaxH3Model(model) {
     return /minimax[^a-z0-9]*h3/i.test(String(model || ''));
@@ -155,7 +156,8 @@ function getVideoPayloadError(payload = {}) {
     const message = typeof error === 'string'
         ? error
         : error?.message || payload?.message || payload?.msg || data?.message || result?.message || failure?.message || failure?.msg
-            || failure?.failReason || failure?.fail_reason || failure?.failure_reason || failure?.error_message || failure?.errorMessage || '';
+            || failure?.failReason || failure?.fail_reason || failure?.failure_reason || failure?.error_message || failure?.errorMessage
+            || payload?.metadata?.fail_reason || '';
     const status = getVideoTaskStatus(payload).toLowerCase();
     if (['failed', 'error', 'cancelled', 'canceled', 'rejected'].includes(status)) {
         return String(message || '服务端未提供失败原因').trim();
@@ -319,6 +321,7 @@ function buildUnifiedVideoEndpoint(endpoint) {
 }
 
 function buildVideoGenerationEndpoint(endpoint, model) {
+    if (isStarFrameModel(model)) return starFrameEndpoint(endpoint);
     if (isGlobalAiOpcModel(model)) return globalAiOpcEndpoint(endpoint);
     if (isSeedanceVideoModel(model)) {
         try {

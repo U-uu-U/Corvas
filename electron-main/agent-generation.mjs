@@ -288,9 +288,19 @@ export class AgentGeneration {
         }
         if (!steps.length || steps.length > 20) throw error('BATCH_LIMIT', '每批次需要 1 到 20 次媒体生成');
         const currencies = new Set(steps.map(s => s.price?.currency).filter(Boolean));
-        const priceKnown = steps.every(s => s.price?.unit === 'request') && currencies.size === 1;
+        const costs = steps.map(step => {
+            const price = step.price;
+            if (!price || !Number.isFinite(price.amount) || price.amount < 0) return null;
+            if (price.unit === 'request') return price.amount;
+            const seconds = Number(step.config?.duration);
+            if (price.unit === 'second' && step.kind === 'video' && Number.isFinite(seconds) && seconds > 0) {
+                return Number((price.amount * seconds).toFixed(6));
+            }
+            return null;
+        });
+        const priceKnown = costs.every(Number.isFinite) && currencies.size === 1;
         return { summary: String(input.summary || '生成所选节点'), steps, priceKnown,
-            estimatedCost: priceKnown ? steps.reduce((sum, step) => sum + step.price.amount, 0) : null,
+            estimatedCost: priceKnown ? Number(costs.reduce((sum, value) => sum + value, 0).toFixed(6)) : null,
             currency: priceKnown ? [...currencies][0] : null };
     }
     _pathFor(node) { return getGeneratorResultEntries(node)[0]?.filePath || node.filePath || ''; }

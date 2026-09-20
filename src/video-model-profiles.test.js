@@ -5,6 +5,27 @@ import { resolveModelConfigEntry, toVideoProfileOverrides } from './model-config
 import { canUseTextProvider, inferProviderCapability } from './provider-capabilities.js';
 import { DEFAULT_VIDEO_MODEL_PROFILE, getVideoModelProfile, describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
 
+test('StarFrame keeps the configured per-second sale on its exact host with or without a remote catalog', () => {
+    const provider = { model: 'ch0107-sd-2.5-720p', endpoint: 'https://api.xzapi.vip/v1', name: 'StarFrame API' };
+    const fallback = getVideoModelProfile(provider);
+    const { entry } = resolveModelConfigEntry(DEFAULT_MODEL_CONFIG, provider);
+    const configured = toVideoProfileOverrides(DEFAULT_MODEL_CONFIG, entry, provider);
+    for (const profile of [fallback, configured]) {
+        assert.equal(profile.price.amount, 1.06);
+        assert.equal(profile.price.unit, 'second');
+        assert.equal(profile.price.currency, 'CNY');
+        assert.deepEqual(profile.referenceLimits, { image: 30, video: 10, audio: 10 });
+        assert.deepEqual(profile.resolutions, ['720p']);
+        assert.equal(profile.durations[0], 4);
+        assert.equal(profile.durations.at(-1), 30);
+    }
+    const foreign = { ...provider, endpoint: 'https://api.xzapi.vip.example/v1' };
+    assert.equal(getVideoModelProfile(foreign).price, undefined);
+    assert.equal(toVideoProfileOverrides(DEFAULT_MODEL_CONFIG, entry, foreign).price, undefined);
+    assert.equal(inferProviderCapability({ model: provider.model }), 'video');
+    assert.equal(canUseTextProvider({ model: provider.model }), false);
+});
+
 test('GlobalAiOpc retains native controls with built-in config and an older remote catalog', () => {
     const provider = { model: 'sd_2.5_discount_v1', endpoint: 'https://zcbservice.aizfw.cn/kyyReactApiServer', name: 'GlobalAiOpc' };
     const fallback = getVideoModelProfile(provider);

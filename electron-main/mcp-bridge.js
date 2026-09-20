@@ -8,6 +8,7 @@ const { app, net } = require('electron');
 const { PlanService, DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
 const { WORKFLOW_TOOL_DEFINITIONS } = require('../shared/workflow-tools.cjs');
 const { isGlobalAiOpcModel, buildGlobalAiOpcBody, GlobalAiOpcAssets, LIMITS: GLOBALAIOPC_LIMITS } = require('./globalaiopc-video.cjs');
+const { isStarFrameModel, buildStarFrameBody, starFrameContentUrl, STARFRAME_LIMITS } = require('./starframe-video.cjs');
 const {
     appendMidjourneyParameters,
     buildImageEditMultipart,
@@ -1050,9 +1051,9 @@ class FlowCanvasBridge {
         const sourceContext = collectImageSourceReferences(data, planService, body);
         const videoSourceContext = collectVideoSourceReferences(data, body.videoReferences);
         const audioSourceContext = collectAudioSourceReferences(data, body.audioReferences);
-        if (isGlobalAiOpcModel(body?.providerConfig?.model || body?.model)
+        if ((isGlobalAiOpcModel(body?.providerConfig?.model || body?.model) || isStarFrameModel(body?.providerConfig?.model || body?.model))
             && [...sourceContext.missing, ...videoSourceContext.missing, ...audioSourceContext.missing].length) {
-            throw new Error('GlobalAiOpc 参考素材不存在或格式不支持，请重新选择后再提交');
+            throw new Error('参考素材不存在或格式不支持，请重新选择后再提交');
         }
         const result = await tryGenerateWithOpenAIVideo(prompt, targetDir, {
             ...body,
@@ -2914,8 +2915,9 @@ function sleep(ms, signal = null) {
 }
 
 async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialResponse, options = {}) {
-    const resultUrl = payload => isGlobalAiOpcModel(options.model) && getVideoTaskStatus(payload).toLowerCase() !== 'completed'
-        ? '' : getVideoResultUrl(payload);
+    const resultUrl = payload => isStarFrameModel(options.model)
+        ? starFrameContentUrl(generationEndpoint, getVideoTaskId(payload) || taskId, payload)
+        : isGlobalAiOpcModel(options.model) && getVideoTaskStatus(payload).toLowerCase() !== 'completed' ? '' : getVideoResultUrl(payload);
     const directUrl = resultUrl(initialResponse);
     if (directUrl) {
         options.onProgress?.({ stage: 'download' });
@@ -3017,6 +3019,11 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
         transientFailures = 0;
         const payloadError = getVideoPayloadError(payload);
         if (payloadError && !getVideoResultUrl(payload)) {
+            if (isStarFrameModel(options.model) && getVideoTaskStatus(payload) === 'failed') {
+                throw Object.assign(new Error(String(payloadError).split(apiKey).join('[redacted]')), {
+                    code: 'UPSTREAM_TASK_FAILED', confirmedFailure: true, taskId: currentTaskId
+                });
+            }
             const mapped = mapLocalError(200, payload, { query: true, terminal: isFailedVideoStatus(getVideoTaskStatus(payload)), taskId: currentTaskId });
             throw Object.assign(new Error(mapped.error), mapped,
                 { code: mapped.code === 'RH_TASK_FAILED' ? 'UPSTREAM_TASK_FAILED' : mapped.code });
@@ -3063,9 +3070,9 @@ function videoExtensionFromUrl(url, contentType = '') {
     return '.mp4';
 }
 
-async function downloadVideo(url, targetDir, prompt, signal = null) {
+async function downloadVideo(url, targetDir, prompt, signal = null, headers = undefined) {
     const { buffer, contentType, finalUrl } = await downloadGeneratedBuffer(url, {
-        signal,
+        signal, headers,
         accept: 'video/*,application/octet-stream;q=0.9,*/*;q=0.1'
     });
     throwIfGenerationCanceled(signal);
@@ -3086,7 +3093,12 @@ async function downloadVideoWithAutoRefresh(completed, targetDir, prompt, option
     const wait = options.wait || sleep;
     while (true) {
         try {
-            return await download(current.url, targetDir, prompt, options.signal);
+            const starFrame = isStarFrameModel(options.model);
+            const url = starFrame ? starFrameContentUrl(options.generationEndpoint, taskId,
+                current.payload || { status: 'completed', metadata: { url: current.url } }) : current.url;
+            if (!url) throw new Error('视频尚未完成，不能下载');
+            return await download(url, targetDir, prompt, options.signal,
+                starFrame ? { Authorization: `Bearer ${options.apiKey}` } : undefined);
         } catch (error) {
             const status = Number(error?.status);
             if (!taskId || !GENERATED_MEDIA_AUTO_REFRESH_STATUSES.has(status)
@@ -3244,7 +3256,12 @@ async function downloadRemoteBinaryOverHttp1(
                     fail(new Error(`产物下载重定向超过 ${GENERATED_MEDIA_DOWNLOAD_REDIRECT_LIMIT} 次`));
                     return;
                 }
-                downloadRemoteBinaryOverHttp1(new URL(location, url).toString(), signal, accept, requestHeaders, redirects + 1)
+                const nextUrl = new URL(location, url);
+                const nextHeaders = { ...requestHeaders };
+                if (nextUrl.origin !== url.origin) {
+                    for (const key of Object.keys(nextHeaders)) if (/^(authorization|cookie)$/i.test(key)) delete nextHeaders[key];
+                }
+                downloadRemoteBinaryOverHttp1(nextUrl.toString(), signal, accept, nextHeaders, redirects + 1)
                     .then(value => finish(resolve, value), fail);
                 return;
             }
@@ -3310,7 +3327,8 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         const isMiniMaxH3 = isMiniMaxH3Model(model);
         const isSeedance = isSeedanceVideoModel(model);
         const isGlobalAiOpc = isGlobalAiOpcModel(model);
-        const referenceLimits = isGlobalAiOpc ? GLOBALAIOPC_LIMITS : isSeedance ? seedanceReferenceLimits(model) : { image: 9, video: 3, audio: 3 };
+        const isStarFrame = isStarFrameModel(model);
+        const referenceLimits = isStarFrame ? STARFRAME_LIMITS : isGlobalAiOpc ? GLOBALAIOPC_LIMITS : isSeedance ? seedanceReferenceLimits(model) : { image: 9, video: 3, audio: 3 };
         const body = { model, prompt };
         const resolution = String(options.resolution || '').trim();
         let ratio = String(options.ratio || '').trim();
@@ -3328,7 +3346,11 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         }
         const globalAiOpcParams = { model, prompt, duration: options.duration ?? 4, aspectRatio: ratio || '16:9',
             resolution: resolution || '720p', seed: options.seed ?? -1, generateAudio: options.generateAudio ?? true };
-        if (isGlobalAiOpc) {
+        const starFrameParams = { model, prompt, clientTaskId: options.clientTaskId, duration: options.duration ?? 4,
+            resolution: resolution || '720p', aspectRatio: ratio || undefined };
+        if (isStarFrame) {
+            Object.assign(body, buildStarFrameBody(starFrameParams));
+        } else if (isGlobalAiOpc) {
             Object.assign(body, buildGlobalAiOpcBody(globalAiOpcParams));
         } else if (isMiniMaxH3) {
             Object.assign(body, buildMiniMaxH3RequestBody({
@@ -3387,7 +3409,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 }
             }
         }
-        const uploadReferences = isGlobalAiOpc ? uploadTemporaryReferences : uploadVideoReferencesOrUseOriginals;
+        const uploadReferences = isGlobalAiOpc || isStarFrame ? uploadTemporaryReferences : uploadVideoReferencesOrUseOriginals;
         const imageUrls = await uploadReferences(
             images.map(image => image.url),
             '参考图片',
@@ -3409,7 +3431,10 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             options.onProgress
         );
         throwIfGenerationCanceled(options.signal);
-        if (isGlobalAiOpc) {
+        if (isStarFrame) {
+            Object.assign(body, buildStarFrameBody({ ...starFrameParams, referenceImages: imageUrls,
+                referenceVideos: referenceVideoUrls, referenceAudios: referenceAudioUrls }));
+        } else if (isGlobalAiOpc) {
             const assets = await getGlobalAiOpcAssets().prepare({ endpoint, apiKey, imageUrls,
                 videoUrls: referenceVideoUrls, audioUrls: referenceAudioUrls, signal: options.signal, onProgress: options.onProgress });
             Object.assign(body, buildGlobalAiOpcBody({ ...globalAiOpcParams, ...assets }));
@@ -3454,7 +3479,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         let recoveringSubmission = false;
         options.onProgress?.({ stage: 'submit' });
         console.info('[FlowCanvasBridge] Video request:', JSON.stringify(summarizeVideoRequest(endpoint, body, recoveryId)));
-        const submissionTimeout = isGlobalAiOpc ? createLinkedAbortController(options.signal, 45000) : null;
+        const submissionTimeout = isGlobalAiOpc || isStarFrame ? createLinkedAbortController(options.signal, isStarFrame ? 120000 : 45000) : null;
         try {
             response = await net.fetch(endpoint, {
                 method: 'POST',
@@ -3462,15 +3487,18 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                     Authorization: `Bearer ${apiKey}`,
                     'Content-Type': 'application/json',
                     Accept: 'application/json',
-                    ...(!isGlobalAiOpc ? { 'X-Playground': '1', 'X-Log-Id': recoveryId } : {})
+                    ...(!isGlobalAiOpc && !isStarFrame ? { 'X-Playground': '1', 'X-Log-Id': recoveryId } : {})
                 },
                 body: JSON.stringify(body),
-                redirect: isGlobalAiOpc ? 'error' : 'follow',
+                redirect: isGlobalAiOpc || isStarFrame ? 'error' : 'follow',
                 signal: submissionTimeout?.controller.signal || options.signal
             });
             text = await response.text();
         } catch (error) {
             throwIfGenerationCanceled(options.signal);
+            if (isStarFrame) throw Object.assign(new Error(`StarFrame 提交响应中断，结果尚未确定；客户端任务 ID 为 ${body.client_task_id}，请保留此 ID 核对原任务，不能当作上游 task_id 查询`), {
+                code: 'VIDEO_SUBMISSION_UNKNOWN', submissionUnknown: true, confirmedFailure: false, requestId: body.client_task_id
+            });
             if (isGlobalAiOpc) throw Object.assign(new Error('GlobalAiOpc 提交响应中断，任务结果尚未确定；请先核对供应商任务记录，不会使用本地编号冒充任务 ID 或自动重发'), {
                 code: 'VIDEO_SUBMISSION_UNKNOWN', submissionUnknown: true, confirmedFailure: false, requestId: recoveryId
             });
@@ -3487,6 +3515,9 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             console.warn('[FlowCanvasBridge] Video submit response disconnected; recovering by log ID:', recoveryId);
         } finally { submissionTimeout?.cleanup(); }
         if (response && !response.ok) {
+            if (isStarFrame && [409, 410].includes(response.status)) return { success: false,
+                error: `StarFrame 任务已存在或正在恢复产物，请核对原任务；client_task_id=${body.client_task_id}`,
+                code: 'VIDEO_SUBMISSION_UNKNOWN', submissionUnknown: true, confirmedFailure: false, requestId: body.client_task_id };
             const mapped = publicErrorResult(text);
             if (mapped) return mapped;
             const serverTraceId = response.headers.get('x-log-id')

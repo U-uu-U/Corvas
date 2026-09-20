@@ -82,6 +82,20 @@ async function setup(t, { items = [op('image')], connections = [], providers, mo
 }
 
 describe('AgentGeneration planning', () => {
+    test('StarFrame estimates per-second sale using approved duration and expanded count', async t => {
+        const p = { ...provider('videos', 'video', 'ch0107-sd-2.5-720p'), endpoint: 'https://api.xzapi.vip/v1' };
+        const h = await setup(t, { providers: [p], items: [op('video', 'video', { count: 2, duration: 5 })] });
+        const run = h.plan(['video']);
+        assert.equal(run.plan.priceKnown, true);
+        assert.equal(run.plan.estimatedCost, 10.6);
+        assert.equal(run.plan.currency, 'CNY');
+        assert.equal(run.steps[0].price.unit, 'second');
+        assert.equal(run.steps[0].price.amount, 1.06);
+        await h.execute(run.steps[0], run);
+        assert.equal(h.requests[0].body.duration, 5);
+        assert.equal(h.requests[0].body.providerConfig.model, p.model);
+        assert.equal(h.requests[0].body.price, undefined);
+    });
     test('runtime text resolver rejects a stale role on a dedicated image model', async t => {
         const h = await setup(t, { providers: [provider('bad-text','text','gpt-image-2'),provider('text','text','gpt-5.5')] });
         assert.throws(() => h.generation.resolveProvider({ providerId: 'bad-text' }, 'text'), { code: 'PROVIDER_REQUIRED' });

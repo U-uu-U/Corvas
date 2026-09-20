@@ -9,6 +9,7 @@
 "RavenHash视频","MiniMax H3兼容线路","minimax-h3","model; prompt; resolution; duration; aspect_ratio; first_image; last_image; reference_images; reference_videos; reference_audios","提示词必填且最多5000字；4-15秒；480p/768p/1080p/2K/4K；最多9图、3视频、3音频；adaptive按首张图匹配比例"
 "MiniMax视频","H3按秒线路","minimax-h3","model; prompt; seconds; workflow_id; size; aspect_ratio; images; reference_videos; reference_audios","4-15秒；480p/768p/1080p/2K/4K；最多9图、3视频、3音频；自动选择文生视频、首尾帧或多参考工作流"
 "MiniMax视频","H3原生任务中心","MiniMax-H3-c1","model; prompt; resolution=720p; duration; aspect_ratio; reference_images; reference_audios","当前固定发送720p；支持参考图片和音频；不支持参考视频"
+"StarFrame视频","CH0107按秒线路","ch0107-sd-2.5-720p","model; prompt; client_task_id; mode; duration; aspect_ratio; resolution; references","用户指定售价CNY1.06/秒；720p、4-30秒；最多30图/10视频/10音频，合计不超过50；references模式、公网URL；必传client_task_id；完成后鉴权下载content；比例枚举未公开"
 "GlobalAiOpc视频","Seedance2.5官方折扣版","sd_2.5_discount_v1","model; prompt; duration; aspect_ratio; resolution; seed; generate_audio; reference_images; reference_videos; reference_audios; first_image; last_image","4-30秒；480p/720p/1080p；最多30图/10视频/10音频；图片小于30MB且宽高在300-6000像素开区间、宽高比在0.4-2.5开区间；音视频各自总时长不超过30秒；素材审核ACTIVE后提交；不支持Base64；价格待确认"
 "文字模型","OpenAI兼容线路","gpt-5.6-terra / gpt-5.5","model; messages; tools; stream","当前没有维护模型专属上下文窗口和最大输出Token限制表"
 "文字模型","Anthropic线路","claude-opus-5","model; messages; tools; stream","当前没有维护模型专属上下文窗口和最大输出Token限制表"

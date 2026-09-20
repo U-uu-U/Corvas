@@ -1836,6 +1836,104 @@ export const DEFAULT_MODEL_CONFIG = {
             "notes": "当前固定发送720p；支持参考图片和音频；不支持参考视频"
         },
         {
+            "id": "starframe.ch0107-sd-2.5-720p",
+            "label": "ch0107-sd-2.5-720p",
+            "presentation": {
+                "label": "Seedance 2.5 720p",
+                "routeLabel": "StarFrame CH0107"
+            },
+            "pricing": {
+                "status": "known",
+                "hosts": [
+                    "api.xzapi.vip"
+                ],
+                "amount": 1.06,
+                "currency": "CNY",
+                "unit": "second",
+                "kind": "sale",
+                "source": "user configured sale",
+                "updatedAt": "2026-09-20T12:00:00Z"
+            },
+            "kind": "video",
+            "channel": "StarFrame视频",
+            "route": "CH0107按秒线路",
+            "priority": 150,
+            "match": {
+                "model": [
+                    "^ch0107-sd-2\\.5-720p$"
+                ]
+            },
+            "parameters": {
+                "accepts": [
+                    "model",
+                    "prompt",
+                    "client_task_id",
+                    "mode",
+                    "duration",
+                    "aspect_ratio",
+                    "resolution",
+                    "references"
+                ],
+                "required": [
+                    "model",
+                    "prompt",
+                    "client_task_id",
+                    "mode"
+                ]
+            },
+            "options": {
+                "duration": {
+                    "type": "range",
+                    "min": 4,
+                    "max": 30,
+                    "integer": true,
+                    "unit": "second",
+                    "default": 4
+                },
+                "ratio": {
+                    "type": "unknown",
+                    "reason": "供应商未公开该模型比例枚举，当前界面使用文档示例16:9"
+                },
+                "resolutionTier": {
+                    "type": "enum",
+                    "values": [
+                        "720p"
+                    ],
+                    "default": "720p"
+                }
+            },
+            "capabilities": {
+                "referenceImages": {
+                    "supported": true,
+                    "max": 30
+                },
+                "referenceVideos": {
+                    "supported": true,
+                    "max": 10
+                },
+                "referenceAudios": {
+                    "supported": true,
+                    "max": 10
+                },
+                "generatedAudio": {
+                    "supported": false
+                },
+                "webSearch": {
+                    "supported": false
+                },
+                "cameraFixed": {
+                    "supported": false
+                },
+                "watermark": {
+                    "supported": false
+                }
+            },
+            "prompt": {
+                "required": true
+            },
+            "notes": "用户指定售价CNY1.06/秒；720p、4-30秒；最多30图/10视频/10音频，合计不超过50；references模式、公网URL；必传client_task_id；完成后鉴权下载content；比例枚举未公开"
+        },
+        {
             "id": "globalaiopc.sd-2.5-discount-v1",
             "label": "sd_2.5_discount_v1",
             "presentation": {
