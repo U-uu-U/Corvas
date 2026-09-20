@@ -1,6 +1,10 @@
 # 视频渠道选择
 
-2026-09-20 调整 Corvas 视频菜单：MiniMax H3 保持独立；原“主播视频”改为“Seedance 2.5 推荐渠道”；`sd2.5-route1` 单独收进“Seedance 2.5 备用渠道”；海外 2.0 Fast、Mini、Pro 收进“Seedance 2.0 推荐渠道”，说明为“可NSFW 无限制”，排在最后。
+2026-09-20 调整 Corvas 视频菜单：MiniMax H3 保持独立；原“主播视频”改为“Seedance 2.5 推荐渠道”；`sd2.5-route1` 单独收进“Seedance 2.5 备用渠道”；海外 2.0 Fast、Mini、Pro 收进“Seedance 2.0 推荐渠道”，排在最后。
+
+2026-09-21 所有渠道组的小字统一为“当前使用：模型名称”。选中组内模型后显示所选模型的完整名称，未选中的组显示组内首项。模型参数和价格继续显示在展开后的模型条目中；2.0 的“可NSFW 无限制”保留为搜索关键词。
+
+备用渠道 `sd2.5-route1` 的显示名称为“Seedance 2.5 固定 30 秒（过人脸）”。
 
 推荐组依次显示 `sd2.5`（电商效果优化）、`seedance-2.5-pro`（满血满参）、`seedance_v2.5`、`seedance_v2.0-933`。模型 ID、价格、参数和账户绑定不变。展示由 `shared/video-model-profiles.mjs` 的 `getVideoModelGroup` 统一覆盖旧 CONFIG 展示；同组仍按 API 账户隔离，单条备用渠道也保留分组。排序和组说明是本地菜单元数据，不改变远端 CONFIG schema。
 

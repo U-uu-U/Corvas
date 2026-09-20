@@ -68,13 +68,17 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             ['SD2.5 固定 30 秒（电商效果优化）', 'Seedance 2.5 Pro（满血满参）', 'HM-Seedance 2.5', 'HM-Seedance 2.0 933']);
         assert.equal(await backup.locator('.generation-composer-model-option').count(), 1);
         assert.deepEqual(await version2.locator('.generation-composer-model-option strong').allTextContents(), ['Seedance 2.0 Fast', 'Seedance 2.0 Mini', 'Seedance 2.0 Pro']);
-        assert.equal(await version2.locator('.generation-composer-route-trigger small').innerText(), '可NSFW 无限制');
+        assert.deepEqual(await groups.locator('.generation-composer-route-trigger small').allTextContents(), [
+            '当前使用：SD2.5 固定 30 秒（电商效果优化）',
+            '当前使用：Seedance 2.5 固定 30 秒（过人脸）',
+            '当前使用：Seedance 2.0 Fast'
+        ]);
         assert.equal(await page.locator('.generation-composer-model-option').count(), 9);
         const output = path.join(__dirname, '../output/playwright');
         await fs.mkdir(output, { recursive: true });
         const openGroup = async group => {
             await group.locator('.generation-composer-route-trigger').hover();
-            await group.locator('.generation-composer-route-panel').evaluate(element => Promise.all(element.getAnimations().map(animation => animation.finished)));
+            await group.locator('.generation-composer-route-panel').evaluate(element => Promise.allSettled(element.getAnimations().map(animation => animation.finished)));
         };
         for (const [label, width] of [['desktop', 1000], ['compact', 360]]) {
             await app.evaluate(({ BrowserWindow }, width) => {
@@ -85,6 +89,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             for (const [name, group] of [['recommended', recommended], ['backup', backup], ['version2', version2]]) {
                 await openGroup(group);
                 const bounds = await group.locator('.generation-composer-route-panel').boundingBox();
+                assert.ok(bounds, `${label} ${name} panel must remain visible`);
                 assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width + 1);
                 if (width < 600) {
                     const trigger = await group.locator('.generation-composer-route-trigger').boundingBox();
@@ -108,6 +113,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             const selected = await page.evaluate(() => window.channelFixture.data.config);
             assert.equal(selected.model, model); assert.equal(selected.sourceProviderId, 'relay');
             await page.evaluate(() => window.channelFixture.fixture._showGenerationComposerModelMenu('node', {}));
+            assert.equal(await group.locator('.generation-composer-route-trigger small').innerText(), `当前使用：${selected.routeLabel}`);
         }
         const search = page.locator('.generation-composer-popover-search input');
         await search.fill('备用渠道');

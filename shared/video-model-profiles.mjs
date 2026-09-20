@@ -220,7 +220,7 @@ export function getVideoModelGroup(provider) {
     }
     if (host === 'art.ravenhash.org' && model === 'sd2.5-route1') {
         return { routeGroup: 'seedance25-backup', routeGroupLabel: 'Seedance 2.5 备用渠道',
-            routeLabel: 'Seedance 2.5 固定 30 秒', routeModelLabel: provider.model,
+            routeLabel: 'Seedance 2.5 固定 30 秒（过人脸）', routeModelLabel: provider.model,
             routeGroupOrder: 20, routeGroupAlways: true, recommended: false };
     }
     const labels = {

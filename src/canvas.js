@@ -9437,7 +9437,8 @@ export class CanvasManager {
                     trigger.classList.toggle('selected', !!current);
                     trigger.innerHTML = '<span><strong></strong><small></small></span><svg class="flow-icon" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-arrow-up"></use></svg>';
                     trigger.querySelector('strong').textContent = groupLabel;
-                    trigger.querySelector('small').textContent = row[0].routeGroupDescription || (current || row[0]).description || current?.routeLabel || row[0].name || '视频';
+                    const displayedProvider = current || row[0];
+                    trigger.querySelector('small').textContent = `当前使用：${displayedProvider.routeLabel || displayedProvider.modelLabel || displayedProvider.model}`;
                     const panel = document.createElement('div');
                     panel.className = 'generation-composer-route-panel';
                     panel.setAttribute('popover', 'manual');
