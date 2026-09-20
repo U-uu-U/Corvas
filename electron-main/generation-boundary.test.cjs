@@ -43,11 +43,11 @@ test('generated and checkpointed files receive persistent preview access in a ne
     const bridge = new Bridge({ store: { load: () => ({ items: [] }) }, recoveryDirectory: path.join(profile, 'records'),
         registerMediaFile: file => policy.grant(file) });
     bridge._rememberResult({ clientTaskId: 'created', kind: 'video' }, { filePath: output, mediaType: 'video' });
-    assert.equal((await policy.resolve(output)).filePath, output);
+    assert.equal((await policy.resolve(output)).filePath, await fs.promises.realpath(output));
     bridge.recoveryStore.update('cached', { kind: 'video', result: { filePath: cached, mediaType: 'video' }, state: 'downloaded' });
     bridge.attachRecoveredGeneration = async () => ({ nodeId: 'node' });
     await bridge.recoverGenerationFromRenderer({ clientTaskId: 'cached', kind: 'video' });
     const restarted = new MediaAccessPolicy(settings);
-    assert.equal((await restarted.resolve(cached)).filePath, cached);
-    assert.equal((await restarted.resolve(output)).filePath, output);
+    assert.equal((await restarted.resolve(cached)).filePath, await fs.promises.realpath(cached));
+    assert.equal((await restarted.resolve(output)).filePath, await fs.promises.realpath(output));
 });
