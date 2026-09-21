@@ -6,6 +6,8 @@
 
 备用渠道 `sd2.5-route1` 的显示名称为“Seedance 2.5 固定 30 秒（过人脸）”。
 
+2026-09-21 后续调整：画布与侧栏模型说明只显示能力参数，不显示价格；Agent 计划卡也不显示单价、预计费用或未知费用。结构化计费元数据保留，新站单价以本次代理分成调价为准，见 `docs/tkeapi-deployment.md`。
+
 推荐组依次显示 `sd2.5`（电商效果优化）、`seedance-2.5-pro`（满血满参）、`seedance_v2.5`、`seedance_v2.0-933`。模型 ID、价格、参数和账户绑定不变。展示由 `shared/video-model-profiles.mjs` 的 `getVideoModelGroup` 统一覆盖旧 CONFIG 展示；同组仍按 API 账户隔离，单条备用渠道也保留分组。排序和组说明是本地菜单元数据，不改变远端 CONFIG schema。
 
 `shared/video-generation-availability.mjs` 暂停以下主机与模型的新提交，并同步过滤画布菜单和 Agent 模型列表：

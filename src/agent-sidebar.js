@@ -1260,8 +1260,8 @@ export class AgentSidebar {
             if (profile?.label && profile.label !== '未收录模型') name.textContent = profile.label;
             if (profile?.routeLabel) name.textContent = `${profile.routeLabel} · ${name.textContent}`;
             meta.textContent = kind === 'video'
-                ? describeVideoModelProfile(profile) || provider.name || '未命名 API'
-                : describeModelPresentation(profile, provider.name || '未命名 API');
+                ? describeVideoModelProfile(profile, { includePrice: false }) || provider.name || '未命名 API'
+                : describeModelPresentation(profile, provider.name || '未命名 API', { includePrice: false });
             if (kind === 'video') meta.className = 'generation-composer-model-description';
             copy.append(name, meta);
             const check = document.createElement('span');
@@ -4161,7 +4161,9 @@ export class AgentSidebar {
                     routeModelLabel: profile?.routeModelLabel || '',
                     recommended: profile?.recommended === true,
                     modelLabel: profile?.label || '',
-                    description: kind === 'video' ? describeVideoModelProfile(profile) : describeModelPresentation(profile),
+                    description: kind === 'video'
+                        ? describeVideoModelProfile(profile, { includePrice: false })
+                        : describeModelPresentation(profile, '', { includePrice: false }),
                     model: provider.model || ''
                 };
             });

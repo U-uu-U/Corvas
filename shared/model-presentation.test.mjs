@@ -93,6 +93,19 @@ test('image and text display metadata use the same projection without exposing e
     }
 });
 
+test('canvas descriptions omit sale and unknown prices without changing structured pricing', () => {
+    for (const price of [sale, null]) {
+        const profile = { description: '720p；4-30 秒', price };
+        const before = structuredClone(profile);
+        assert.equal(describeModelPresentation(profile, '', { includePrice: false }), '720p；4-30 秒');
+        assert.equal(describeVideoModelProfile(profile, { includePrice: false }), '720p；4-30 秒');
+        assert.deepEqual(profile, before);
+        assert.equal(describeModelPresentation({ price }, 'Model details', { includePrice: false }), 'Model details');
+        assert.equal(describeVideoModelProfile({ price, resolutions: ['720p'], durations: [30] }, { includePrice: false }),
+            '720p；固定 30 秒');
+    }
+});
+
 test('schema rejects malformed prices, missing scope, costs and unexpected display fields', () => {
     const invalid = [
         { pricing: { ...sale, currency: 'RMB' } }, { pricing: { ...sale, amount: -1 } },

@@ -15,7 +15,8 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         const providers = models.map(model => {
             const provider = { id: model, sourceProviderId: 'relay', endpoint: 'https://art.ravenhash.org/v1', name: 'RavenHash', model };
             const presentation = { ...getVideoModelProfile(provider), ...getVideoModelGroup(provider) };
-            return { ...provider, ...presentation, modelLabel: presentation.label, description: describeVideoModelProfile(presentation) };
+            return { ...provider, ...presentation, modelLabel: presentation.label,
+                description: describeVideoModelProfile(presentation, { includePrice: false }) };
         }).filter(isVideoGenerationAvailable);
         const env = { ...process.env, FLOW_MCP_SMOKE_PROFILE: profile };
         delete env.ELECTRON_RUN_AS_NODE;
@@ -56,7 +57,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await page.waitForFunction(() => getComputedStyle(document.querySelector('.generation-composer-route-panel')).opacity === '1');
         const pro = group.locator('.generation-composer-model-option').filter({ hasText: 'Seedance 2.5 Pro' });
         assert.equal(await pro.count(), 1);
-        assert.match(await pro.innerText(), /1\.06\/秒/);
+        assert.doesNotMatch(await pro.innerText(), /¥|US\$|价格|费用/);
         const output = path.join(__dirname, '../output/playwright');
         await fs.mkdir(output, { recursive: true });
         await page.screenshot({ path: path.join(output, 'zhubo-pro-group.png') });
@@ -66,7 +67,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         assert.equal(selected.sourceProviderId, 'relay');
         assert.deepEqual(selected.resolutions, ['480p', '720p']);
         assert.deepEqual(selected.referenceLimits, { image: 30, video: 10, audio: 10 });
-        console.log('Zhubo model picker passed: four available recommended models, Pro selection, CNY 1.06/second, resolution and reference limits.');
+        console.log('Zhubo model picker passed: four available recommended models, Pro selection, hidden prices, resolution and reference limits.');
     } finally {
         await app?.close();
         const relative = path.relative(os.tmpdir(), profile);

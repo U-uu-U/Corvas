@@ -27,6 +27,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         optionsFixture._getProviderPresentation = provider => ({ ...getVideoModelProfile(provider), ...getVideoModelGroup(provider) });
         const providers = optionsFixture.getGenerationProviderOptions('video');
         assert.equal(providers.length, 9);
+        assert.ok(providers.every(provider => !/¥|US\$|价格|费用/.test(provider.description)));
         const env = { ...process.env, FLOW_MCP_SMOKE_PROFILE: profile };
         delete env.ELECTRON_RUN_AS_NODE;
         app = await electron.launch({ executablePath: require('electron'), args: [path.join(__dirname, 'mcp-client-smoke-entry.cjs')], env });
@@ -74,6 +75,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             '当前使用：Seedance 2.0 Fast'
         ]);
         assert.equal(await page.locator('.generation-composer-model-option').count(), 9);
+        assert.doesNotMatch(await page.locator('.generation-composer-model-options').textContent(), /¥|US\$|价格|费用/);
         const output = path.join(__dirname, '../output/playwright');
         await fs.mkdir(output, { recursive: true });
         const openGroup = async group => {
@@ -124,7 +126,34 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         assert.equal(await page.locator('.generation-composer-model-option').count(), 3);
         await search.fill('301010');
         assert.equal(await page.locator('.generation-composer-model-option').count(), 0);
-        console.log('Video channel picker passed: grouping, labels, order, pause filtering, single-model group, search, keyboard selection and compact layout.');
+        await page.evaluate(() => window.channelFixture.fixture._closeGenerationComposerPopover(window.channelFixture.fixture._generationComposer));
+        const runtimeBundle = await require('esbuild').build({
+            entryPoints: [path.join(__dirname, '../src/agent-runtime-view.js')], bundle: true,
+            format: 'iife', globalName: 'RuntimePriceSmoke', write: false
+        });
+        await page.addScriptTag({ content: runtimeBundle.outputFiles[0].text });
+        const runtimeStates = await page.evaluate(() => {
+            const card = window.RuntimePriceSmoke.createRuntimeCard({ onAction: async () => {} });
+            card.root.style.cssText = 'position:fixed;left:10px;top:24px;width:320px;background:#202124;padding:16px;z-index:999999';
+            document.body.append(card.root);
+            const price = { kind: 'sale', amount: 1.25, currency: 'CNY', unit: 'second', source: 'smoke' };
+            return [price, null].map(price => {
+                const plan = { kind: 'generation', version: 1, summary: '生成视频', priceKnown: Boolean(price),
+                    estimatedCost: price ? 5 : 0, currency: 'CNY',
+                    steps: [{ title: '生成视频', kind: 'video', model: 'seedance-2.5-pro', count: 1, price }] };
+                const before = JSON.stringify(plan);
+                card.update({ id: 'price-smoke', status: 'awaiting_confirmation', plan, events: [] });
+                return { text: card.root.textContent, detail: card.root.querySelector('.agent-runtime-steps small').textContent,
+                    unchanged: before === JSON.stringify(plan) };
+            });
+        });
+        for (const state of runtimeStates) {
+            assert.doesNotMatch(state.text, /¥|US\$|CNY|价格|费用/);
+            assert.equal(state.detail, 'seedance-2.5-pro · 数量 1');
+            assert.equal(state.unchanged, true, 'Rendering must preserve structured billing data');
+        }
+        await page.screenshot({ path: path.join(output, 'video-channels-runtime-no-prices.png'), animations: 'disabled' });
+        console.log('Video channel picker passed: grouping, hidden model and plan prices, labels, order, pause filtering, single-model group, search, keyboard selection and compact layout.');
     } finally {
         await app?.close();
         const relative = path.relative(os.tmpdir(), profile);

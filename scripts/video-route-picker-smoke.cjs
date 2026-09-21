@@ -173,7 +173,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         const hmModels = ['seedance_v2.5', 'seedance_v2.0-933', 'seedance_v2.5-101010', 'seedance_v2.5-301010'].map(model => {
             const provider = { id: model, model, sourceProviderId: 'relay', endpoint: 'https://art.ravenhash.org/v1', name: 'RavenHash' };
             const profile = getVideoModelProfile(provider);
-            return { ...provider, modelLabel: profile.label, description: describeVideoModelProfile(profile) };
+            return { ...provider, modelLabel: profile.label, description: describeVideoModelProfile(profile, { includePrice: false }) };
         });
         await page.evaluate(models => {
             const { fixture, providers } = window.routeFixture;
