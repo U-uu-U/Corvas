@@ -60,28 +60,34 @@ test('the new RavenHash site retains all nine enabled model presentations after 
     }
 });
 
-test('StarFrame keeps the configured per-second sale on its exact host with or without a remote catalog', () => {
+test('StarFrame keeps host-specific per-second sales with or without a remote catalog', () => {
     const provider = { model: 'ch0107-sd-2.5-720p', endpoint: 'https://api.xzapi.vip/v1', name: 'StarFrame API' };
-    const fallback = getVideoModelProfile(provider);
     const { entry } = resolveModelConfigEntry(DEFAULT_MODEL_CONFIG, provider);
-    const configured = toVideoProfileOverrides(DEFAULT_MODEL_CONFIG, entry, provider);
-    for (const profile of [fallback, configured]) {
-        assert.equal(profile.price.amount, 1.06);
-        assert.equal(profile.price.unit, 'second');
-        assert.equal(profile.price.currency, 'CNY');
-        assert.deepEqual(profile.referenceLimits, { image: 30, video: 10, audio: 10 });
-        assert.deepEqual(profile.resolutions, ['720p']);
-        assert.equal(profile.durations[0], 4);
-        assert.equal(profile.durations.at(-1), 30);
+    for (const [host, amount] of [['api.xzapi.vip', 1.06], ['art.ravenhash.org', 1.06], ['cart.ravenhash.org', 1.25]]) {
+        const hosted = { ...provider, endpoint: `https://${host}/v1` };
+        const fallback = getVideoModelProfile(hosted);
+        const configured = mergeVideoProfile(fallback, toVideoProfileOverrides(DEFAULT_MODEL_CONFIG, entry, hosted));
+        for (const profile of [fallback, configured]) {
+            assert.equal(profile.price.amount, amount);
+            assert.equal(profile.price.unit, 'second');
+            assert.equal(profile.price.currency, 'CNY');
+            assert.deepEqual(profile.referenceLimits, { image: 30, video: 10, audio: 10 });
+            assert.deepEqual(profile.resolutions, ['720p']);
+            assert.equal(profile.durations[0], 4);
+            assert.equal(profile.durations.at(-1), 30);
+            assert.doesNotMatch(describeVideoModelProfile(profile, { includePrice: false }), /[¥$]|元|费用/);
+        }
     }
-    const foreign = { ...provider, endpoint: 'https://api.xzapi.vip.example/v1' };
-    assert.equal(getVideoModelProfile(foreign).price, undefined);
-    assert.equal(toVideoProfileOverrides(DEFAULT_MODEL_CONFIG, entry, foreign).price, undefined);
+    for (const host of ['api.xzapi.vip.example', 'sub.api.xzapi.vip', 'art.ravenhash.org.example', 'cart.ravenhash.org.example', 'sub.cart.ravenhash.org', 'another.test']) {
+        const foreign = { ...provider, endpoint: `https://${host}/v1` };
+        assert.equal(getVideoModelProfile(foreign).price, undefined);
+        assert.equal(toVideoProfileOverrides(DEFAULT_MODEL_CONFIG, entry, foreign).price, undefined);
+    }
     assert.equal(inferProviderCapability({ model: provider.model }), 'video');
     assert.equal(canUseTextProvider({ model: provider.model }), false);
 });
 
-test('StarFrame joins the shared Seedance 2.5 backup group only on its exact host and model', () => {
+test('StarFrame joins the shared Seedance 2.5 backup group only on supported exact hosts and model', () => {
     const provider = { model: 'ch0107-sd-2.5-720p', endpoint: 'https://api.xzapi.vip/v1' };
     const group = getVideoModelGroup(provider);
     assert.equal(group.routeGroup, 'seedance25-backup');
@@ -92,11 +98,18 @@ test('StarFrame joins the shared Seedance 2.5 backup group only on its exact hos
     assert.equal(group.routeGroupScope, 'catalog');
     assert.equal(group.routeGroupAlways, true);
     for (const host of ['art.ravenhash.org', 'cart.ravenhash.org']) {
+        const hosted = { ...provider, endpoint: `https://${host}/v1` };
+        assert.deepEqual(getVideoModelGroup(hosted), group);
+        const { entry } = resolveModelConfigEntry(DEFAULT_MODEL_CONFIG, hosted);
+        const profile = { ...mergeVideoProfile(getVideoModelProfile(hosted),
+            toVideoProfileOverrides(DEFAULT_MODEL_CONFIG, entry, hosted)), ...getVideoModelGroup(hosted) };
+        assert.equal(profile.label, group.label);
+        assert.equal(profile.routeLabel, group.routeLabel);
         const backup = getVideoModelGroup({ model: 'sd2.5-route1', endpoint: `https://${host}/v1` });
         assert.equal(backup.routeGroup, group.routeGroup);
         assert.equal(backup.routeGroupScope, group.routeGroupScope);
     }
-    for (const host of ['api.xzapi.vip.example', 'sub.api.xzapi.vip', 'another.test']) {
+    for (const host of ['api.xzapi.vip.example', 'sub.api.xzapi.vip', 'art.ravenhash.org.example', 'cart.ravenhash.org.example', 'sub.cart.ravenhash.org', 'another.test']) {
         assert.deepEqual(getVideoModelGroup({ ...provider, endpoint: `https://${host}/v1` }), {});
     }
     assert.deepEqual(getVideoModelGroup({ ...provider, model: `${provider.model}-custom` }), {});

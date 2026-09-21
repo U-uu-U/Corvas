@@ -1,5 +1,19 @@
 # 视频中转站部署记录
 
+## 2026-09-21 StarFrame 备用渠道
+
+已在 `art.ravenhash.org` 和 `cart.ravenhash.org` 新增独立的 `ch0107-sd-2.5-720p` 模型、StarFrame 渠道、计费与转发规则，名称为“2.5pro 备用（满参）”，归入“Seedance 2.5 备用渠道”。上游使用 Corvas 原已保存的 StarFrame 凭据；未覆盖主播 Pro，也未替换原有渠道凭据。
+
+新站为 1.25 元/秒，最低 4 秒预扣 5 元；老站为人民币 1.06 元/秒，按老站 USD 记账和 CNY 汇率 6.75 换算，最低 4 秒预扣对应人民币 4.24 元。按请求 `duration` 和 `resolution=720p` 结算，模型不使用站点/全局折扣。预扣为固定最低门槛，不代表动态按每个请求时长预扣。
+
+转发采用独立 passthrough 类型，`/v1/video/generations` 转到供应商 `/v1/videos`，轮询为 `/v1/videos/${task_id}`，保留 `client_task_id`、`duration` 和 `references`。Corvas 对两个精确站点使用中转视频入口，识别归一化响应中的 `data[].url` 签名下载链接；向供应商对象存储下载时不携带中转站 API Key。
+
+部署脚本：`server/seedance-hm/deploy-starframe.py`。两站均先做事务预演回滚，再正式写入并逐字段核对；原有模型、计费、渠道、站点设置和插件配置不变。两站鉴权 `/v1/models` 返回 200，均包含新模型。
+
+正式备份：新站 `/root/tkeapi-backups/starframe-backup-20260921T082545Z/`；老站 `/opt/tokensbyte-backups/starframe-backup-20260921T083047Z/`。包含私有整库备份、前后配置、迁移和定向停用 SQL，不对外分发。最低预扣避免沿用主播 Pro 的 37.50 元门槛。
+
+新站已提交一条用户授权的 4 秒 720p 验证任务：`task_57bC2ePa3g7DZhyyWEmEelXya1pBeF3B`。请求成功受理并冻结 5 元，完成情况以该任务及服务器日志为准，不重复提交。此处不代表已验证过期签名的长期恢复；中转完成结果可能缓存旧链接，客户端应及时下载并保存本地产物。
+
 ## 2026-09-21 新站代理分成调价
 
 用户确认代理按成交金额抽成，从 20% 调整到 30%，仅修改新站 `cart.ravenhash.org`。除 `seedance-2.5-pro` 外，已接入的自定义模型计费单价按原价乘以 `0.8 / 0.7`，统一向上保留两位小数。在上游成本和原有折扣不变时，用户每笔成交扣除代理分成后的收入不低于原来；向上取整会有少量增加。

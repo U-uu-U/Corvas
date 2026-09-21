@@ -48,3 +48,18 @@ test('verified signed storage URLs download without a key while other metadata u
             { url: `${endpoint}/task_1/content`, requiresAuth: true });
     }
 });
+
+test('owned relays use the video generation route and preserve signed URLs in normalized results', () => {
+    const signed = 'https://starframe-sh.tos-s3-cn-shanghai.volces.com/videos/result.mp4?X-Amz-Signature=fixture';
+    for (const host of ['art.ravenhash.org', 'cart.ravenhash.org']) {
+        const endpoint = `https://${host}/v1/video/generations`;
+        for (const path of ['', '/v1', '/v1/videos', '/v1/video/generations']) {
+            assert.equal(buildVideoGenerationEndpoint(`https://${host}${path}`, STARFRAME_MODEL), endpoint);
+        }
+        assert.deepEqual(starFrameDownloadRequest(endpoint, 'task-1', { id: 'task-1', status: 'completed', data: [{ url: signed }] }),
+            { url: signed, requiresAuth: false });
+    }
+    const direct = 'https://api.xzapi.vip/v1/videos';
+    assert.deepEqual(starFrameDownloadRequest(direct, 'task-1', { status: 'completed', data: [{ url: signed }] }),
+        { url: direct + '/task-1/content', requiresAuth: true });
+});

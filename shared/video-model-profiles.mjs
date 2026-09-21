@@ -1,6 +1,7 @@
 import { describeModelPresentation } from './model-presentation.mjs';
 
 const RAVENHASH_VIDEO_HOSTS = new Set(['art.ravenhash.org', 'cart.ravenhash.org']);
+const STARFRAME_VIDEO_HOSTS = new Set(['api.xzapi.vip', ...RAVENHASH_VIDEO_HOSTS]);
 
 export const VIDEO_MODEL_PROFILES = [
     {
@@ -196,6 +197,7 @@ export function getVideoModelProfile(provider) {
     try { host = new URL(provider.endpoint).hostname; } catch (_) { /* Unconfigured endpoint. */ }
     const cartPrice = {
         'seedance-2.5-pro': [1.25, 'second'],
+        'ch0107-sd-2.5-720p': [1.25, 'second'],
         'sd2.5': [6.86, 'request'],
         'sd2.5-route1': [6.86, 'request'],
         'seedance_v2.5': [5.72, 'request'],
@@ -212,7 +214,7 @@ export function getVideoModelProfile(provider) {
         return { ...profile, price: { amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
             source: 'ravenhash configured sale', updatedAt: '2026-09-20T00:00:00Z' } };
     }
-    if (/^ch0107-sd-2\.5-720p$/i.test(model) && host === 'api.xzapi.vip') return { ...profile, price: {
+    if (/^ch0107-sd-2\.5-720p$/i.test(model) && STARFRAME_VIDEO_HOSTS.has(host)) return { ...profile, price: {
         amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
         source: 'user configured sale', updatedAt: '2026-09-20T12:00:00Z'
     } };
@@ -248,7 +250,7 @@ export function getVideoModelGroup(provider) {
     let host = '';
     try { host = new URL(provider?.endpoint).hostname.toLowerCase(); } catch { return {}; }
     const model = String(provider?.model || '').toLowerCase();
-    if (host === 'api.xzapi.vip' && model === 'ch0107-sd-2.5-720p') {
+    if (STARFRAME_VIDEO_HOSTS.has(host) && model === 'ch0107-sd-2.5-720p') {
         const label = '2.5pro 备用（满参）';
         return { label, routeLabel: label, routeModelLabel: provider.model,
             routeGroup: 'seedance25-backup', routeGroupLabel: 'Seedance 2.5 备用渠道',

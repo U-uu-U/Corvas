@@ -3,12 +3,16 @@ const { createHash } = require('node:crypto');
 const STARFRAME_MODEL = 'ch0107-sd-2.5-720p';
 const STARFRAME_LIMITS = { image: 30, video: 10, audio: 10 };
 const isStarFrameModel = model => String(model || '').trim().toLowerCase() === STARFRAME_MODEL;
+const RELAY_HOSTS = new Set(['art.ravenhash.org', 'cart.ravenhash.org']);
 
 function starFrameEndpoint(endpoint) {
     const url = new URL(String(endpoint || '').trim());
     if (url.protocol !== 'https:' || url.username || url.password) throw new Error('StarFrame API 地址必须使用 HTTPS');
-    if (!['', '/', '/v1', '/v1/', '/v1/videos', '/v1/videos/'].includes(url.pathname)) throw new Error('StarFrame API 地址应为站点、/v1 或 /v1/videos');
-    url.pathname = '/v1/videos'; url.search = ''; url.hash = '';
+    const relay = RELAY_HOSTS.has(url.hostname);
+    const paths = ['', '/', '/v1', '/v1/', '/v1/videos', '/v1/videos/'];
+    if (relay) paths.push('/v1/video/generations', '/v1/video/generations/');
+    if (!paths.includes(url.pathname)) throw new Error('StarFrame API 地址应为站点、/v1 或 /v1/videos');
+    url.pathname = relay ? '/v1/video/generations' : '/v1/videos'; url.search = ''; url.hash = '';
     return url.toString();
 }
 
@@ -70,7 +74,9 @@ function starFrameDownloadRequest(endpoint, taskId, payload) {
     const canonical = starFrameContentUrl(endpoint, taskId, payload);
     if (!canonical) return { url: '', requiresAuth: false };
     let candidate;
-    try { candidate = new URL(payload.metadata?.url); } catch { /* Relative URLs use the API endpoint. */ }
+    const relay = RELAY_HOSTS.has(new URL(endpoint).hostname);
+    const resultUrl = payload.metadata?.url || (relay ? payload.data?.[0]?.url || payload.url || payload.video_url : '');
+    try { candidate = new URL(resultUrl); } catch { /* Relative URLs use the API endpoint. */ }
     // Verified live StarFrame storage host. Its signed URLs authorize themselves;
     // API credentials must never be attached to storage downloads.
     if (candidate?.protocol === 'https:' && candidate.hostname === 'starframe-sh.tos-s3-cn-shanghai.volces.com'

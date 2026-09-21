@@ -98,6 +98,76 @@ test('StarFrame mismatched query IDs cannot overwrite the original recovery bind
     assert.equal(rebound, false);
 });
 
+for (const host of ['art.ravenhash.org', 'cart.ravenhash.org']) {
+    test(`StarFrame through ${host} preserves its API binding and recovers normalized results without resubmission`, async t => {
+        profile = fs.mkdtempSync(path.join(os.tmpdir(), 'corvas-starframe-relay-'));
+        t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+        const bridge = new Bridge({ store: { load: () => ({ items: [] }) }, recoveryDirectory: path.join(profile, 'records') });
+        bridge._loadWithPlanService = () => ({ data: { items: [] }, planService: {} });
+        bridge.attachRecoveredGeneration = async () => ({ nodeId: 'recovered-node' });
+        const origin = `https://${host}`;
+        const sourceProviderId = `relay-${host}`;
+        const clientTaskId = `client-${host}`;
+        const taskId = `task-${host.replaceAll('.', '-')}`;
+        const apiKey = `fixture-key-${host}`;
+        const signedUrl = `https://starframe-sh.tos-s3-cn-shanghai.volces.com/videos/${taskId}.mp4?X-Amz-Signature=fixture`;
+        const request = { clientTaskId, prompt: 'relay fixture', duration: 4, ratio: '16:9', resolution: '720p',
+            targetDir: profile, addToCanvas: false,
+            providerConfig: { id: `${sourceProviderId}::model:${STARFRAME_MODEL}`, sourceProviderId,
+                endpoint: `${origin}/v1`, model: STARFRAME_MODEL, capability: 'video', apiKey } };
+        let posts = 0, polls = 0, downloads = 0;
+        fetchFixture = async (url, options = {}) => {
+            const parsed = new URL(url);
+            if (parsed.hostname === 'starframe-sh.tos-s3-cn-shanghai.volces.com') {
+                downloads++;
+                assert.equal(url, signedUrl);
+                assert.equal(new Headers(options.headers).has('authorization'), false);
+                return new Response('relay fixture video', { headers: { 'content-type': 'video/mp4' } });
+            }
+            assert.equal(parsed.origin, origin, 'Requests stay on the original relay');
+            assert.equal(options.headers.Authorization, `Bearer ${apiKey}`);
+            if (options.method === 'POST') {
+                posts++;
+                assert.equal(url, `${origin}/v1/video/generations`);
+                assert.deepEqual(JSON.parse(options.body), { model: STARFRAME_MODEL, client_task_id: clientTaskId,
+                    prompt: 'relay fixture', mode: 'references', duration: 4, resolution: '720p', aspect_ratio: '16:9' });
+                return json({ id: taskId, object: 'video', status: 'pending', created: 1 });
+            }
+            assert.equal(options.method, 'GET');
+            assert.ok([`/v1/tasks/${taskId}`, `/v1/video/generations/${taskId}`].includes(parsed.pathname));
+            assert.equal(parsed.searchParams.get('model'), STARFRAME_MODEL);
+            polls++;
+            const checkpoint = bridge.recoveryStore.get(clientTaskId);
+            assert.equal(checkpoint.taskId, taskId);
+            assert.equal(checkpoint.providerId, sourceProviderId);
+            assert.equal(checkpoint.endpoint, request.providerConfig.endpoint);
+            assert.equal(checkpoint.model, STARFRAME_MODEL);
+            assert.equal(JSON.stringify(checkpoint).includes(apiKey), false);
+            return json(polls === 1 ? { id: taskId, object: 'video', status: 'in_progress', created: 1 }
+                : { id: taskId, object: 'video', status: 'completed', created: 1, data: [{ url: signedUrl }], usage: {} });
+        };
+        const output = await bridge.generateVideoFromRenderer(request);
+        assert.equal(output.taskId, taskId);
+        assert.equal(fs.readFileSync(output.filePath, 'utf8'), 'relay fixture video');
+        assert.deepEqual([posts, polls, downloads], [1, 2, 1]);
+        fs.unlinkSync(output.filePath);
+        await assert.rejects(bridge.recoverGenerationFromRenderer({ ...request, kind: 'video', taskId,
+            providerConfig: { ...request.providerConfig, id: 'other-account', sourceProviderId: 'other-account' } }), /API/);
+        assert.deepEqual([posts, polls, downloads], [1, 2, 1], 'Wrong-account recovery must not make network requests');
+        const recovered = await bridge.recoverGenerationFromRenderer({ ...request, kind: 'video', taskId,
+            providerConfig: { ...request.providerConfig, endpoint: 'https://changed-endpoint.test/v1', model: 'changed-model' } });
+        assert.equal(recovered.taskId, taskId);
+        assert.equal(recovered.recovered, true);
+        assert.equal(fs.readFileSync(recovered.filePath, 'utf8'), 'relay fixture video');
+        assert.deepEqual([posts, polls, downloads], [1, 3, 2], 'Recovery only queries and downloads the original task');
+        const checkpoint = bridge.recoveryStore.get(clientTaskId);
+        assert.equal(checkpoint.providerId, sourceProviderId);
+        assert.equal(checkpoint.endpoint, request.providerConfig.endpoint);
+        assert.equal(checkpoint.model, STARFRAME_MODEL);
+        assert.equal(checkpoint.state, 'attached');
+    });
+}
+
 test('authenticated content download strips API credentials from a CDN redirect during HTTP/1 fallback', async t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'starframe-download-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
