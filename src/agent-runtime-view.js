@@ -360,7 +360,6 @@ export function createRuntimeCard({ onAction, onLocate }) {
     header.append(title, status);
     const summary = element('p', 'agent-runtime-summary');
     const steps = element('ol', 'agent-runtime-steps');
-    const estimate = element('p', 'agent-runtime-progress');
     const proposed = element('details', 'agent-runtime-proposed');
     const proposedLabel = element('summary', '');
     const proposedText = element('pre', '');
@@ -384,7 +383,7 @@ export function createRuntimeCard({ onAction, onLocate }) {
     const submit = element('button', '', '提交修改');
     submit.type = 'submit';
     feedback.append(input, submit);
-    root.append(elapsed, header, summary, steps, estimate, proposed, stream, progress, output, review, error, actions, feedback);
+    root.append(elapsed, header, summary, steps, proposed, stream, progress, output, review, error, actions, feedback);
     let current;
     let localError = '';
     let renderedPlan = '';
@@ -427,12 +426,9 @@ export function createRuntimeCard({ onAction, onLocate }) {
                 for (const step of plan?.steps || []) {
                     const row = element('li', '');
                     row.append(element('span', '', step.title));
-                    const price = runtimePriceText(step.price);
                     const detail = element('small', '', [
-                        step.model, step.count != null ? `数量 ${step.count}` : '',
-                        price || (plan.kind === 'generation' || !plan.kind ? '价格未知' : '')
+                        step.model, step.count != null ? `数量 ${step.count}` : ''
                     ].filter(Boolean).join(' · '));
-                    if (price) detail.title = [step.price.source, step.price.updatedAt].filter(Boolean).join(' · ');
                     row.append(detail);
                     if (step.prompt || step.originalPrompt || step.config || step.references?.length) {
                         const parameters = element('details', 'agent-runtime-proposed');
@@ -458,8 +454,6 @@ export function createRuntimeCard({ onAction, onLocate }) {
                 }
             }
             steps.hidden = !steps.childElementCount;
-            estimate.textContent = runtimeEstimateText(plan);
-            estimate.hidden = !estimate.textContent;
             proposed.hidden = !plan?.proposed;
             proposedLabel.textContent = plan?.kind === 'memory' ? '记忆约束' : plan?.kind === 'external' ? '外部工具参数' : '画板变更';
             const proposedJson = plan?.proposed ? JSON.stringify(plan.proposed, null, 2) : '';

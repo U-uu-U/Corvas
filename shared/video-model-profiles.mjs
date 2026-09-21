@@ -194,6 +194,20 @@ export function getVideoModelProfile(provider) {
         || DEFAULT_VIDEO_MODEL_PROFILE;
     let host = '';
     try { host = new URL(provider.endpoint).hostname; } catch (_) { /* Unconfigured endpoint. */ }
+    const cartPrice = {
+        'seedance-2.5-pro': [1.25, 'second'],
+        'sd2.5': [6.86, 'request'],
+        'sd2.5-route1': [6.86, 'request'],
+        'seedance_v2.5': [5.72, 'request'],
+        'seedance_v2.0-933': [7.43, 'request'],
+        'seedance_v2.5-101010': [8, 'request'],
+        'seedance_v2.5-301010': [11.43, 'request']
+    }[model.toLowerCase()];
+    if (host === 'cart.ravenhash.org' && cartPrice) {
+        const base = getVideoModelProfile({ ...provider, endpoint: 'https://art.ravenhash.org/v1' });
+        return { ...base, price: { amount: cartPrice[0], currency: 'CNY', unit: cartPrice[1], kind: 'sale',
+            source: 'cart configured sale', updatedAt: '2026-09-21T02:52:08Z' } };
+    }
     if (model.toLowerCase() === 'seedance-2.5-pro' && RAVENHASH_VIDEO_HOSTS.has(host)) {
         return { ...profile, price: { amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
             source: 'ravenhash configured sale', updatedAt: '2026-09-20T00:00:00Z' } };
@@ -263,7 +277,7 @@ export function getVideoModelGroup(provider) {
             'seedance_v2.0-933': 3 })[model] ?? 10, recommended: false };
 }
 
-export function describeVideoModelProfile(profile) {
+export function describeVideoModelProfile(profile, options) {
     if (!profile) return '';
     const parts = [];
     if (profile.faceRestriction) parts.push('人脸参考受限');
@@ -279,5 +293,5 @@ export function describeVideoModelProfile(profile) {
         if (media.length) parts.push(`最多 ${media.join(' / ')}参考`);
         if (!video && !audio) parts.push('不支持音视频参考');
     }
-    return describeModelPresentation(profile, parts.join('；'));
+    return describeModelPresentation(profile, parts.join('；'), options);
 }

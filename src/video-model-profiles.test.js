@@ -22,7 +22,7 @@ test('Zhubo Pro has its own wire limits and joins only the matching supplier gro
     }
     assert.equal(getVideoModelGroup({ ...provider, model: 'sd2.5-route1' }).routeGroup, 'seedance25-backup');
     assert.deepEqual(getVideoModelGroup({ ...provider, endpoint: 'https://another.test' }), {});
-    assert.equal(getVideoModelProfile({ ...provider, endpoint: 'https://cart.ravenhash.org' }).price.amount, 1.06);
+    assert.equal(getVideoModelProfile({ ...provider, endpoint: 'https://cart.ravenhash.org' }).price.amount, 1.25);
     assert.equal(getVideoModelProfile({ ...provider, endpoint: 'https://cart.ravenhash.org.example' }).price, undefined);
 });
 
@@ -37,7 +37,9 @@ test('the new RavenHash site retains all nine enabled model presentations after 
             ...getVideoModelGroup(provider) };
     });
     const current = profiles('cart.ravenhash.org');
-    assert.deepEqual(current, profiles('art.ravenhash.org'));
+    const withoutPrice = entries => entries.map(({ price: _price, ...profile }) => profile);
+    assert.deepEqual(withoutPrice(current), withoutPrice(profiles('art.ravenhash.org')));
+    assert.deepEqual(current.slice(1, 6).map(profile => profile.price.amount), [6.86, 1.25, 5.72, 7.43, 6.86]);
     assert.equal(current[0].routeGroup, undefined);
     assert.deepEqual(current.slice(1, 5).map(profile => profile.routeOrder), [0, 1, 2, 3]);
     assert.equal(current[1].routeLabel, 'SD2.5 固定 30 秒（电商效果优化）');
@@ -105,7 +107,7 @@ test('HM profile advertises confirmed CNY sale, not upstream cost', () => {
     assert.equal(profile.referenceLimits.image, 10);
     assert.equal(profile.defaultDuration, 30);
     assert.deepEqual(profile.resolutions, ['720p']);
-    assert.deepEqual(getVideoModelProfile({ model: 'seedance_v2.5', endpoint: 'https://cart.ravenhash.org/v1' }).price, profile.price);
+    assert.equal(getVideoModelProfile({ model: 'seedance_v2.5', endpoint: 'https://cart.ravenhash.org/v1' }).price.amount, 5.72);
 });
 
 for (const [model, seconds, image, video, audio, price] of [
@@ -127,7 +129,8 @@ for (const [model, seconds, image, video, audio, price] of [
         assert.deepEqual(profile.resolutions, ['720p']);
         assert.equal(profile.price.amount, price);
         assert.equal(profile.price.currency, 'CNY');
-        assert.deepEqual(getVideoModelProfile({ ...provider, endpoint: 'https://cart.ravenhash.org/v1' }).price, profile.price);
+        const cart = getVideoModelProfile({ ...provider, endpoint: 'https://cart.ravenhash.org/v1' });
+        assert.equal(cart.price.amount, ({ 'seedance_v2.0-933': 7.43, 'seedance_v2.5-101010': 8, 'seedance_v2.5-301010': 11.43 })[model]);
         assert.equal(inferProviderCapability(provider), 'video');
         assert.match(describeVideoModelProfile(profile), new RegExp(`¥${price}/次`));
         for (const endpoint of ['https://video.zhubo.asia/v1', 'https://other.test', 'https://art.ravenhash.org.example/v1', 'https://cart.ravenhash.org.example/v1']) {
@@ -141,8 +144,7 @@ test('sd2.5 sale is restricted to the exact RavenHash art and cart hosts', () =>
     assert.deepEqual(getVideoModelProfile(provider).price, {
         amount: 6, currency: 'CNY', unit: 'request', kind: 'sale', source: 'ravenhash configured sale', updatedAt: '2026-09-06T12:38:30Z'
     });
-    assert.deepEqual(getVideoModelProfile({ ...provider, endpoint: 'https://cart.ravenhash.org/v1' }).price,
-        getVideoModelProfile(provider).price);
+    assert.equal(getVideoModelProfile({ ...provider, endpoint: 'https://cart.ravenhash.org/v1' }).price.amount, 6.86);
     for (const endpoint of ['https://ai.ravenhash.org/v1', 'https://art.ravenhash.org.example/v1', 'https://cart.ravenhash.org.example/v1', 'https://other.test', 'invalid']) {
         assert.equal(getVideoModelProfile({ ...provider, endpoint }).price, undefined);
     }

@@ -40,6 +40,6 @@ export function formatModelPrice(price) {
     return `${price.currency === 'CNY' ? '¥' : 'US$'}${amount}/${PRICE_UNITS[price.unit]}`;
 }
 
-export function describeModelPresentation(profile, fallback = '') {
-    return [profile?.description ?? fallback, formatModelPrice(profile?.price)].filter(Boolean).join('；');
+export function describeModelPresentation(profile, fallback = '', { includePrice = true } = {}) {
+    return [profile?.description ?? fallback, includePrice ? formatModelPrice(profile?.price) : ''].filter(Boolean).join('；');
 }
