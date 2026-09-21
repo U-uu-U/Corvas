@@ -4158,6 +4158,7 @@ export class AgentSidebar {
                     routeGroupOrder: profile?.routeGroupOrder ?? 0,
                     routeOrder: profile?.routeOrder ?? 0,
                     routeGroupAlways: profile?.routeGroupAlways === true,
+                    routeGroupScope: profile?.routeGroupScope || '',
                     routeModelLabel: profile?.routeModelLabel || '',
                     recommended: profile?.recommended === true,
                     modelLabel: profile?.label || '',

@@ -81,6 +81,27 @@ test('StarFrame keeps the configured per-second sale on its exact host with or w
     assert.equal(canUseTextProvider({ model: provider.model }), false);
 });
 
+test('StarFrame joins the shared Seedance 2.5 backup group only on its exact host and model', () => {
+    const provider = { model: 'ch0107-sd-2.5-720p', endpoint: 'https://api.xzapi.vip/v1' };
+    const group = getVideoModelGroup(provider);
+    assert.equal(group.routeGroup, 'seedance25-backup');
+    assert.equal(group.routeGroupLabel, 'Seedance 2.5 备用渠道');
+    assert.equal(group.label, '2.5pro 备用（满参）');
+    assert.equal(group.routeLabel, '2.5pro 备用（满参）');
+    assert.equal(group.routeModelLabel, provider.model);
+    assert.equal(group.routeGroupScope, 'catalog');
+    assert.equal(group.routeGroupAlways, true);
+    for (const host of ['art.ravenhash.org', 'cart.ravenhash.org']) {
+        const backup = getVideoModelGroup({ model: 'sd2.5-route1', endpoint: `https://${host}/v1` });
+        assert.equal(backup.routeGroup, group.routeGroup);
+        assert.equal(backup.routeGroupScope, group.routeGroupScope);
+    }
+    for (const host of ['api.xzapi.vip.example', 'sub.api.xzapi.vip', 'another.test']) {
+        assert.deepEqual(getVideoModelGroup({ ...provider, endpoint: `https://${host}/v1` }), {});
+    }
+    assert.deepEqual(getVideoModelGroup({ ...provider, model: `${provider.model}-custom` }), {});
+});
+
 test('GlobalAiOpc retains native controls with built-in config and an older remote catalog', () => {
     const provider = { model: 'sd_2.5_discount_v1', endpoint: 'https://zcbservice.aizfw.cn/kyyReactApiServer', name: 'GlobalAiOpc' };
     const fallback = getVideoModelProfile(provider);

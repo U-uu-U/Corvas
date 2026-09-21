@@ -248,6 +248,13 @@ export function getVideoModelGroup(provider) {
     let host = '';
     try { host = new URL(provider?.endpoint).hostname.toLowerCase(); } catch { return {}; }
     const model = String(provider?.model || '').toLowerCase();
+    if (host === 'api.xzapi.vip' && model === 'ch0107-sd-2.5-720p') {
+        const label = '2.5pro 备用（满参）';
+        return { label, routeLabel: label, routeModelLabel: provider.model,
+            routeGroup: 'seedance25-backup', routeGroupLabel: 'Seedance 2.5 备用渠道',
+            routeGroupScope: 'catalog', routeGroupOrder: 20, routeOrder: 1,
+            routeGroupAlways: true, recommended: false };
+    }
     const variant = /^artsdance2-0-(fast|mini|pro)-intl-260701$/.exec(model)?.[1];
     if (RAVENHASH_VIDEO_HOSTS.has(host) && variant) {
         const label = `Seedance 2.0 ${variant[0].toUpperCase()}${variant.slice(1)}`;
@@ -259,7 +266,7 @@ export function getVideoModelGroup(provider) {
     if (RAVENHASH_VIDEO_HOSTS.has(host) && model === 'sd2.5-route1') {
         return { routeGroup: 'seedance25-backup', routeGroupLabel: 'Seedance 2.5 备用渠道',
             routeLabel: 'Seedance 2.5 固定 30 秒（过人脸）', routeModelLabel: provider.model,
-            routeGroupOrder: 20, routeGroupAlways: true, recommended: false };
+            routeGroupScope: 'catalog', routeGroupOrder: 20, routeOrder: 0, routeGroupAlways: true, recommended: false };
     }
     const labels = {
         'seedance-2.5-pro': 'Seedance 2.5 Pro（满血满参）',

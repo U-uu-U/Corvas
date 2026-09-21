@@ -2,8 +2,7 @@
 const PAUSED_MODELS = {
     'art.ravenhash.org': ['seedance_v2.5-101010', 'seedance_v2.5-301010'],
     'cart.ravenhash.org': ['seedance_v2.5-101010', 'seedance_v2.5-301010'],
-    'zcbservice.aizfw.cn': ['sd_2.5_discount_v1'],
-    'api.xzapi.vip': ['ch0107-sd-2.5-720p']
+    'zcbservice.aizfw.cn': ['sd_2.5_discount_v1']
 };
 
 export function isVideoGenerationAvailable(provider) {

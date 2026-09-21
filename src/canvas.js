@@ -9427,7 +9427,7 @@ export class CanvasManager {
             for (const provider of providers) {
                 const sourceId = provider.sourceProviderId;
                 const key = sourceId && provider.routeGroup && provider.routeLabel
-                    ? JSON.stringify([sourceId, provider.routeGroup]) : null;
+                    ? JSON.stringify([provider.routeGroupScope === 'catalog' ? 'catalog' : sourceId, provider.routeGroup]) : null;
                 let row = key && groups.get(key);
                 if (!row) {
                     row = [];

@@ -23,3 +23,14 @@ test('pause rules do not extend to another host or a similarly named model', () 
     assert.equal(isVideoGenerationAvailable({ model: 'seedance_v2.5-101010-custom', endpoint: 'https://cart.ravenhash.org/v1' }), true);
     assert.equal(isVideoGenerationAvailable({ model: ' SEEDANCE_V2.5-101010 ', endpoint: 'https://CART.RAVENHASH.ORG/v1' }), false);
 });
+
+test('StarFrame is restored while GlobalAiOpc remains paused', () => {
+    for (const endpoint of ['https://api.xzapi.vip', 'https://api.xzapi.vip/v1', 'https://API.XZAPI.VIP/v1/videos']) {
+        const provider = { model: 'ch0107-sd-2.5-720p', endpoint };
+        assert.equal(isVideoGenerationAvailable(provider), true);
+        assert.doesNotThrow(() => assertVideoGenerationAvailable(provider));
+    }
+    const paused = { model: 'sd_2.5_discount_v1', endpoint: 'https://zcbservice.aizfw.cn/kyyReactApiServer' };
+    assert.equal(isVideoGenerationAvailable(paused), false);
+    assert.throws(() => assertVideoGenerationAvailable(paused), { code: 'VIDEO_MODEL_PAUSED' });
+});
