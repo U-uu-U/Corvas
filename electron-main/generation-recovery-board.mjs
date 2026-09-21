@@ -1,9 +1,34 @@
 import crypto from 'node:crypto';
 import { getGeneratorResultEntries } from '../src/generator-result-stack.js';
+import { referenceMediaType } from '../src/reference-citations.js';
 import { applyGeneratorStackResult } from '../shared/generation-result-state.mjs';
 
 function signature(node) {
     return JSON.stringify([node?.config, node?.filePath, node?.generation?.taskId, node?.resultFilePaths]);
+}
+
+function generationReferences(request) {
+    const bindings = (Array.isArray(request.referenceBindings) ? request.referenceBindings : []).filter(reference => reference?.filePath);
+    const references = bindings.map(reference => ({
+        filePath: reference.filePath,
+        mediaType: referenceMediaType(reference),
+        ...(reference.sourceNodeId ? { itemId: reference.sourceNodeId, sourceNodeId: reference.sourceNodeId } : {}),
+        ...(Array.isArray(reference.sourceNodeIds) ? { sourceNodeIds: [...reference.sourceNodeIds] } : {})
+    }));
+    for (const [mediaType, paths] of [
+        ['image', request.sourcePaths],
+        ['video', request.params?.videoSourcePaths],
+        ['audio', request.params?.audioSourcePaths]
+    ]) {
+        const typedBindings = bindings.filter(reference => referenceMediaType(reference) === mediaType);
+        (Array.isArray(paths) ? paths : []).forEach((filePath, index) => {
+            if (!filePath || references.some(reference => reference.filePath === filePath)) return;
+            // A binding retains the original asset identity when the upload uses a prepared cache file.
+            if (typedBindings.some((reference, bindingIndex) => (Number(reference.typePosition) || bindingIndex + 1) === index + 1)) return;
+            references.push({ filePath, mediaType });
+        });
+    }
+    return references;
 }
 
 export function installGenerationRecoveryBoard(bridge, board) {
@@ -47,7 +72,7 @@ export function installGenerationRecoveryBoard(bridge, board) {
                 ...(request.referenceBindings ? { referenceBindings: structuredClone(request.referenceBindings) } : {}),
                 model: request.providerConfig.model, providerId: request.providerConfig.id,
                 config: { ...node.config }, taskId: result.taskId || request.taskId,
-                references: (request.sourcePaths || []).map(filePath => ({ filePath })), generatedAt: Date.now() };
+                references: generationReferences(request), generatedAt: Date.now() };
             for (const filePath of filePaths) {
                 const item = result.images?.find(item => item.filePath === filePath);
                 applyGeneratorStackResult(node, {

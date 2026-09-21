@@ -6,6 +6,7 @@ import { appendGeneratorResult, rotateGeneratorResults, setGeneratorResultLayout
 import { generatorResultOutput } from './graph-model.js';
 import { PlanService } from './plan-service.js';
 import planCore from '../shared/plan-service-core.cjs';
+import { getGenerationReuseConfig } from './generation-record.js';
 
 const originalLoad = Module._load;
 const originalDOMMatrix = Object.getOwnPropertyDescriptor(globalThis, 'DOMMatrix');
@@ -24,6 +25,66 @@ try {
 
 const clone = value => structuredClone(value);
 const firstArgs = mock => mock.mock.calls[0].arguments;
+
+function historicalReferencesHarness(items) {
+    return Object.assign(Object.create(CanvasManager.prototype), {
+        items: new Map(items.map(data => [data.id, { data }])),
+        graphView: { connections: [] },
+        _getItemMediaType: data => data.mediaType || data.nodeType,
+        _copyableFilePath: data => data.filePath,
+        _mediaOutputPortName: () => 'out'
+    });
+}
+
+test('reopening legacy video results restores every bound medium even when references saved images only', () => {
+    const sources = ['image', 'video', 'audio'].map((mediaType, index) => ({
+        id: `source-${index}`, mediaType, filePath: `/source.${['png', 'mp4', 'wav'][index]}`,
+        referenceAnnotation: ['人物', '动作', '旁白'][index]
+    }));
+    const record = {
+        nodeType: 'video', references: [{ filePath: '/cache/compressed.jpg' }],
+        referenceBindings: sources.map((source, index) => ({ position: index + 1, filePath: source.filePath,
+            mediaType: source.mediaType, sourceNodeId: source.id, sourceNodeIds: [source.id] })),
+        promptDraftConfig: { prompt: 'A B', referenceCitationOccurrences: sources.map((source, index) => ({
+            id: `citation-${index}`, connectionId: `old-${index}`, sourceNodeId: source.id, offset: index,
+            missing: index > 0
+        })) }
+    };
+    const before = structuredClone(record);
+    const result = { id: 'result', mediaType: 'video', filePath: '/result.mp4', generation: record };
+    const manager = historicalReferencesHarness([...sources, result]);
+    const links = manager._getHistoricalGenerationReferenceConnections(result.id, 'video', record);
+    assert.deepEqual(links.map(link => link.nodeId), sources.map(source => source.id));
+    const draft = { id: 'draft', nodeType: 'video', composerDraft: true, composerSourceItemId: result.id,
+        composerUseSourceAsReference: false, composerReferenceConnections: links,
+        composerReferenceItemIds: links.map(link => link.nodeId), config: getGenerationReuseConfig(result) };
+    const state = manager._generationComposerCitationState(draft);
+    assert.deepEqual(state.labels, ['图一', '视频一', '音频一']);
+    assert.ok(state.occurrences.every(entry => !entry.missing));
+    assert.deepEqual(state.occurrences.map(entry => entry.sourceNodeId), sources.map(source => source.id));
+    assert.deepEqual(record, before, 'Reopening must not mutate the saved generation snapshot');
+});
+
+test('missing historical source IDs stay missing instead of rebinding to duplicate files or current connections', () => {
+    const image = { id: 'image', mediaType: 'image', filePath: '/image.png' };
+    const duplicate = { id: 'replacement', mediaType: 'video', filePath: '/video.mp4' };
+    const manager = historicalReferencesHarness([image, duplicate]);
+    manager.graphView.connections = [{ from: { nodeId: duplicate.id }, to: { nodeId: 'result', port: 'source' } }];
+    const record = { references: [{ filePath: '/cache.jpg' }], referenceBindings: [
+        { position: 1, sourceNodeId: image.id, filePath: image.filePath },
+        { position: 2, sourceNodeId: 'removed', filePath: duplicate.filePath }
+    ] };
+    assert.deepEqual(manager._getHistoricalGenerationReferenceConnections('result', 'video', record), [{ nodeId: image.id, port: 'out' }]);
+});
+
+test('historical reconstruction preserves legacy path-only references and image-only constraints', () => {
+    const sources = [{ id: 'image', mediaType: 'image', filePath: '/image.png' },
+        { id: 'video', mediaType: 'video', filePath: '/video.mp4' }];
+    const manager = historicalReferencesHarness(sources);
+    const record = { references: sources.map(source => ({ filePath: source.filePath })) };
+    assert.equal(manager._getHistoricalGenerationReferenceConnections('result', 'video', record).length, 2);
+    assert.deepEqual(manager._getHistoricalGenerationReferenceConnections('result', 'image', record), [{ nodeId: 'image', port: 'out' }]);
+});
 
 test('task progress only redraws nodes whose visual state changed, including in-place updates', () => {
     const refreshed = [];

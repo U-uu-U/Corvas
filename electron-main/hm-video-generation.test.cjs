@@ -77,6 +77,28 @@ test('Zhubo Pro preserves 480p through the full submission and recovery pipeline
     assert.equal(posts, 1);
 });
 
+test('direct video recovery keeps every original bound medium in the landed generation record', async t => {
+    profile = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-video-reuse-'));
+    t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+    const data = { items: [] };
+    const bridge = new Bridge({ store: { load: () => data }, recoveryDirectory: path.join(profile, 'records') });
+    bridge._loadWithPlanService = () => ({ data, planService: {} });
+    bridge._saveAndNotify = () => {};
+    fetchFixture = async (url, options = {}) => {
+        assert.notEqual(options.method, 'POST', 'Recovery must only query the existing task');
+        return url.endsWith('/output.mp4') ? new Response('fixture video')
+            : json({ id: 'existing-task', status: 'completed', video_url: 'https://pro-fixture.test/output.mp4' });
+    };
+    const referenceBindings = ['image', 'video', 'audio'].map((mediaType, index) => ({
+        position: index + 1, sourceNodeId: `original-${index}`, filePath: `/original.${['png', 'mp4', 'wav'][index]}`, mediaType
+    }));
+    const result = await bridge._resumeVideoFromRenderer({ prompt: 'fixture', taskId: 'existing-task', targetDir: profile,
+        referenceBindings, providerConfig: { endpoint: 'https://pro-fixture.test/v1', model: 'seedance-2.5-pro', apiKey: 'fixture-only' } });
+    assert.deepEqual(result.item.generation.references, referenceBindings.map(binding => ({
+        itemId: binding.sourceNodeId, filePath: binding.filePath, mediaType: binding.mediaType
+    })));
+});
+
 test('HM 301010 transports all 50 references, preserves order and supports task-ID recovery', { timeout: 15000 }, async t => {
     profile = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-hm-'));
     t.after(() => fs.rmSync(profile, { recursive: true, force: true }));

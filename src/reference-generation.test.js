@@ -54,6 +54,55 @@ for (const kind of ['image', 'video']) {
     });
 }
 
+test('video results retain every media reference and its source identity across reuse', async t => {
+    const previousWindow = global.window;
+    t.after(() => { global.window = previousWindow; });
+    const calls = [];
+    global.window = { flowCanvas: { mcp: { generateVideo: async payload => {
+        calls.push(payload);
+        return { filePath: '/output/video.mp4' };
+    } } } };
+    const references = [
+        { filePath: '/picture.png', mediaType: 'image', sourceNodeId: 'picture' },
+        { filePath: '/motion.mp4', mediaType: 'video', sourceNodeId: 'motion' },
+        { filePath: '/narration.wav', mediaType: 'audio', sourceNodeId: 'narration' }
+    ];
+    let config = {
+        prompt: 'A B C', duration: 4, count: 1,
+        referenceCitationIds: ['old-image', 'old-video', 'old-audio'],
+        referenceCitationLabels: ['图一', '视频一', '音频一'],
+        referenceCitationOccurrences: references.map((reference, index) => ({
+            id: `citation-${index}`, connectionId: `old-${reference.mediaType}`,
+            sourceNodeId: reference.sourceNodeId, offset: index * 2
+        }))
+    };
+    let savedReferences = references;
+    for (let iteration = 0; iteration < 2; iteration++) {
+        const inputContext = savedReferences.map(reference => ({
+            connectionId: `reuse-${iteration}-${reference.sourceNodeId}`,
+            sourceNodeId: reference.sourceNodeId,
+            source: { id: reference.sourceNodeId, filePath: reference.filePath, mediaType: reference.mediaType }
+        }));
+        const result = await NODE_TYPES.video.execute({
+            source: savedReferences.map(reference => `local-res://${encodeURIComponent(reference.filePath)}`)
+        }, config, {
+            item: { id: `output-${iteration}` }, inputContext,
+            getVideoProvider: () => ({ apiKey: 'fixture', model: 'seedance-2.5-pro' }),
+            prepareImageReferences: refs => refs.map(ref => ({ ...ref, filePath: '/cache/picture-small.png' }))
+        });
+        savedReferences = result._generation.references;
+        assert.deepEqual(savedReferences, references.map(reference => ({
+            ...reference, itemId: reference.sourceNodeId, sourceNodeIds: [reference.sourceNodeId]
+        })));
+        assert.deepEqual(calls[iteration].sourceReferences, [{ filePath: '/cache/picture-small.png' }]);
+        assert.deepEqual(calls[iteration].videoReferences, [{ filePath: '/motion.mp4' }]);
+        assert.deepEqual(calls[iteration].audioReferences, [{ filePath: '/narration.wav' }]);
+        assert.match(calls[iteration].prompt, /图一A 视频一B 音频一C/);
+        config = getGenerationReuseConfig({ kind: 'media', mediaType: 'video', generation: result._generation });
+        assert.deepEqual(config.referenceCitationOccurrences.map(entry => entry.sourceNodeId), ['picture', 'motion', 'narration']);
+    }
+});
+
 test('saved upstream text is reused only when live upstream text is unavailable', () => {
     const config = { prompt: 'local', generationUpstreamPrompts: ['saved'] };
     assert.deepEqual(expandGenerationPrompts({}, config), ['local\n\nsaved']);

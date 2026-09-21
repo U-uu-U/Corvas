@@ -1418,6 +1418,14 @@ class FlowCanvasBridge {
 
 function generationRecordFromRequest(kind, body = {}, prompt = '', references = [], result = {}) {
     const providerConfig = body.providerConfig || {};
+    const savedReferences = references.length ? references : [
+        ...(body.sourceReferences || (body.sourcePaths || []).map(filePath => ({ filePath, mediaType: 'image' }))),
+        ...(body.videoReferences || (body.params?.videoSourcePaths || []).map(filePath => ({ filePath, mediaType: 'video' }))),
+        ...(body.audioReferences || (body.params?.audioSourcePaths || []).map(filePath => ({ filePath, mediaType: 'audio' })))
+    ];
+    const bindings = Array.isArray(body.referenceBindings) ? body.referenceBindings : [];
+    const positions = [...new Set([...savedReferences.map((_, index) => index + 1),
+        ...bindings.map(entry => entry.position).filter(position => Number.isInteger(position) && position > 0)])].sort((a, b) => a - b);
     const model = String(providerConfig.model || body.model || '').trim();
     const baseConfig = {
         prompt: String(prompt || ''),
@@ -1464,10 +1472,15 @@ function generationRecordFromRequest(kind, body = {}, prompt = '', references = 
         model,
         providerId: providerConfig.id || null,
         sourceProviderId: providerConfig.sourceProviderId || providerConfig.id || null,
-        references: (Array.isArray(references) ? references : []).map(reference => ({
-            itemId: reference?.itemId || reference?.id || null,
-            filePath: reference?.filePath || ''
-        })),
+        references: positions.map(position => {
+            const reference = savedReferences[position - 1];
+            const binding = bindings.find(entry => entry.position === position);
+            return {
+                itemId: binding?.sourceNodeId || reference?.sourceNodeId || reference?.itemId || reference?.id || null,
+                filePath: binding?.filePath || reference?.filePath || '',
+                ...(binding?.mediaType || reference?.mediaType ? { mediaType: binding?.mediaType || reference.mediaType } : {})
+            };
+        }),
         taskId: result?.taskId || null,
         generatedAt: Date.now(),
         directWorkspace: true

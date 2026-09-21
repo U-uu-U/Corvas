@@ -2094,10 +2094,18 @@ export class CanvasManager {
             return true;
         };
 
-        const historyReferences = (Array.isArray(record?.references) ? record.references : []).flatMap((reference, index) => {
-            const binding = record?.referenceBindings?.find(entry => entry.position === index + 1);
+        const references = Array.isArray(record?.references) ? record.references : [];
+        const bindings = Array.isArray(record?.referenceBindings) ? record.referenceBindings : [];
+        // Older video records saved only image upload paths, but their bindings
+        // already contain the original image, video and audio source identities.
+        const positions = [...new Set([...references.map((_, index) => index + 1),
+            ...bindings.map(binding => binding.position).filter(position => Number.isInteger(position) && position > 0)])]
+            .sort((a, b) => a - b);
+        const historyReferences = positions.flatMap(position => {
+            const reference = references[position - 1];
+            const binding = bindings.find(entry => entry.position === position);
             if (!binding) return [reference];
-            const sourceIds = binding.sourceNodeIds?.length ? binding.sourceNodeIds : [binding.sourceNodeId || reference.itemId];
+            const sourceIds = binding.sourceNodeIds?.length ? binding.sourceNodeIds : [binding.sourceNodeId || reference?.itemId];
             return sourceIds.map(itemId => ({ itemId, filePath: binding.filePath, stable: Boolean(itemId) }));
         });
         historyReferences.forEach(reference => {
