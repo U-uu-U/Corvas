@@ -50,6 +50,17 @@ test('MCP workflow discovery exposes versioned fixed steps and an actual current
     assert.throws(() => h.call('run', { ...h.request, version: 2 }), { code: 'WORKFLOW_VERSION_CHANGED' });
 });
 
+test('external workflow mode persists independently of the internal Agent mode', t => {
+    const h = setup(t);
+    assert.equal(h.call('list').mode, 'auto');
+    assert.equal(h.call('configure', { mode: 'ask' }).mode, 'ask');
+    h.reload();
+    assert.equal(h.call('list').mode, 'ask');
+    h.workflow().configure({ projectId: 'project-a', conversationId: 'canvas-conversation' });
+    assert.equal(h.call('list').mode, 'ask');
+    assert.throws(() => h.call('configure', {}), { code: 'INVALID_ARGUMENTS' });
+});
+
 test('run receipt persists across restart and a lost response retry needs no browser or new task', t => {
     const h = setup(t);
     const first = h.call('run', h.request);

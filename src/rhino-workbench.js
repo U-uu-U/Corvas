@@ -1,6 +1,6 @@
-export { RHINO_EDIT_SKILL } from '../shared/rhino-model-skill.mjs';
+import { mountExternalHandoff } from './external-handoff.js';
 
-export function createRhinoPanel({ onClose, onAgent }) {
+export function createRhinoPanel({ onClose, onHandoff, getProjectId = () => null }) {
     const host = document.getElementById('agentSidebarWrapper');
     if (!host) return null;
     const root = document.createElement('aside');
@@ -8,14 +8,15 @@ export function createRhinoPanel({ onClose, onAgent }) {
     root.hidden = true; root.setAttribute('aria-label', 'Rhino 工作台');
     root.innerHTML = `<header class="hunyuan-panel-head"><div><span class="corvas-rhino-mark">Rh</span><h2>Rhino</h2></div>
         <button type="button" data-action="close" aria-label="关闭 Rhino 侧栏">×</button></header>
-        <div class="rhino-workbench-content"><div class="hunyuan-panel-intro"><strong>模型预览与编辑</strong><p>在 Rhino 中调整模型，在 Agent 中描述你想做的事。</p></div>
+        <div class="rhino-workbench-content"><div class="hunyuan-panel-intro"><strong>模型预览与编辑</strong><p>Codex · Rhino MCP</p></div>
         <section class="rhino-connection-card"><div class="rhino-connection-state"><i></i><strong data-state>未连接</strong><span data-tools></span></div>
             <p data-message role="status" aria-live="polite"></p>
             <div class="rhino-connection-actions"><button type="button" data-action="open">打开并连接</button><button type="button" data-action="connect">仅连接</button></div>
         </section>
         <div class="rhino-workbench-tasks"><button type="button" data-action="inspect"><strong>预览当前模型</strong><span>先检查场景、选择和模型信息</span></button>
             <button type="button" data-action="quad"><strong>整理四边面</strong><span>保留原模型，在副本上清理和重拓扑</span></button>
-            <button type="button" data-action="agent">与 Agent 协作 →</button></div>
+            <button type="button" data-action="handoff">新建 Codex 任务</button></div>
+        <section data-handoff></section>
         <details class="rhino-workbench-settings"><summary>连接设置</summary><form>
             <label>Rhino 程序<select name="executablePath" aria-label="Rhino 程序"></select></label>
             <button type="button" data-action="choose">选择其他程序…</button>
@@ -24,8 +25,9 @@ export function createRhinoPanel({ onClose, onAgent }) {
             <p>需安装兼容的 Cordyceps。若已有 Rhino 窗口未连接，可将连接命令粘贴到 Rhino 执行后重试。</p>
         </form></details></div>`;
     host.append(root);
+    const handoff = mountExternalHandoff({ root, target: 'rhino', getProjectId, onHandoff });
     const api = window.flowCanvas?.rhino;
-    const form = root.querySelector('form');
+    const form = root.querySelector('.rhino-workbench-settings form');
     const message = root.querySelector('[data-message]');
     let state = {}; let timer; let editing = false; let working = false;
     const render = next => {
@@ -35,9 +37,9 @@ export function createRhinoPanel({ onClose, onAgent }) {
         root.querySelector('[data-tools]').textContent = state.connected ? `${state.toolCount} 个工具` : '';
         message.textContent = state.message || '点击“打开并连接”开始使用。';
         root.querySelector('[data-action="open"]').textContent = state.connected ? '切换到 Rhino' : '打开并连接';
-        for (const button of root.querySelectorAll('button')) {
-            button.disabled = !['close', 'copy'].includes(button.dataset.action) && (working || state.busy || !api);
-            if (['inspect', 'quad', 'agent'].includes(button.dataset.action)) button.disabled ||= !state.connected;
+        for (const button of root.querySelectorAll('button:not([data-handoff-action])')) {
+            button.disabled = ['inspect', 'quad', 'handoff'].includes(button.dataset.action)
+                ? !window.flowCanvas?.handoff : !['close', 'copy'].includes(button.dataset.action) && (working || state.busy || !api);
         }
         for (const input of form.querySelectorAll('input, select')) input.disabled = Boolean(working || state.busy);
         if (!editing) {
@@ -71,18 +73,18 @@ export function createRhinoPanel({ onClose, onAgent }) {
     root.addEventListener('click', event => {
         const action = event.target.closest('[data-action]')?.dataset.action;
         if (action === 'close') return onClose();
-        if (action === 'inspect') return onAgent('请检查 Rhino 当前文档和选中的模型，告诉我它的几何类型、尺寸和网格情况，先不要修改模型。');
-        if (action === 'quad') return onAgent('请先检查 Rhino 中选中的网格，在副本上清理并转换为适合微调的四边面，保留原模型和材质，不转 NURBS。');
-        if (action === 'agent') return onAgent('');
+        if (action === 'inspect') return void handoff.create('请检查 Rhino 当前文档和选中的模型，告诉我它的几何类型、尺寸和网格情况，先不要修改模型。');
+        if (action === 'quad') return void handoff.create('请先检查 Rhino 中选中的网格，在副本上清理并转换为适合微调的四边面，保留原模型和材质，不转 NURBS。');
+        if (action === 'handoff') return handoff.focus();
         if (action === 'copy') return void api?.copyCommand().then(() => { message.textContent = '连接命令已复制，请粘贴到 Rhino 命令栏执行。'; }).catch(error => { message.textContent = error.message; });
         if (action === 'choose') return void perform(async () => { const next = await api.choose(); editing = false; return next; });
         if (action === 'open' || action === 'connect') void perform(() => api.open({ connectOnly: action === 'connect' }));
     });
     const unsubscribe = api?.onChanged(render);
-    window.addEventListener('pagehide', () => { clearInterval(timer); unsubscribe?.(); }, { once: true });
+    window.addEventListener('pagehide', () => { clearInterval(timer); handoff.dispose(); unsubscribe?.(); }, { once: true });
     return {
         setVisible(visible) {
-            root.hidden = !visible; clearInterval(timer);
+            root.hidden = !visible; handoff.setVisible(visible); clearInterval(timer);
             if (visible) { void refresh(); timer = setInterval(refresh, 3000); }
         },
         launch() { if (api) void perform(() => api.open()); }

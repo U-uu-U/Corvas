@@ -8,6 +8,7 @@ import sharp from 'sharp';
 import { BOARD_TOOL_DEFINITIONS } from '../shared/board-tool-registry.mjs';
 import agentTools from '../shared/agent-tools.cjs';
 import workflowTools from '../shared/workflow-tools.cjs';
+import handoffTools from '../shared/handoff-tools.cjs';
 
 const DEFAULT_BASE_URL = `http://127.0.0.1:${process.env.FLOW_CANVAS_MCP_PORT || '18765'}`;
 const BASE_URL = (process.env.FLOW_CANVAS_BRIDGE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
@@ -24,6 +25,7 @@ const externalAgentTools = [
 const tools = [
     ...externalAgentTools,
     ...workflowTools.WORKFLOW_TOOL_DEFINITIONS,
+    ...handoffTools.HANDOFF_TOOL_DEFINITIONS,
     {
         name: 'flow_canvas.health',
         description: 'Check whether the Corvas local bridge is running and reachable.',
@@ -287,10 +289,11 @@ const tools = [
     },
     {
         name: 'flow_canvas.item.add',
-        description: 'Add an existing local file path to the active Corvas board.',
+        description: 'Add an existing local file to a Corvas project. Pass the handoff projectId for external-software outputs; omitting it uses the active board. Repeated imports of the same path reuse the existing item.',
         inputSchema: {
             type: 'object',
             properties: {
+                projectId: { type: ['string', 'null'] },
                 filePath: { type: 'string' },
                 x: { type: 'number' },
                 y: { type: 'number' },
@@ -335,6 +338,8 @@ const toolHandlers = {
             async (body = {}) => (await api('POST', `/agent/tools/${encodeURIComponent(tool.name)}`, body)).result])),
     ...Object.fromEntries(workflowTools.WORKFLOW_TOOL_DEFINITIONS.map(tool => [tool.name,
         async (body = {}) => (await api('POST', `/workflow/tools/${encodeURIComponent(tool.name)}`, body)).result])),
+    ...Object.fromEntries(handoffTools.HANDOFF_TOOL_DEFINITIONS.map(tool => [tool.name,
+        async (body = {}) => (await api('POST', `/handoff/tools/${encodeURIComponent(tool.name)}`, body)).result])),
     'flow_canvas.health': () => api('GET', '/health'),
     'flow_canvas.config.get': () => api('GET', '/config'),
     'flow_canvas.config.update': (body = {}) => api('PATCH', '/config', body),
@@ -467,6 +472,15 @@ async function handleMessage(message, framing = 'jsonl') {
                 throw new McpError(-32602, `Unknown tool: ${name}`);
             }
             const result = await handler(params.arguments || {});
+            if (name === 'flow_canvas.handoff.call' && Array.isArray(result?.result?.content)) {
+                const { result: externalResult, ...receipt } = result;
+                sendResult(id, {
+                    content: [{ type: 'text', text: JSON.stringify(receipt, null, 2) }, ...externalResult.content],
+                    ...(externalResult.structuredContent ? { structuredContent: externalResult.structuredContent } : {}),
+                    ...(externalResult.isError ? { isError: true } : {})
+                }, framing);
+                return;
+            }
             sendResult(id, {
                 content: [
                     {

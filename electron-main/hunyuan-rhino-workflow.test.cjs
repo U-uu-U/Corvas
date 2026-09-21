@@ -8,11 +8,11 @@ const { HunyuanRhinoWorkflow } = require('./hunyuan-rhino-workflow.cjs');
 const { keyFor } = require('./hunyuan-model-watcher.cjs');
 const { toolId } = require('./mcp-client.cjs');
 
-function setup(t, initialJobs) {
+function setup(t, initialJobs, { initialMode = 'auto', savedMode } = {}) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'corvas-hunyuan-workflow-test-'));
-    if (initialJobs) fs.writeFileSync(path.join(directory, 'hunyuan-rhino-jobs.json'), JSON.stringify({ version: 1, jobs: initialJobs }));
+    if (initialJobs) fs.writeFileSync(path.join(directory, 'hunyuan-rhino-jobs.json'), JSON.stringify({ version: 1, jobs: initialJobs, mode: savedMode }));
     const source = path.join(directory, 'model.fbx'); fs.writeFileSync(source, 'fixture');
-    const actions = []; let listening = false, state = 'idle';
+    const actions = []; let listening = false, state = 'idle', modeReads = 0;
     const sceneTool = toolId('rhino-fixture', 'rhino_scene');
     const mcpClient = {
         definitions: () => [{ name: sceneTool }], tools: new Map([[sceneTool, { serverId: 'rhino-fixture' }]]),
@@ -38,11 +38,16 @@ function setup(t, initialJobs) {
     };
     const runtime = { board: { readProject: () => ({}) }, runs: new Map(),
         resolveProvider: () => ({ endpoint: 'http://127.0.0.1', apiKey: 'fixture', model: 'fixture' }),
-        start: request => { const run = { ...request, id: randomUUID(), status: 'planning' }; actions.push({ type: 'run', request }); runtime.runs.set(run.id, run); return run; }
+        start: () => assert.fail('Fixed workflows must not enter ordinary Agent start'),
+        startRhinoCleanup: request => {
+            assert.equal(runtime.validateRhinoCleanup(request, { starting: true }), true);
+            const run = { ...request, id: randomUUID(), status: 'planning' };
+            actions.push({ type: 'run', request }); runtime.runs.set(run.id, run); return run;
+        }
     };
     const service = new HunyuanRhinoWorkflow({ directory, getRhino: () => rhino, getRuntime: () => runtime,
         getAccounts: () => ({ downloadModel: async () => { actions.push({ type: 'download' }); return source; } }),
-        getProjectId: () => 'fixture-project', readMode: () => 'auto', onChange: () => {} });
+        getProjectId: () => 'fixture-project', readMode: () => { modeReads++; return initialMode; }, onChange: () => {} });
     clearInterval(service.timer);
     t.after(() => {
         service.close();
@@ -54,7 +59,7 @@ function setup(t, initialJobs) {
         fs.rmSync(directory, { recursive: true, force: true });
     });
     const task = { worksId: randomUUID(), generationId: keyFor(randomUUID()), status: 'ready' };
-    return { service, rhino, runtime, actions, task, accountId: randomUUID(), connect: () => { listening = true; } };
+    return { service, rhino, runtime, actions, task, accountId: randomUUID(), connect: () => { listening = true; }, get modeReads() { return modeReads; } };
 }
 
 test('handoff waits through a Rhino startup dialog then imports and starts the Skill exactly once', async t => {
@@ -74,7 +79,7 @@ test('handoff waits through a Rhino startup dialog then imports and starts the S
     assert.equal(runs.length, 1);
     assert.match(runs[0].request.messages[0].content, /fixture-mesh-id/);
     assert.equal(runs[0].request.skillInstructions.length, 1);
-    assert.deepEqual(runs[0].request.toolAllowlist, ['flow_canvas.rhino.cleanup', toolId('rhino-fixture', 'rhino_scene')]);
+    assert.deepEqual(runs[0].request.toolAllowlist, ['flow_canvas.rhino.cleanup']);
     assert.equal(runs[0].request.execution, 'rhino_cleanup');
     runtime.runs.get(job.runId).status = 'completed'; service.syncRuns();
     assert.equal(job.status, 'completed');
@@ -92,6 +97,33 @@ test('switching a waiting automatic handoff to manual requires confirmation befo
     assert.equal(actions.filter(action => action.type === 'run').length, 1);
 });
 
+test('saved workflow mode takes priority over the internal Agent mode', t => {
+    const h = setup(t, [], { initialMode: 'auto', savedMode: 'ask' });
+    assert.equal(h.service.mode, 'ask');
+    assert.equal(h.modeReads, 0);
+    h.service.configure({ projectId: 'fixture-project', conversationId: 'external-workflows' });
+    assert.equal(JSON.parse(fs.readFileSync(h.service.file, 'utf8')).mode, 'ask');
+});
+
+test('context-only configuration preserves manual mode and its pending jobs', async t => {
+    const h = setup(t, [], { initialMode: 'ask' });
+    assert.equal(h.modeReads, 1);
+    assert.equal(JSON.parse(fs.readFileSync(h.service.file, 'utf8')).mode, 'ask');
+    h.service.observe(h.accountId, h.task);
+    const job = h.service.jobs[0];
+    assert.equal(job.status, 'awaiting_confirmation');
+    h.service.configure({ projectId: 'fixture-project', conversationId: 'codex-context' });
+    h.service.configure({ mode: 'invalid' });
+    h.connect(); await h.service.drain();
+    assert.equal(h.service.mode, 'ask');
+    assert.equal(job.status, 'awaiting_confirmation');
+    assert.equal(h.actions.filter(action => action.type === 'import').length, 0);
+    assert.equal(JSON.parse(fs.readFileSync(h.service.file, 'utf8')).mode, 'ask');
+    h.service.configure({ mode: 'auto' });
+    assert.equal(job.status, 'queued');
+    assert.equal(JSON.parse(fs.readFileSync(h.service.file, 'utf8')).mode, 'auto');
+});
+
 test('old connection-timeout failures can wait again, but imports with unknown results are never replayed', t => {
     const job = { id: keyFor(randomUUID()), generationId: keyFor(randomUUID()), accountId: randomUUID(),
         worksId: randomUUID(), status: 'failed', error: 'Rhino 已打开，但还未连接。请处理软件内的启动提示。' };
@@ -106,7 +138,7 @@ test('legacy Rhino recovery upgrades its execution path without importing an exi
     const job = h.service.jobs[0], run = h.runtime.runs.get(job.runId);
     await h.service.prepareResume(run);
     assert.equal(run.execution, 'rhino_cleanup');
-    assert.ok(run.toolAllowlist.includes('flow_canvas.rhino.cleanup'));
+    assert.deepEqual(run.toolAllowlist, ['flow_canvas.rhino.cleanup']);
     assert.equal(h.actions.filter(action => action.type === 'import').length, 1);
 });
 
@@ -115,5 +147,21 @@ test('legacy Rhino recovery does not import into a different nonempty document',
     const job = h.service.jobs[0], run = h.runtime.runs.get(job.runId);
     h.rhino.mcpClient.verifyResponse = () => ({ foundIds: [], documentEmpty: false });
     await assert.rejects(h.service.prepareResume(run), /不会覆盖其他模型/);
+    assert.equal(h.actions.filter(action => action.type === 'import').length, 1);
+});
+
+test('fixed cleanup validates the stored project, run binding and import report', async t => {
+    const h = setup(t); h.connect(); h.service.observe(h.accountId, h.task); await h.service.drain();
+    const job = h.service.jobs[0], run = h.runtime.runs.get(job.runId);
+    assert.equal(h.runtime.validateRhinoCleanup(run), true);
+    assert.equal(h.runtime.validateRhinoCleanup({ ...run, projectId: 'another-project' }), false);
+    assert.equal(h.runtime.validateRhinoCleanup({ ...run, id: 'another-run' }), false);
+    assert.equal(h.runtime.validateRhinoCleanup({ ...run, source: { hunyuanJobId: 'missing-job' } }), false);
+    assert.equal(h.runtime.validateRhinoCleanup(run, { starting: true }), false);
+    await assert.rejects(h.service.prepareResume({ ...run, id: 'another-run' }), /绑定不符/);
+    const reportFile = path.join(h.service.directory, 'rhino-model-results', job.id, 'import-result.json');
+    const report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+    fs.writeFileSync(reportFile, JSON.stringify({ ...report, invocationId: 'another-import' }));
+    assert.equal(h.runtime.validateRhinoCleanup(run), false);
     assert.equal(h.actions.filter(action => action.type === 'import').length, 1);
 });

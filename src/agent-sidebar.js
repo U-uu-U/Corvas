@@ -39,8 +39,8 @@ import { canRecoverGenerationTask, generationFailureError, formatClientGeneratio
     isGenerationFailureConfirmed, getGenerationRejectionInfo } from './generation-progress.js';
 import { showStatusNotification } from './status-notification.js';
 import { createApplicationLauncher, createHunyuanPanel } from './hunyuan-accounts.js';
-import { createRhinoPanel, RHINO_EDIT_SKILL } from './rhino-workbench.js';
-import { createBlenderPanel, BLENDER_ANIMATION_SKILL } from './blender-workbench.js';
+import { createRhinoPanel } from './rhino-workbench.js';
+import { createBlenderPanel } from './blender-workbench.js';
 import { getVideoModelProfile, describeVideoModelProfile, getVideoModelGroup } from '../shared/video-model-profiles.mjs';
 import { isVideoGenerationAvailable } from '../shared/video-generation-availability.mjs';
 import { getModelPresentation, describeModelPresentation } from '../shared/model-presentation.mjs';
@@ -110,8 +110,6 @@ const AGENT_CONVERSATION_MESSAGE_LIMIT = 80;
 const AGENT_PENDING_ATTACHMENTS_STORAGE_KEY = 'flow-canvas-agent-pending-attachments-v1';
 const AGENT_PENDING_ATTACHMENT_LIMIT = 32;
 const AGENT_SKILLS = Object.freeze([
-    RHINO_EDIT_SKILL,
-    BLENDER_ANIMATION_SKILL,
     {
         id: 'board-planning',
         name: '画板规划',
@@ -336,22 +334,13 @@ export class AgentSidebar {
         this.hunyuanPanel = createHunyuanPanel({
             onClose: () => this.setMode('canvas'), onAgent: () => this.setMode('agent')
         });
-        this.rhinoPanel = createRhinoPanel({ onClose: () => this.setMode('canvas'), onAgent: prompt => {
-            this.globalConfig.agentSkillIds = [...new Set([...this._selectedAgentSkillIds(), RHINO_EDIT_SKILL.id])];
-            this._saveConfig(); this._renderAgentSkillList();
-            this.setMode('agent');
-            if (prompt && this.inputEl) {
-                this.inputEl.value = this.inputEl.value.trim() ? `${this.inputEl.value}\n\n${prompt}` : prompt;
-                this.inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-            this.inputEl?.focus();
-        } });
-        this.blenderPanel = createBlenderPanel({ onClose: () => this.setMode('canvas'), onAgent: prompt => {
-            this.globalConfig.agentSkillIds = [...new Set([...this._selectedAgentSkillIds(), BLENDER_ANIMATION_SKILL.id])];
-            this._saveConfig(); this._renderAgentSkillList(); this.setMode('agent');
-            if (prompt && this.inputEl) { this.inputEl.value = this.inputEl.value.trim() ? `${this.inputEl.value}\n\n${prompt}` : prompt; this.inputEl.dispatchEvent(new Event('input', { bubbles: true })); }
-            this.inputEl?.focus();
-        } });
+        const handoffOptions = target => ({
+            onClose: () => this.setMode('canvas'),
+            getProjectId: () => this.options.getActiveProjectId?.() ?? null,
+            onHandoff: (instruction, requestId) => this._createExternalHandoff(target, instruction, requestId)
+        });
+        this.rhinoPanel = createRhinoPanel(handoffOptions('rhino'));
+        this.blenderPanel = createBlenderPanel(handoffOptions('blender'));
         this.applicationLauncher = createApplicationLauncher({ onSelect: mode => {
             this.setMode(mode);
             if (mode === 'rhino') this.rhinoPanel?.launch();
@@ -400,6 +389,25 @@ export class AgentSidebar {
 
     getBoardSnapshot(options = {}) {
         return this.boardToolRegistry.execute('flow_canvas.board.get_snapshot', options);
+    }
+
+    async _createExternalHandoff(target, instruction, requestId) {
+        const api = window.flowCanvas?.handoff;
+        if (!api?.create) throw new Error('请重启 Corvas 后使用 Codex 交接。');
+        this.externalHandoffRequests ||= new Map();
+        if (!this.externalHandoffRequests.has(requestId)) {
+            const projectId = this.options.getActiveProjectId?.() ?? null;
+            const selection = this.options.getSelectedCanvasEntries?.() ?? this.lastCanvasSelection ?? [];
+            const referenceNodeIds = [...new Set(selection.map(entry => entry?.id)
+                .filter(id => typeof id === 'string' && id))];
+            this.externalHandoffRequests.set(requestId, { projectId, target, instruction, referenceNodeIds, requestId });
+        }
+        if (await this.options.flushBoard?.() === false) {
+            throw new Error('本地画板保存冲突，交接未创建。请先解决保存冲突后重试。');
+        }
+        const task = await api.create(this.externalHandoffRequests.get(requestId));
+        this.externalHandoffRequests.delete(requestId);
+        return task;
     }
 
     previewBoardTransaction(transaction) {
@@ -1466,8 +1474,7 @@ export class AgentSidebar {
     _syncHunyuanWorkflowContext() {
         const api = window.flowCanvas?.hunyuan;
         if (!this.hunyuanWorkflowReady || !api?.configureWorkflow || !this.activeConversationId) return;
-        const context = { mode: this.globalConfig.agentExecutionMode === 'ask' ? 'ask' : 'auto',
-            projectId: this.activeRuntimeProjectId ?? null, conversationId: this.activeConversationId };
+        const context = { projectId: this.activeRuntimeProjectId ?? null, conversationId: this.activeConversationId };
         const key = JSON.stringify(context);
         if (this.hunyuanWorkflowContextKey === key) return;
         this.hunyuanWorkflowContextKey = key;

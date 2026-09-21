@@ -60,6 +60,15 @@ contextBridge.exposeInMainWorld('flowCanvas', {
         test: request => ipcRenderer.invoke('mcp-client:test', request),
     },
 
+    handoff: {
+        create: request => ipcRenderer.invoke('handoff:create', request),
+        list: request => ipcRenderer.invoke('handoff:list', request),
+        get: request => ipcRenderer.invoke('handoff:get', request),
+        copy: request => ipcRenderer.invoke('handoff:copy', request),
+        open: request => ipcRenderer.invoke('handoff:open', request),
+        cancel: request => ipcRenderer.invoke('handoff:cancel', request),
+    },
+
     hunyuan: {
         list: () => ipcRenderer.invoke('hunyuan:list'),
         save: account => ipcRenderer.invoke('hunyuan:save', account),

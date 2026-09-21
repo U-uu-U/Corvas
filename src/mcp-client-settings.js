@@ -1,5 +1,5 @@
 import './mcp-client-settings.css';
-import { formatClientGenerationError } from './generation-progress.js';
+import { formatClientStatusMessage } from './generation-progress.js';
 
 const icon = name => `<svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-${name}"></use></svg>`;
 
@@ -10,7 +10,7 @@ export function mountMcpSettings() {
     root.id = 'mcpClientSettings';
     root.className = 'mcp-client-settings';
     root.innerHTML = `
-        <div class="agent-settings-section-head"><strong>MCP 外部工具</strong>
+        <div class="agent-settings-section-head"><strong>MCP 外部软件连接</strong>
             <button type="button" data-action="add" title="添加 MCP 服务" aria-label="添加 MCP 服务">${icon('add')}</button></div>
         <div class="mcp-client-status" role="status" aria-live="polite"></div>
         <div class="mcp-client-list"></div>
@@ -37,7 +37,7 @@ export function mountMcpSettings() {
     let busy = false;
     const field = name => form.elements.namedItem(name);
     const message = (text, error = false) => {
-        status.textContent = formatClientGenerationError(text);
+        status.textContent = formatClientStatusMessage(text);
         status.classList.toggle('error', error);
     };
     const transportFields = () => {
@@ -64,7 +64,7 @@ export function mountMcpSettings() {
             const state = document.createElement('small');
             state.textContent = `${server.enabled ? ({ connected: '已连接', connecting: '连接中', disconnected: '未连接' }[server.status]) : '已停用'} · ${server.tools.length} 个工具`;
             row.append(heading, state);
-            if (server.error) { const error = document.createElement('p'); error.className = 'error'; error.textContent = server.error; row.append(error); }
+            if (server.error) { const error = document.createElement('p'); error.className = 'error'; error.textContent = formatClientStatusMessage(server.error); row.append(error); }
             if (server.tools.length) {
                 const details = document.createElement('details');
                 const summary = document.createElement('summary'); summary.textContent = '工具列表'; details.append(summary);

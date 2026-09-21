@@ -5,7 +5,8 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const { toolId } = require('../electron-main/mcp-client.cjs');
+const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
+const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
 
 (async () => {
     const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
@@ -14,7 +15,7 @@ const { toolId } = require('../electron-main/mcp-client.cjs');
     const live = process.env.FLOW_RHINO_SMOKE_LIVE === '1';
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'corvas-rhino-ui-'));
     const output = path.join(__dirname, '../output/playwright');
-    let app, page, expectedToolName, toolCalls = 0, providerCalls = 0;
+    let app, page, client, toolCalls = 0;
     const transports = new Set();
     const mcpHttp = http.createServer(async (request, response) => {
         if (request.method !== 'POST') { response.writeHead(405).end(); return; }
@@ -30,31 +31,26 @@ const { toolId } = require('../electron-main/mcp-client.cjs');
         }
         await transport.handleRequest(request, response, body);
     });
-    const provider = http.createServer(async (request, response) => {
-        const chunks = []; for await (const chunk of request) chunks.push(chunk);
-        const body = JSON.parse(Buffer.concat(chunks)); providerCalls++;
-        const observed = body.messages.some(message => message.role === 'tool');
-        const tool = body.tools.find(tool => tool.function.name === expectedToolName);
-        if (!tool) { response.writeHead(500).end('Rhino tool was not exposed to the Agent'); return; }
-        const message = observed ? { role: 'assistant', content: 'Rhino has one mesh with 100 faces.' }
-            : { role: 'assistant', content: '', tool_calls: [{ id: 'rhino-read', type: 'function', function: { name: tool.function.name, arguments: '{"action":"objects"}' } }] };
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ choices: [{ message, finish_reason: observed ? 'stop' : 'tool_calls' }] }));
-    });
     await new Promise(resolve => mcpHttp.listen(0, '127.0.0.1', resolve));
-    await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
+    const probe = http.createServer();
+    await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
+    const bridgePort = probe.address().port;
+    await new Promise(resolve => probe.close(resolve));
     try {
         await fs.mkdir(path.join(profile, 'data')); await fs.mkdir(output, { recursive: true });
         await fs.writeFile(path.join(profile, 'Rhino.exe'), 'fixture');
         await fs.writeFile(path.join(profile, 'data/board.json'), JSON.stringify({ version: 1, activeGroupId: 'rhino-smoke', items: [], connections: [],
-            folderGroups: [{ id: 'rhino-smoke', name: 'Rhino', savedItems: [], connections: [], folders: [], boardRevision: 0 }], mcp: { enabled: false } }));
+            folderGroups: [{ id: 'rhino-smoke', name: 'Rhino', savedItems: [], connections: [], folders: [], boardRevision: 0 }],
+            mcp: { enabled: true, port: bridgePort } }));
         const env = { ...process.env, FLOW_RHINO_SMOKE_PROFILE: profile }; delete env.ELECTRON_RUN_AS_NODE;
-        app = await electron.launch({ executablePath: require('electron'), args: [path.join(__dirname, 'rhino-smoke-entry.cjs')], env });
+        app = await electron.launch({ executablePath: require('electron'), args: ['--disable-gpu', path.join(__dirname, 'rhino-smoke-entry.cjs')], env });
         for (let attempt = 0; attempt < 150; attempt++) {
             page = app.windows().find(window => /dist[\\/]index\.html/.test(window.url()));
             if (page) break; await new Promise(resolve => setTimeout(resolve, 100));
         }
         assert.ok(page);
+        const errors = [];
+        page.on('pageerror', error => errors.push(error.message));
         await page.waitForSelector('#rhinoWorkbenchPanel', { state: 'attached' });
         await page.evaluate(endpoint => window.flowCanvas.rhino.save({ endpoint }), live ? 'http://127.0.0.1:26929/mcp' : `http://127.0.0.1:${mcpHttp.address().port}/mcp`);
         await page.locator('#agentToggleBtn').hover();
@@ -65,45 +61,70 @@ const { toolId } = require('../electron-main/mcp-client.cjs');
         assert.equal(toolCalls, 0, 'Opening Rhino must not modify or inspect geometry automatically');
         const saved = await page.evaluate(() => window.flowCanvas.mcpClient.list());
         assert.equal(saved.servers.length, 1);
-        expectedToolName = 't_' + crypto.createHash('sha256').update(toolId(saved.servers[0].id, 'rhino_scene')).digest('hex').slice(0, 60);
         await panel.locator('[data-action="open"]').click();
+        assert.equal((await page.evaluate(() => window.flowCanvas.mcpClient.list())).servers.length, 1);
+        await panel.locator('[data-action="inspect"]').click();
+        await page.waitForFunction(() => document.querySelector('#rhinoWorkbenchPanel .external-handoff-task strong')?.textContent === '待 Codex 接手');
+        assert.ok(await page.locator('body').evaluate(body => body.classList.contains('rhino-mode') && !body.classList.contains('agent-mode')));
+        const created = await page.evaluate(() => window.flowCanvas.handoff.list({ projectId: 'rhino-smoke', target: 'rhino' }));
+        assert.equal(created.tasks.length, 1);
+        const task = created.tasks[0];
+        assert.match(task.instruction, /不要修改模型/);
+        assert.equal(toolCalls, 0, 'Creating a handoff must not inspect the external scene');
+        client = new Client({ name: 'codex-rhino-smoke', version: '1.0' });
+        await client.connect(new StdioClientTransport({ command: process.execPath,
+            args: [path.join(__dirname, '../mcp/flow-canvas-mcp.mjs')],
+            env: { ...process.env, FLOW_CANVAS_BRIDGE_URL: `http://127.0.0.1:${bridgePort}` }, stderr: 'pipe' }));
+        const handoff = async (action, input) => {
+            const result = await client.callTool({ name: `flow_canvas.handoff.${action}`, arguments: input });
+            assert.notEqual(result.isError, true, JSON.stringify(result));
+            const receipt = JSON.parse(result.content[0].text);
+            return action === 'call' ? { ...receipt, content: result.content.slice(1) } : receipt;
+        };
+        const scope = { projectId: 'rhino-smoke', taskId: task.id };
+        const owner = { ...scope, clientId: 'codex-rhino-smoke' };
+        assert.equal((await handoff('claim', owner)).status, 'running');
+        const discovered = await handoff('tools', scope);
+        const tool = discovered.tools.find(tool => tool.name === 'rhino_scene');
+        assert.ok(tool, 'Rhino MCP tools must be discoverable by the external client');
+        const call = { ...owner, serverId: tool.serverId, toolName: tool.name, binding: tool.binding,
+            requestId: 'rhino-inspect-1', arguments: { action: 'objects' } };
+        const called = await handoff('call', call);
+        assert.equal(called.status, 'completed');
+        if (!live) {
+            const scene = JSON.parse(called.content.find(block => block.type === 'text').text);
+            assert.deepEqual(scene.objects, [{ id: 'fixture-mesh', type: 'mesh', faces: 100 }]);
+        }
+        assert.equal((await handoff('call', call)).reused, true);
+        assert.equal(toolCalls, live ? 0 : 1, 'Repeating a request must reuse the saved scene result');
+        await handoff('update', { ...owner, status: 'completed', summary: '已读取 Rhino 场景，模型保持不变' });
+        await page.waitForFunction(() => document.querySelector('#rhinoWorkbenchPanel .external-handoff-task strong')?.textContent === '完成');
+        assert.deepEqual(await page.evaluate(() => window.flowCanvas.agent.list({ projectId: 'rhino-smoke' })), [],
+            'External handoff must not start an internal Agent or text model run');
         assert.equal((await page.evaluate(() => window.flowCanvas.mcpClient.list())).servers.length, 1);
         for (const theme of ['dark', 'light']) {
             await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
             await page.screenshot({ path: path.join(output, `rhino-workbench-${theme}.png`) });
         }
-        await panel.locator('[data-action="inspect"]').click();
-        await page.waitForSelector('#agentInput', { state: 'visible' });
-        assert.match(await page.locator('#agentInput').inputValue(), /不要修改模型/);
-        const selectedSkills = await page.evaluate(() => JSON.parse(localStorage.getItem('flow-canvas-agent-global')).agentSkillIds);
-        assert.ok(selectedSkills.includes('rhino-model-editing'));
-        const run = await page.evaluate(endpoint => window.flowCanvas.agent.start({ projectId: 'rhino-smoke', conversationId: 'rhino-check',
-            messages: [{ role: 'user', content: 'Inspect the Rhino scene.' }], provider: { type: 'openai', endpoint, model: 'test', apiKey: 'fixture-key' } }),
-        `http://127.0.0.1:${provider.address().port}/v1/chat/completions`);
-        let result;
-        for (let attempt = 0; attempt < 200; attempt++) {
-            result = await page.evaluate(id => window.flowCanvas.agent.get({ runId: id }), run.id);
-            if (['completed', 'failed'].includes(result.status)) break;
-            await new Promise(resolve => setTimeout(resolve, 50));
-        }
-        assert.equal(result.status, 'completed', result.error);
-        assert.equal(toolCalls, live ? 0 : 1); assert.equal(providerCalls, 2);
-        await page.locator('#agentSidebarCloseBtn').click();
-        await page.locator('#agentToggleBtn').hover(); await page.locator('#corvasAppLauncher [data-app="rhino"]').click();
         await page.waitForFunction(() => !document.querySelector('#rhinoWorkbenchPanel [data-action="open"]').disabled);
         await (await app.browserWindow(page)).evaluate(window => window.setSize(820, 680));
         await page.waitForTimeout(350);
         const bounds = await panel.boundingBox(); const viewport = await page.evaluate(() => innerWidth);
         assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= viewport + 1);
+        assert.ok(await panel.locator('.external-handoff').evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+        await panel.locator('.external-handoff-task').scrollIntoViewIfNeeded();
         await page.screenshot({ path: path.join(output, 'rhino-workbench-compact.png') });
-        console.log(`Rhino workbench ${live ? 'LIVE' : 'mock'} smoke passed: launcher, shared MCP discovery, no duplicate connection, Agent scene read, Skill draft, themes and compact layout.`);
+        assert.deepEqual(errors, []);
+        console.log(`Rhino workbench ${live ? 'LIVE' : 'mock'} smoke passed: launcher, connection reuse, external handoff claim/discovery/HTTP scene call/replay/status, no internal Agent, themes and compact layout.`);
     } catch (error) {
         await page?.screenshot({ path: path.join(output, 'rhino-workbench-failure.png') }).catch(() => {}); throw error;
     } finally {
+        await client?.close();
         await app?.close();
         for (const transport of transports) await transport.close();
-        mcpHttp.closeAllConnections(); provider.closeAllConnections();
-        await Promise.all([new Promise(resolve => mcpHttp.close(resolve)), new Promise(resolve => provider.close(resolve))]);
-        await fs.rm(profile, { recursive: true, force: true });
+        mcpHttp.closeAllConnections();
+        await new Promise(resolve => mcpHttp.close(resolve));
+        assert.ok(profile.startsWith(path.join(os.tmpdir(), 'corvas-rhino-ui-')));
+        await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
 })().catch(error => { console.error(error); process.exitCode = 1; });

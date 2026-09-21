@@ -25,7 +25,12 @@ class WorkflowService {
         if (['run', 'status', 'history', 'confirm', 'resume', 'cancel'].includes(action)) this.getRuntime().board.readProject(input.projectId);
         return this[action](input);
     }
-    list() { return { workflows: [clone(HUNYUAN_RHINO_WORKFLOW)], execution: 'local-script', requiresTextProvider: false }; }
+    list() { return { workflows: [clone(HUNYUAN_RHINO_WORKFLOW)], execution: 'local-script', requiresTextProvider: false,
+        mode: this.getWorkflow().mode }; }
+    configure({ mode }) {
+        const state = this.getWorkflow().configure({ mode });
+        return { mode: state.mode, execution: 'local-script', requiresTextProvider: false };
+    }
     get({ workflowId }) {
         if (workflowId !== HUNYUAN_RHINO_WORKFLOW.id) throw fail('WORKFLOW_NOT_FOUND', '工作流不存在，请先读取 workflow.list');
         return clone(HUNYUAN_RHINO_WORKFLOW);

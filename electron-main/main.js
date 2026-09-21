@@ -1495,6 +1495,36 @@ for (const action of ['list', 'save', 'remove', 'test']) {
     });
 }
 
+for (const action of ['create', 'list', 'get', 'copy', 'open', 'cancel']) {
+    ipcMain.handle(`handoff:${action}`, async (event, request) => {
+        if (!isCurrentMainWindowSender(event) || event.senderFrame !== mainWindow.webContents.mainFrame) {
+            throw new Error('外部协作请求来源无效');
+        }
+        if (!agentServices?.handoff) throw new Error('外部协作服务尚未初始化');
+        if (action === 'open') {
+            const task = agentServices.handoff.get(request || {});
+            const url = task.owner?.conversationUrl;
+            if (!/^codex:\/\/threads\/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/.test(url || '')) {
+                throw new Error('这条任务尚未关联 Codex 对话，请复制交接指令');
+            }
+            await shell.openExternal(url);
+            return task;
+        }
+        if (action === 'copy') {
+            const task = agentServices.handoff.get(request || {});
+            const input = JSON.stringify({ projectId: task.projectId, taskId: task.id });
+            clipboard.writeText(`请接手 Corvas 的 ${task.target === 'blender' ? 'Blender' : 'Rhino'} 任务。\n`
+                + `先调用 flow_canvas.handoff.get，参数 ${input}；核对原项目、任务要求和 referenceIssues。\n`
+                + '已有 owner 时沿用 task.owner.clientId 接续原任务；尚未接手时使用当前对话的稳定 clientId 调用 handoff.claim。'
+                + '可在 claim 中附上当前 codex://threads/ 对话链接，便于返回对话；再用 handoff.tools 读取真实工具 schema。'
+                + '通过 handoff.call 操作软件，不要调用内置 agent.start。每次操作使用固定 requestId；结果不明时先核查，不要换 ID 重发。\n'
+                + '需要确认时在本对话提问，并用 handoff.update 更新状态。产物应回到该任务的原项目。');
+            return task;
+        }
+        return agentServices.handoff[action](request || {});
+    });
+}
+
 function getRhinoWorkbench() {
     if (!agentServices) throw new Error('Agent 服务尚未初始化');
     rhinoWorkbench ||= new RhinoWorkbench({ directory: path.join(app.getPath('userData'), 'data'),

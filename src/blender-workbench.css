@@ -1,3 +1,4 @@
+@import './external-handoff.css';
 .corvas-blender-mark { display: inline-grid; width: 20px; height: 20px; place-items: center; border: 1px solid currentColor; border-radius: 5px; font-size: 13px; font-weight: 700; }
 body.blender-mode.agent-open .agent-sidebar-wrapper { width: 370px; max-width: calc(100vw - 24px); }
 body.blender-mode .agent-sidebar { display: none; }

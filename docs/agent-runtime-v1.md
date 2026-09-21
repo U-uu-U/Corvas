@@ -6,6 +6,10 @@ The desktop Agent and external harness share the project board service and model
 
 Normal chat and node Agent generation both enter `agent.start`. Models may read scoped snapshots, search project assets, inspect image crops/video frames, read model capabilities, and apply validated board transactions. Image/video runs are proposed as one batch and wait for desktop confirmation of the exact plan version. Additional generations require a new confirmation.
 
+The built-in Agent is restricted to 20 canvas tools: board transactions, assets, models, generation, creative documents, saved canvas recipes, task status and project memory. Connected external MCP tools and Rhino cleanup are not exposed to the language model. The same boundary is enforced during dispatch, confirmation, retry and recovery; caller allowlists and custom Skill text cannot expand it. Legacy external-software runs remain readable but must be continued in the external assistant.
+
+Blender/Rhino workbenches create persistent external handoffs. `flow_canvas.handoff.*` lets Codex claim tasks and call the configured software MCP directly without internal model inference. The fixed Hunyuan/Rhino workflow uses a separate `startRhinoCleanup` entry point validated against the actual job, project and import report. That method is never exposed through generic IPC or MCP runtime actions. Workflow mode is persisted separately; the internal Agent mode no longer changes it.
+
 OpenAI-compatible and Anthropic transports support tool calls and streamed text. Dotted tool names are mapped reversibly to vendor-safe function names. Explicit unsupported-tool errors fall back once to chat; prose is never executed as tools.
 
 ## IPC And MCP

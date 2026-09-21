@@ -6,6 +6,7 @@ const path = require('node:path');
 const FlowCanvasBridge = require('./mcp-bridge');
 const { DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
 const { WORKFLOW_TOOL_DEFINITIONS } = require('../shared/workflow-tools.cjs');
+const { HANDOFF_TOOL_DEFINITIONS } = require('../shared/handoff-tools.cjs');
 
 function createBridge(options = {}) {
     const requests = [];
@@ -190,6 +191,62 @@ function getFreePort() {
         });
     });
 }
+
+test('handoff routes use their own executor and cannot be called through Agent routes', async () => {
+    const { bridge, requests } = createBridge();
+    const calls = [];
+    bridge.handoffExecutor = async (name, input) => { calls.push({ name, input }); return { id: 'fixture' }; };
+    bridge.agentExecutor = () => { throw new Error('Internal Agent must not run'); };
+    for (const tool of HANDOFF_TOOL_DEFINITIONS) {
+        const route = bridge._matchRoute('POST', `/handoff/tools/${tool.name}`);
+        assert.equal(route.toolName, tool.name);
+        assert.deepEqual(await route.handler({}, { projectId: 'project' }), { result: { id: 'fixture' } });
+        assert.equal(bridge._matchRoute('POST', `/agent/tools/${tool.name}`), null);
+    }
+    assert.equal(calls.length, HANDOFF_TOOL_DEFINITIONS.length);
+    assert.deepEqual(requests, []);
+    assert.equal(bridge._matchRoute('POST', '/handoff/tools/flow_canvas.agent.start'), null);
+});
+
+test('disabled external handoff tools never dispatch', async () => {
+    const { bridge } = createBridge();
+    const port = await getFreePort();
+    let dispatched = false;
+    bridge.handoffExecutor = () => { dispatched = true; };
+    bridge.start({ ...DEFAULT_MCP_CONFIG, port,
+        allowedTools: DEFAULT_MCP_CONFIG.allowedTools.filter(name => name !== 'flow_canvas.handoff.call') });
+    await nextTurn();
+    try {
+        const response = await fetch(`http://127.0.0.1:${port}/handoff/tools/flow_canvas.handoff.call`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        assert.equal(response.status, 403);
+        assert.equal(dispatched, false);
+    } finally { bridge.stop(); }
+});
+
+test('external outputs import into their original project after the visible project changes', async t => {
+    const fs = require('node:fs');
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-handoff-output-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const filePath = path.join(directory, 'result.obj');
+    fs.writeFileSync(filePath, 'v 0 0 0');
+    const data = { activeGroupId: 'other', items: [], connections: [], folderGroups: [
+        { id: 'original', savedItems: [], connections: [], plans: [], boardRevision: 0 },
+        { id: 'other', savedItems: [], connections: [], plans: [], boardRevision: 0 }
+    ] };
+    const { AgentBoardService } = await import('./agent-board-service.mjs');
+    let current = structuredClone(data);
+    const board = new AgentBoardService({ store: { load: () => current, save: value => { current = value; return true; } } });
+    const { bridge } = createBridge();
+    bridge.projectItemAdder = async (projectId, add) => (await board.updateProject(projectId, add)).value;
+    const first = await bridge._addItem({ projectId: 'original', filePath });
+    const second = await bridge._addItem({ projectId: 'original', filePath });
+    assert.equal(first.item.id, second.item.id);
+    assert.equal(board.readProject('original').items.length, 1);
+    assert.equal(board.readProject('other').items.length, 0);
+    assert.equal(current.activeGroupId, 'other');
+    await assert.rejects(bridge._addItem({ projectId: 'deleted', filePath }), /Project not found/);
+});
 
 test('workflow routes execute independently of the Agent and renderer', async () => {
     const { bridge, requests } = createBridge();

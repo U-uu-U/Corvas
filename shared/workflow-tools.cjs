@@ -47,6 +47,11 @@ const WORKFLOW_TOOL_DEFINITIONS = [
         annotations: { readOnlyHint: true }
     },
     {
+        name: 'flow_canvas.workflow.configure',
+        description: 'Set the independent Hunyuan-to-Rhino delivery mode after the user requests it: ask waits for confirmation in the external conversation; auto permits automatic delivery and releases pending unconfirmed jobs across projects. This setting persists and is independent of the canvas Agent mode. Read workflow.list for the current mode.',
+        inputSchema: object({ mode: { enum: ['auto', 'ask'] } }, ['mode'])
+    },
+    {
         name: 'flow_canvas.workflow.sources',
         description: 'List available Hunyuan model references, optionally filtered by account. Select the returned accountId and generationId; do not invent IDs or supply download URLs. This may refresh saved model references and does not modify Rhino.',
         inputSchema: object({ accountId: string }),

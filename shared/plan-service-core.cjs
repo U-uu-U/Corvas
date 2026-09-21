@@ -16,9 +16,12 @@ const DEFAULT_PLAN_COLUMNS = [
 const DEFAULT_PLAN_STATUSES = ['未开始', '进行中', '待确认', '已完成'];
 const { AGENT_TOOL_DEFINITIONS, AGENT_RUN_TOOLS } = require('./agent-tools.cjs');
 const { WORKFLOW_TOOL_DEFINITIONS } = require('./workflow-tools.cjs');
+const { HANDOFF_TOOL_DEFINITIONS } = require('./handoff-tools.cjs');
 const MCP_BOARD_TOOLS_VERSION = 3;
-const MCP_WORKFLOW_TOOLS_VERSION = 2;
+const MCP_WORKFLOW_TOOLS_VERSION = 3;
+const MCP_HANDOFF_TOOLS_VERSION = 1;
 const WORKFLOW_MCP_TOOLS = WORKFLOW_TOOL_DEFINITIONS.map(tool => tool.name);
+const HANDOFF_MCP_TOOLS = HANDOFF_TOOL_DEFINITIONS.map(tool => tool.name);
 const BOARD_TRANSACTION_MCP_TOOLS = [
     'flow_canvas.board.get_snapshot',
     'flow_canvas.board.transaction.preview',
@@ -34,6 +37,7 @@ const DEFAULT_MCP_CONFIG = {
     port: 18765,
     boardToolsVersion: MCP_BOARD_TOOLS_VERSION,
     workflowToolsVersion: MCP_WORKFLOW_TOOLS_VERSION,
+    handoffToolsVersion: MCP_HANDOFF_TOOLS_VERSION,
     allowedTools: [
         'flow_canvas.health',
         'flow_canvas.config.get',
@@ -52,6 +56,7 @@ const DEFAULT_MCP_CONFIG = {
         'flow_canvas.video.generate',
         ...BOARD_TRANSACTION_MCP_TOOLS,
         ...WORKFLOW_MCP_TOOLS,
+        ...HANDOFF_MCP_TOOLS,
         'flow_canvas.item.list',
         'flow_canvas.item.get',
         'flow_canvas.item.add',
@@ -69,17 +74,25 @@ function normalizeMcpConfig(config = {}) {
     const shouldMigrateBoardTools = !Number.isInteger(currentBoardToolsVersion)
         || currentBoardToolsVersion < MCP_BOARD_TOOLS_VERSION;
     const currentWorkflowToolsVersion = Number(source.workflowToolsVersion);
+    const currentHandoffToolsVersion = Number(source.handoffToolsVersion);
+    const shouldMigrateHandoffTools = !Number.isInteger(currentHandoffToolsVersion)
+        || currentHandoffToolsVersion < MCP_HANDOFF_TOOLS_VERSION;
     const workflowToolAdditions = !Number.isInteger(currentWorkflowToolsVersion) || currentWorkflowToolsVersion < 1
-        ? WORKFLOW_MCP_TOOLS : currentWorkflowToolsVersion < 2 ? ['flow_canvas.workflow.confirm'] : [];
+        ? WORKFLOW_MCP_TOOLS : [
+            ...(currentWorkflowToolsVersion < 2 ? ['flow_canvas.workflow.confirm'] : []),
+            ...(currentWorkflowToolsVersion < 3 ? ['flow_canvas.workflow.configure'] : [])
+        ];
     return {
         ...DEFAULT_MCP_CONFIG,
         ...source,
         boardToolsVersion: MCP_BOARD_TOOLS_VERSION,
         workflowToolsVersion: MCP_WORKFLOW_TOOLS_VERSION,
+        handoffToolsVersion: MCP_HANDOFF_TOOLS_VERSION,
         allowedTools: [...new Set([
             ...configuredTools.filter(tool => tool !== 'flow_canvas.rhino.cleanup'),
             ...(shouldMigrateBoardTools ? BOARD_TRANSACTION_MCP_TOOLS : []),
-            ...workflowToolAdditions
+            ...workflowToolAdditions,
+            ...(shouldMigrateHandoffTools ? HANDOFF_MCP_TOOLS : [])
         ])]
     };
 }
@@ -429,8 +442,10 @@ module.exports = {
     DEFAULT_PLAN_STATUSES,
     MCP_BOARD_TOOLS_VERSION,
     MCP_WORKFLOW_TOOLS_VERSION,
+    MCP_HANDOFF_TOOLS_VERSION,
     BOARD_TRANSACTION_MCP_TOOLS,
     WORKFLOW_MCP_TOOLS,
+    HANDOFF_MCP_TOOLS,
     DEFAULT_MCP_CONFIG,
     normalizeMcpConfig,
     PlanService

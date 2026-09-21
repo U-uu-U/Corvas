@@ -7,6 +7,7 @@ const sharp = require('sharp');
 const { app, net } = require('electron');
 const { PlanService, DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
 const { WORKFLOW_TOOL_DEFINITIONS } = require('../shared/workflow-tools.cjs');
+const { HANDOFF_TOOL_DEFINITIONS } = require('../shared/handoff-tools.cjs');
 const { isGlobalAiOpcModel, buildGlobalAiOpcBody, GlobalAiOpcAssets, LIMITS: GLOBALAIOPC_LIMITS } = require('./globalaiopc-video.cjs');
 const { isStarFrameModel, buildStarFrameBody, starFrameContentUrl, starFrameDownloadRequest, STARFRAME_LIMITS } = require('./starframe-video.cjs');
 const {
@@ -193,6 +194,7 @@ const MANAGEMENT_TOOL_NAMES = [
     'flow_canvas.config.update'
 ];
 const WORKFLOW_TOOL_NAMES = new Set(WORKFLOW_TOOL_DEFINITIONS.map(tool => tool.name));
+const HANDOFF_TOOL_NAMES = new Set(HANDOFF_TOOL_DEFINITIONS.map(tool => tool.name));
 const KNOWN_TOOL_NAMES = new Set([
     ...Object.values(ROUTE_TO_TOOL),
     ...DEFAULT_MCP_CONFIG.allowedTools
@@ -575,6 +577,16 @@ class FlowCanvasBridge {
     }
 
     _matchRoute(method, pathname) {
+        if (method === 'POST' && pathname.startsWith('/handoff/tools/')) {
+            const toolName = decodeURIComponent(pathname.slice('/handoff/tools/'.length));
+            if (!HANDOFF_TOOL_NAMES.has(toolName)) return null;
+            return { toolName, params: {}, handler: async (_, body) => {
+                if (!this.handoffExecutor) {
+                    throw createBridgeError('TOOL_UNAVAILABLE', 'External handoff service unavailable', { toolName });
+                }
+                return { result: await this.handoffExecutor(toolName, body) };
+            } };
+        }
         if (method === 'POST' && pathname.startsWith('/workflow/tools/')) {
             const toolName = decodeURIComponent(pathname.slice('/workflow/tools/'.length));
             if (!WORKFLOW_TOOL_NAMES.has(toolName)) return null;
@@ -587,7 +599,7 @@ class FlowCanvasBridge {
         }
         if (method === 'POST' && pathname.startsWith('/agent/tools/')) {
             const toolName = decodeURIComponent(pathname.slice('/agent/tools/'.length));
-            if (!KNOWN_TOOL_NAMES.has(toolName) || WORKFLOW_TOOL_NAMES.has(toolName)) return null;
+            if (!KNOWN_TOOL_NAMES.has(toolName) || WORKFLOW_TOOL_NAMES.has(toolName) || HANDOFF_TOOL_NAMES.has(toolName)) return null;
             return { toolName, params: {}, handler: async (_, body) => {
                 if (!this.agentExecutor) throw new Error('Agent runtime unavailable');
                 return { result: await this.agentExecutor(toolName, body) };
@@ -807,6 +819,12 @@ class FlowCanvasBridge {
         if (!filePath) throw new Error('Missing filePath');
         if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
             throw new Error(`File does not exist: ${filePath}`);
+        }
+        if (Object.hasOwn(body, 'projectId')) {
+            if (!this.projectItemAdder) throw createBridgeError('TOOL_UNAVAILABLE', 'Project board service unavailable');
+            const item = await this.projectItemAdder(body.projectId, project => addBoardItem(project, filePath, body));
+            this.registerMediaFile?.(filePath);
+            return { item, projectId: body.projectId };
         }
         const { data } = this._loadWithPlanService();
         const item = addBoardItem(data, filePath, body);
