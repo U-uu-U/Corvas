@@ -11,6 +11,9 @@ a { color: #7fb2ff; }
 header { padding: 16px 22px; border-bottom: 1px solid #23262f; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 header h1 { font-size: 16px; margin: 0; font-weight: 600; }
 header .spacer { flex: 1 1 auto; }
+.channel-nav { display:flex; gap:16px; align-items:center; }
+.channel-nav a { color:#aab2c5; text-decoration:none; padding:6px 0; border-bottom:2px solid transparent; }
+.channel-nav a[aria-current=page] { color:#e6e8ee; border-color:#7fb2ff; }
 main { padding: 18px 22px 60px; max-width: 1180px; }
 section { margin-bottom: 26px; }
 h2 { font-size: 14px; margin: 0 0 10px; color: #aab2c5; font-weight: 600; }
@@ -66,13 +69,15 @@ function layout(title, body) {
 `;
 }
 
-export function loginPage({ error = '', publicConfigPath = '/config' } = {}) {
+export function loginPage({ error = '', publicConfigPath = '/config', channel = 'stable' } = {}) {
+    channel = channel === 'preview' ? 'preview' : 'stable';
     return layout('模型配置服务 · 登录', `
 <div class="login">
-  <h1 style="font-size:16px">模型配置服务</h1>
+  <h1 style="font-size:16px">模型配置服务${channel === 'preview' ? ' · 源码预览' : ''}</h1>
   <p class="muted">客户端从这里获取模型能力 CONFIG：<a href="${escapeHtml(publicConfigPath)}"><code>${escapeHtml(publicConfigPath)}</code></a></p>
   ${error ? `<div class="flash err">${escapeHtml(error)}</div>` : ''}
   <form method="post" action="/admin/login">
+    <input type="hidden" name="channel" value="${channel}">
     <input type="password" name="password" placeholder="管理密码" autocomplete="current-password" autofocus required>
     <button class="primary" type="submit">登录</button>
   </form>
@@ -84,40 +89,49 @@ function formatBytes(size) {
     return size < 1024 ? `${size} B` : `${(size / 1024).toFixed(1)} KB`;
 }
 
-function versionRows(versions, { csrf, editing }) {
+function versionRows(versions, { csrf, editing, channel }) {
     if (!versions.length) return '<tr><td colspan="6" class="muted">还没有任何版本</td></tr>';
     return versions.map(version => {
+        const selectedCurrent = channel === 'preview' ? version.preview : version.current;
+        const activeBadges = [version.current ? '<span class="badge ok">正式现行</span>' : '',
+            version.preview ? '<span class="badge ok">源码预览现行</span>' : ''].filter(Boolean).join(' ');
         const cells = [
             `<td class="mono">${escapeHtml(version.name)}</td>`,
             `<td>${version.broken ? '<span class="badge err">损坏</span>' : `r${escapeHtml(version.revision)}`}</td>`,
             `<td>${version.broken ? '—' : escapeHtml(version.modelCount)}</td>`,
             `<td>${formatBytes(version.size)}</td>`,
             `<td class="mono muted">${escapeHtml(version.updatedAt || '')}</td>`,
-            `<td>${version.current ? '<span class="badge ok">现行</span>' : (version.name === editing ? '<span class="badge">编辑中</span>' : '')}</td>`
+            `<td>${activeBadges || (version.name === editing ? '<span class="badge">编辑中</span>' : '')}</td>`
         ];
         const actions = [];
-        actions.push(`<a class="link" href="/admin?version=${encodeURIComponent(version.name)}">载入编辑器</a>`);
-        if (!version.current) {
+        actions.push(`<a class="link" href="/admin?channel=${channel}&amp;version=${encodeURIComponent(version.name)}">载入编辑器</a>`);
+        if (!selectedCurrent) {
             actions.push(`<form method="post" action="/admin/apply" style="display:inline">
                 <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+                <input type="hidden" name="channel" value="${channel}">
                 <input type="hidden" name="name" value="${escapeHtml(version.name)}">
                 <button class="link" type="submit">应用为现行</button></form>`);
+        }
+        if (!version.current && !version.preview) {
             actions.push(`<form method="post" action="/admin/delete" style="display:inline" onsubmit="return confirm('确认删除 ${escapeHtml(version.name)}？该操作不可撤销。')">
                 <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+                <input type="hidden" name="channel" value="${channel}">
                 <input type="hidden" name="name" value="${escapeHtml(version.name)}">
                 <button class="link danger" type="submit" style="color:#e7a1a1">删除</button></form>`);
         }
         actions.push(`<a class="link" href="/admin/download?name=${encodeURIComponent(version.name)}">下载</a>`);
         cells.push(`<td class="row" style="gap:8px">${actions.join('')}</td>`);
-        return `<tr class="${version.current ? 'current' : ''}${version.broken ? ' broken' : ''}">${cells.join('')}</tr>`;
+        return `<tr class="${selectedCurrent ? 'current' : ''}${version.broken ? ' broken' : ''}">${cells.join('')}</tr>`;
     }).join('');
 }
 
 export function adminPage({
     versions = [], current = null, editorText = '', editing = '', history = [],
     flash = '', error = '', csrf = '', validatorMode = 'schema', validatorNote = '',
-    publicConfigPath = '/config', publicOrigin = '', draft = false, note = ''
+    publicConfigPath = '/config', publicOrigin = '', draft = false, note = '', channel = 'stable'
 } = {}) {
+    channel = channel === 'preview' ? 'preview' : 'stable';
+    const channelLabel = channel === 'preview' ? '源码预览' : '正式配置';
     const currentLabel = current
         ? `r${escapeHtml(current.config?.revision ?? 0)} · ${escapeHtml(Array.isArray(current.config?.models) ? current.config.models.length : 0)} 个模型 · <span class="mono">${escapeHtml(current.name)}</span>`
         : '<span class="badge warn">尚无现行版本</span>';
@@ -127,7 +141,7 @@ export function adminPage({
     const auditRows = history.length
         ? history.map(entry => `<tr>
             <td class="mono muted">${escapeHtml(entry.at)}</td>
-            <td>${escapeHtml(entry.action)}</td>
+            <td>${escapeHtml(entry.action)}${entry.channel ? ` · ${entry.channel === 'preview' ? '源码预览' : '正式配置'}` : ''}</td>
             <td class="mono">${escapeHtml(entry.name || '')}</td>
             <td>${escapeHtml(entry.actor || '')}</td>
             <td class="muted">${escapeHtml(entry.note || entry.reason || (entry.previous ? `来自 ${entry.previous}` : ''))}</td>
@@ -138,8 +152,12 @@ export function adminPage({
     return layout('模型配置服务 · 管理面板', `
 <header>
   <h1>模型能力 CONFIG 管理</h1>
+  <nav class="channel-nav" aria-label="发布通道">
+    <a href="/admin"${channel === 'stable' ? ' aria-current="page"' : ''}>正式配置</a>
+    <a href="/admin?channel=preview"${channel === 'preview' ? ' aria-current="page"' : ''}>源码预览</a>
+  </nav>
   ${modeBadge}
-  <span class="badge">现行：${currentLabel}</span>
+  <span class="badge">${channelLabel}现行：${currentLabel}</span>
   <span class="spacer"></span>
   <span class="muted">客户端地址 <a href="${escapeHtml(publicConfigPath)}"><code>${escapeHtml(configUrl)}</code></a></span>
   <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">退出登录</button></form>
@@ -153,6 +171,7 @@ export function adminPage({
     <h2>编辑配置${editing ? `（基于 <span class="mono">${escapeHtml(editing)}</span>）` : '（基于现行版本）'}</h2>
     <form method="post" action="/admin/save" id="configForm">
       <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+      <input type="hidden" name="channel" value="${channel}">
       <input type="hidden" name="basedOn" value="${escapeHtml(editing)}">
       ${modelEditorMarkup()}
       <div id="jsonPane" role="tabpanel" aria-labelledby="jsonTab">
@@ -173,7 +192,7 @@ export function adminPage({
     <h2>版本记录 · ${versions.length}</h2>
     <div class="table-scroll"><table>
       <thead><tr><th>版本文件</th><th>revision</th><th>模型数</th><th>大小</th><th>配置 updatedAt</th><th>状态</th><th>操作</th></tr></thead>
-      <tbody>${versionRows(versions, { csrf, editing })}</tbody>
+      <tbody>${versionRows(versions, { csrf, editing, channel })}</tbody>
     </table></div>
   </section>
 

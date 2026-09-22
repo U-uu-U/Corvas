@@ -723,11 +723,15 @@ export const DEFAULT_MODEL_CONFIG = {
             "id": "ravenhash-video.sd2.5-route1",
             "presentation": {
                 "label": "Seedance 2.5",
-                "routeLabel": "线路一",
-                "routeGroup": "seedance25-fixed",
-                "routeGroupLabel": "Seedance 2.5 · 固定 30 秒",
-                "routeModelLabel": "sd2.5",
-                "recommended": true
+                "routeLabel": "Seedance 2.5 固定 30 秒（过人脸）",
+                "routeGroup": "seedance25-backup",
+                "routeGroupLabel": "Seedance 2.5 备用渠道",
+                "routeModelLabel": "sd2.5-route1",
+                "recommended": false,
+                "routeGroupOrder": 20,
+                "routeOrder": 0,
+                "routeGroupAlways": true,
+                "routeGroupScope": "catalog"
             },
             "pricing": {
                 "status": "known",
@@ -838,12 +842,15 @@ export const DEFAULT_MODEL_CONFIG = {
         {
             "id": "ravenhash-video.sd2.5",
             "presentation": {
-                "label": "Seedance 2.5",
-                "routeLabel": "线路二",
-                "routeGroup": "seedance25-fixed",
-                "routeGroupLabel": "Seedance 2.5 · 固定 30 秒",
+                "label": "SD2.5 固定 30 秒（电商效果优化）",
+                "routeLabel": "SD2.5 固定 30 秒（电商效果优化）",
+                "routeGroup": "zhubo-video",
+                "routeGroupLabel": "Seedance 2.5 推荐渠道",
                 "routeModelLabel": "sd2.5",
-                "recommended": false
+                "recommended": false,
+                "routeGroupOrder": 10,
+                "routeOrder": 0,
+                "routeGroupAlways": true
             },
             "pricing": {
                 "status": "known",
@@ -947,10 +954,13 @@ export const DEFAULT_MODEL_CONFIG = {
         {
             "id": "ravenhash-video.seedance-2.5-pro",
             "presentation": {
-                "label": "Seedance 2.5 Pro",
+                "label": "Seedance 2.5 Pro（满血满参）",
                 "routeGroup": "zhubo-video",
-                "routeGroupLabel": "主播视频",
-                "routeLabel": "Seedance 2.5 Pro"
+                "routeGroupLabel": "Seedance 2.5 推荐渠道",
+                "routeLabel": "Seedance 2.5 Pro（满血满参）",
+                "routeGroupOrder": 10,
+                "routeOrder": 1,
+                "routeGroupAlways": true
             },
             "pricing": {
                 "status": "known",
@@ -1056,7 +1066,13 @@ export const DEFAULT_MODEL_CONFIG = {
         {
             "id": "ravenhash-video.seedance-v2.5",
             "presentation": {
-                "label": "HM-Seedance 2.5"
+                "label": "HM-Seedance 2.5",
+                "routeLabel": "HM-Seedance 2.5",
+                "routeGroup": "zhubo-video",
+                "routeGroupLabel": "Seedance 2.5 推荐渠道",
+                "routeGroupOrder": 10,
+                "routeOrder": 2,
+                "routeGroupAlways": true
             },
             "pricing": {
                 "status": "known",
@@ -1162,7 +1178,13 @@ export const DEFAULT_MODEL_CONFIG = {
         {
             "id": "ravenhash-video.hm-seedance-933",
             "presentation": {
-                "label": "HM-Seedance V2.0 933"
+                "label": "HM-Seedance 2.0 933",
+                "routeLabel": "HM-Seedance 2.0 933",
+                "routeGroup": "zhubo-video",
+                "routeGroupLabel": "Seedance 2.5 推荐渠道",
+                "routeGroupOrder": 10,
+                "routeOrder": 3,
+                "routeGroupAlways": true
             },
             "pricing": {
                 "status": "known",
@@ -1486,7 +1508,11 @@ export const DEFAULT_MODEL_CONFIG = {
         {
             "id": "ravenhash-video.seedance-2.0",
             "presentation": {
-                "label": "Seedance 2.0"
+                "routeGroup": "seedance20-recommended",
+                "routeGroupLabel": "Seedance 2.0 推荐渠道",
+                "routeGroupDescription": "可NSFW 无限制",
+                "routeGroupOrder": 100,
+                "routeGroupAlways": true
             },
             "label": "seedance-2.0",
             "kind": "video",
@@ -1948,8 +1974,14 @@ export const DEFAULT_MODEL_CONFIG = {
             "id": "starframe.ch0107-sd-2.5-720p",
             "label": "ch0107-sd-2.5-720p",
             "presentation": {
-                "label": "Seedance 2.5 720p",
-                "routeLabel": "StarFrame CH0107"
+                "label": "2.5pro 备用（满参）",
+                "routeLabel": "2.5pro 备用（满参）",
+                "routeGroup": "seedance25-backup",
+                "routeGroupLabel": "Seedance 2.5 备用渠道",
+                "routeGroupOrder": 20,
+                "routeOrder": 1,
+                "routeGroupAlways": true,
+                "routeGroupScope": "catalog"
             },
             "pricing": {
                 "status": "known",
@@ -2041,6 +2073,114 @@ export const DEFAULT_MODEL_CONFIG = {
                 "required": true
             },
             "notes": "用户指定售价CNY1.06/秒；720p、4-30秒；最多30图/10视频/10音频，合计不超过50；references模式、公网URL；必传client_task_id；完成后鉴权下载content；比例枚举未公开"
+        },
+        {
+            "id": "starframe.ch1401-sd-2.5-720p",
+            "label": "ch1401-sd-2.5-720p",
+            "presentation": {
+                "label": "2.5pro 备用（卡人脸）",
+                "routeLabel": "2.5pro 备用（卡人脸）",
+                "routeGroup": "seedance25-backup",
+                "routeGroupLabel": "Seedance 2.5 备用渠道",
+                "routeGroupOrder": 20,
+                "routeOrder": 2,
+                "routeGroupAlways": true,
+                "routeGroupScope": "catalog"
+            },
+            "pricing": {
+                "status": "known",
+                "hosts": [
+                    "api.xzapi.vip"
+                ],
+                "amount": 5,
+                "currency": "CNY",
+                "unit": "request",
+                "kind": "sale",
+                "source": "user configured sale",
+                "updatedAt": "2026-09-22T00:00:00Z"
+            },
+            "kind": "video",
+            "channel": "StarFrame视频",
+            "route": "CH1401按次线路",
+            "priority": 149,
+            "match": {
+                "model": [
+                    "^ch1401-sd-2\\.5-720p$"
+                ]
+            },
+            "parameters": {
+                "accepts": [
+                    "model",
+                    "prompt",
+                    "client_task_id",
+                    "mode",
+                    "duration",
+                    "aspect_ratio",
+                    "resolution",
+                    "references"
+                ],
+                "required": [
+                    "model",
+                    "prompt",
+                    "client_task_id",
+                    "mode"
+                ]
+            },
+            "options": {
+                "duration": {
+                    "type": "range",
+                    "min": 4,
+                    "max": 30,
+                    "integer": true,
+                    "unit": "second",
+                    "default": 4
+                },
+                "ratio": {
+                    "type": "unknown",
+                    "reason": "供应商未公开该模型比例枚举，当前界面使用文档示例16:9"
+                },
+                "resolutionTier": {
+                    "type": "enum",
+                    "values": [
+                        "720p"
+                    ],
+                    "default": "720p"
+                }
+            },
+            "capabilities": {
+                "referenceImages": {
+                    "supported": true,
+                    "max": 30
+                },
+                "referenceVideos": {
+                    "supported": false,
+                    "reason": "供应商目录标注不支持参考视频"
+                },
+                "referenceAudios": {
+                    "supported": false,
+                    "reason": "供应商目录标注不支持参考音频"
+                },
+                "face": {
+                    "supported": false,
+                    "reason": "供应商目录标注卡人脸"
+                },
+                "generatedAudio": {
+                    "supported": false
+                },
+                "webSearch": {
+                    "supported": false
+                },
+                "cameraFixed": {
+                    "supported": false
+                },
+                "watermark": {
+                    "supported": false
+                }
+            },
+            "prompt": {
+                "required": true
+            },
+            "notes": "用户指定售价CNY5.00/次（老站）；720p、4-30秒；最多30张参考图片；不支持参考视频/音频；卡人脸；references模式、公网URL；必传client_task_id；完成后鉴权下载content；比例枚举未公开"
         },
         {
             "id": "globalaiopc.sd-2.5-discount-v1",
@@ -2161,7 +2301,12 @@ export const DEFAULT_MODEL_CONFIG = {
                 "routeLabel": "dola",
                 "routeGroup": "shanhai-backup-2",
                 "routeGroupLabel": "备用分组2",
-                "routeModelLabel": "oc-model-qbdmeb"
+                "routeModelLabel": "oc-model-qbdmeb",
+                "visible": false,
+                "routeGroupOrder": 30,
+                "routeOrder": 0,
+                "routeGroupAlways": true,
+                "routeGroupScope": "catalog"
             },
             "pricing": {
                 "status": "known",
@@ -2270,7 +2415,12 @@ export const DEFAULT_MODEL_CONFIG = {
                 "routeLabel": "SD2.0 官渠",
                 "routeGroup": "shanhai-backup-2",
                 "routeGroupLabel": "备用分组2",
-                "routeModelLabel": "oc-model-1iq31f"
+                "routeModelLabel": "oc-model-1iq31f",
+                "visible": false,
+                "routeGroupOrder": 30,
+                "routeOrder": 1,
+                "routeGroupAlways": true,
+                "routeGroupScope": "catalog"
             },
             "pricing": {
                 "status": "known",
@@ -2378,7 +2528,12 @@ export const DEFAULT_MODEL_CONFIG = {
                 "routeLabel": "S-2.0 官转933",
                 "routeGroup": "shanhai-backup-2",
                 "routeGroupLabel": "备用分组2",
-                "routeModelLabel": "oc-model-bkb50q"
+                "routeModelLabel": "oc-model-bkb50q",
+                "visible": false,
+                "routeGroupOrder": 30,
+                "routeOrder": 2,
+                "routeGroupAlways": true,
+                "routeGroupScope": "catalog"
             },
             "pricing": {
                 "status": "known",
@@ -2485,7 +2640,12 @@ export const DEFAULT_MODEL_CONFIG = {
                 "routeLabel": "S-2.0 满血933（不卡人脸）",
                 "routeGroup": "shanhai-backup-2",
                 "routeGroupLabel": "备用分组2",
-                "routeModelLabel": "oc-model-c6ws7e"
+                "routeModelLabel": "oc-model-c6ws7e",
+                "visible": false,
+                "routeGroupOrder": 30,
+                "routeOrder": 3,
+                "routeGroupAlways": true,
+                "routeGroupScope": "catalog"
             },
             "pricing": {
                 "status": "known",

@@ -25,7 +25,7 @@ import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
-import { createConfigStore } from './lib/store.mjs';
+import { createConfigStore, normalizeConfigChannel } from './lib/store.mjs';
 import { createValidator } from './lib/validate.mjs';
 import { createAuth, hashPassword, parseCookies, serializeCookie, SESSION_COOKIE, AUTH_LIMITS } from './lib/auth.mjs';
 import { adminPage, loginPage, landingPage, escapeHtml } from './lib/pages.mjs';
@@ -33,8 +33,9 @@ import { adminPage, loginPage, landingPage, escapeHtml } from './lib/pages.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_PORT = 8087;
-const EDITOR_ASSETS = new Map(['admin-editor.mjs', 'admin-editor-model.mjs']
+const EDITOR_ASSETS = new Map(['admin-editor.mjs', 'admin-editor-model.mjs', 'admin-catalog-model.mjs', 'admin-catalog-view.mjs']
     .map(name => [`/admin/assets/${name}`, path.join(HERE, 'lib', name)]));
+EDITOR_ASSETS.set('/admin/assets/flow-icons.svg', path.join(HERE, 'assets', 'flow-icons.svg'));
 
 export function resolveServerConfig(env = process.env) {
     const dataDir = path.resolve(env.CONFIG_DATA_DIR || path.join(HERE, 'data'));
@@ -103,6 +104,19 @@ function html(res, status, body, extraHeaders = {}) {
 function redirect(res, location, extraHeaders = {}) {
     res.writeHead(303, { location, ...extraHeaders });
     res.end();
+}
+
+function adminLocation(channel, params = {}) {
+    const query = new URLSearchParams({ ...(channel === 'preview' ? { channel } : {}), ...params });
+    return `/admin${query.size ? `?${query}` : ''}`;
+}
+
+function requestChannel(value, res) {
+    try { return normalizeConfigChannel(value ?? 'stable'); }
+    catch (error) {
+        json(res, 400, { success: false, error: error.message });
+        return null;
+    }
 }
 
 function clientIp(req) {
@@ -178,11 +192,11 @@ export async function createConfigServer(options = {}) {
         return { token, session: auth.session(token) };
     }
 
-    function requireAdmin(req, res) {
+    function requireAdmin(req, res, channel = 'stable') {
         const { token, session } = currentSession(req);
         if (!session) {
             if (wantsJson(req)) json(res, 401, { success: false, error: '未登录' });
-            else redirect(res, '/admin/login');
+            else redirect(res, channel === 'preview' ? '/admin/login?channel=preview' : '/admin/login');
             return null;
         }
         return { token, session };
@@ -198,8 +212,8 @@ export async function createConfigServer(options = {}) {
         return true;
     }
 
-    function handleConfig(req, res) {
-        const active = store.current();
+    function handleConfig(req, res, channel = 'stable') {
+        const active = store.current(channel);
         if (!active) {
             json(res, 404, { success: false, error: '尚未发布任何 CONFIG 版本' });
             return;
@@ -221,16 +235,17 @@ export async function createConfigServer(options = {}) {
         res.end(active.text);
     }
 
-    function renderAdmin(res, { csrf = '', flash = '', error = '', requestedVersion = '' } = {}) {
+    function renderAdmin(res, { csrf = '', flash = '', error = '', requestedVersion = '', channel = 'stable' } = {}) {
         let editorText = '';
         let editingName = '';
+        const current = store.current(channel);
         try {
             if (requestedVersion && requestedVersion !== 'current') {
                 const file = store.read(requestedVersion);
                 editorText = file.text;
                 editingName = file.name;
             } else {
-                const active = store.current();
+                const active = current || (channel === 'preview' ? store.current() : null);
                 if (active) {
                     editorText = active.text;
                     editingName = active.name;
@@ -241,7 +256,8 @@ export async function createConfigServer(options = {}) {
         }
         html(res, 200, adminPage({
             versions: store.list(),
-            current: store.current(),
+            current,
+            channel,
             editorText,
             editing: editingName,
             history: store.history(50),
@@ -250,7 +266,7 @@ export async function createConfigServer(options = {}) {
             csrf,
             validatorMode: validator.mode,
             validatorNote: validator.mode === 'schema' ? '' : `${validator.note}：当前只做结构校验，强烈建议安装 ajv。`,
-            publicConfigPath: '/config',
+            publicConfigPath: channel === 'preview' ? '/config/preview' : '/config',
             publicOrigin: config.publicOrigin
         }));
     }
@@ -263,16 +279,18 @@ export async function createConfigServer(options = {}) {
         if (method === 'GET' && EDITOR_ASSETS.has(pathname)) {
             if (!requireAdmin(req, res)) return;
             const body = fs.readFileSync(EDITOR_ASSETS.get(pathname));
-            res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'content-length': body.length,
+            res.writeHead(200, { 'content-type': pathname.endsWith('.svg') ? 'image/svg+xml' : 'text/javascript; charset=utf-8', 'content-length': body.length,
                 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
             return res.end(body);
         }
 
         if (method === 'GET' && pathname === '/config') return handleConfig(req, res);
+        if (method === 'GET' && pathname === '/config/preview') return handleConfig(req, res, 'preview');
         if (method === 'GET' && pathname === '/health') {
             return json(res, 200, {
                 ok: true,
                 current: store.current()?.name || null,
+                preview: store.current('preview')?.name || null,
                 versions: store.list().length,
                 validator: validator.mode,
                 uptimeSeconds: Math.round((Date.now() - startedAt) / 1000)
@@ -284,19 +302,22 @@ export async function createConfigServer(options = {}) {
         if (method === 'GET' && pathname === '/admin/login') {
             const code = url.searchParams.get('error');
             const message = code === '2' ? '尝试过于频繁，请稍后再试' : (code === '1' ? '密码不正确' : '');
-            return html(res, 200, loginPage({ error: message }));
+            const channel = url.searchParams.get('channel') === 'preview' ? 'preview' : 'stable';
+            return html(res, 200, loginPage({ error: message, channel,
+                publicConfigPath: channel === 'preview' ? '/config/preview' : '/config' }));
         }
         if (method === 'POST' && pathname === '/admin/login') {
             const body = await readBody(req);
             const form = parseForm(body);
+            const channel = form.channel === 'preview' ? 'preview' : 'stable';
             const result = auth.login(form.password || '', { ip: clientIp(req) });
             if (!result.ok) {
                 logger.warn(`[configserver] 登录失败 ip=${clientIp(req)}：${result.error}`);
-                return redirect(res, `/admin/login?error=${result.retryAfter ? 2 : 1}`);
+                return redirect(res, `/admin/login?error=${result.retryAfter ? 2 : 1}${channel === 'preview' ? '&channel=preview' : ''}`);
             }
             const secure = config.cookieSecure || Boolean(config.tlsKey) || String(req.headers['x-forwarded-proto'] || '') === 'https';
             logger.log(`[configserver] 登录成功 ip=${clientIp(req)}`);
-            return redirect(res, '/admin', {
+            return redirect(res, adminLocation(channel), {
                 'set-cookie': serializeCookie(SESSION_COOKIE, result.token, {
                     maxAgeSeconds: Math.floor(AUTH_LIMITS.SESSION_TTL_MS / 1000),
                     secure
@@ -310,9 +331,12 @@ export async function createConfigServer(options = {}) {
             return redirect(res, '/admin/login', { 'set-cookie': serializeCookie(SESSION_COOKIE, '', { maxAgeSeconds: 0 }) });
         }
         if (method === 'GET' && pathname === '/admin') {
-            const guard = requireAdmin(req, res);
+            const guard = requireAdmin(req, res, url.searchParams.get('channel') === 'preview' ? 'preview' : 'stable');
             if (!guard) return;
+            const channel = requestChannel(url.searchParams.get('channel'), res);
+            if (!channel) return;
             return renderAdmin(res, {
+                channel,
                 csrf: guard.session.csrf,
                 flash: url.searchParams.get('flash') || '',
                 requestedVersion: url.searchParams.get('version') || ''
@@ -352,12 +376,15 @@ export async function createConfigServer(options = {}) {
             if (!sameOrigin(req, config)) return json(res, 403, { success: false, error: 'Origin 校验失败' });
             const form = parseForm(await readBody(req));
             if (!requireCsrf(req, res, form)) return;
+            const channel = requestChannel(form.channel, res);
+            if (!channel) return;
             const result = validator.validate(form.content || '');
             if (!result.ok) {
                 logger.warn(`[configserver] 保存被拒绝：校验未通过（${result.errors.length} 项）`);
                 return html(res, 400, adminPage({
                     versions: store.list(),
-                    current: store.current(),
+                    current: store.current(channel),
+                    channel,
                     editorText: String(form.content || ''),
                     editing: form.basedOn || '',
                     draft: form.draft === '1',
@@ -367,19 +394,21 @@ export async function createConfigServer(options = {}) {
                     csrf: guard.session.csrf,
                     validatorMode: validator.mode,
                     validatorNote: validator.mode === 'schema' ? '' : `${validator.note}：当前只做结构校验，建议安装 ajv。`,
-                    publicOrigin: config.publicOrigin
+                    publicOrigin: config.publicOrigin,
+                    publicConfigPath: channel === 'preview' ? '/config/preview' : '/config'
                 }));
             }
             const applied = form.draft !== '1';
             const saved = store.save(result.config, {
                 actor: `admin@${clientIp(req)}`,
                 apply: applied,
-                note: form.note || ''
+                note: form.note || '',
+                channel
             });
             logger.log(`[configserver] 已保存版本 ${saved.name}（r${saved.revision}${applied ? '，已切换现行' : '，未切换现行'}）`);
-            return redirect(res, `/admin?flash=${encodeURIComponent(applied
+            return redirect(res, adminLocation(channel, { flash: applied
                 ? `已保存并应用 r${saved.revision}（${saved.name}）`
-                : `已保存 r${saved.revision}（${saved.name}），现行版本未改变`)}`);
+                : `已保存 r${saved.revision}（${saved.name}），现行版本未改变` }));
         }
         if (method === 'POST' && pathname === '/admin/apply') {
             const guard = requireAdmin(req, res);
@@ -387,12 +416,14 @@ export async function createConfigServer(options = {}) {
             if (!sameOrigin(req, config)) return json(res, 403, { success: false, error: 'Origin 校验失败' });
             const form = parseForm(await readBody(req));
             if (!requireCsrf(req, res, form)) return;
+            const channel = requestChannel(form.channel, res);
+            if (!channel) return;
             try {
-                const result = store.apply(form.name, { actor: `admin@${clientIp(req)}`, note: form.note || '' });
+                const result = store.apply(form.name, { actor: `admin@${clientIp(req)}`, note: form.note || '', channel });
                 logger.log(`[configserver] 已把现行版本切换为 ${result.name}（r${result.revision}），原现行 ${result.previous || '无'}`);
-                return redirect(res, `/admin?flash=${encodeURIComponent(`已应用 ${result.name}（r${result.revision}）为现行版本`)}`);
+                return redirect(res, adminLocation(channel, { flash: `已应用 ${result.name}（r${result.revision}）为现行版本` }));
             } catch (error) {
-                return redirect(res, `/admin?flash=${encodeURIComponent(`应用失败：${error.message}`)}`);
+                return redirect(res, adminLocation(channel, { flash: `应用失败：${error.message}` }));
             }
         }
         if (method === 'POST' && pathname === '/admin/delete') {
@@ -401,11 +432,13 @@ export async function createConfigServer(options = {}) {
             if (!sameOrigin(req, config)) return json(res, 403, { success: false, error: 'Origin 校验失败' });
             const form = parseForm(await readBody(req));
             if (!requireCsrf(req, res, form)) return;
+            const channel = requestChannel(form.channel, res);
+            if (!channel) return;
             try {
                 store.remove(form.name, { actor: `admin@${clientIp(req)}` });
-                return redirect(res, `/admin?flash=${encodeURIComponent(`已删除版本 ${form.name}`)}`);
+                return redirect(res, adminLocation(channel, { flash: `已删除版本 ${form.name}` }));
             } catch (error) {
-                return redirect(res, `/admin?flash=${encodeURIComponent(`删除失败：${error.message}`)}`);
+                return redirect(res, adminLocation(channel, { flash: `删除失败：${error.message}` }));
             }
         }
         if (method === 'OPTIONS') {

@@ -33,6 +33,56 @@ function nextTurn() {
     return new Promise(resolve => setImmediate(resolve));
 }
 
+test('model CONFIG routes use the live renderer and preserve retained status on refresh failure', async () => {
+    const { bridge } = createBridge();
+    const requests = [];
+    bridge.readModelConfigSnapshot = async options => {
+        requests.push(options);
+        return { ok: !options.refresh, error: options.refresh ? 'offline' : undefined,
+            status: { revision: 5, origin: 'cache' }, config: { revision: 5 } };
+    };
+    const get = bridge._matchRoute('GET', '/model-config');
+    const refresh = bridge._matchRoute('POST', '/model-config/refresh');
+    assert.equal(get.toolName, 'flow_canvas.model_config.get');
+    assert.equal(refresh.toolName, 'flow_canvas.model_config.refresh');
+    assert.equal((await get.handler()).status.revision, 5);
+    const failed = await refresh.handler();
+    assert.equal(failed.success, false);
+    assert.equal(failed.error, 'offline');
+    assert.equal(failed.details.status.revision, 5);
+    assert.deepEqual(requests, [{ refresh: false }, { refresh: true }]);
+    bridge.allowedTools.delete(refresh.toolName);
+    assert.equal(bridge._isToolAllowed(refresh.toolName), false);
+});
+
+test('managed generation catalog rejects removed and disabled models before request preparation', async () => {
+    const { bridge } = createBridge();
+    bridge.getMainWindow = () => ({ webContents: { executeJavaScript() {} } });
+    const entry = { id: 'remote-video', kind: 'video',
+        catalog: { model: 'remote-video', hosts: ['relay.example'] }, presentation: { visible: false } };
+    const config = { catalogMode: 'remote', models: [entry] };
+    bridge.readModelConfigSnapshot = async () => ({ config });
+    const body = { providerConfig: { model: 'remote-video', endpoint: 'https://relay.example/v1' } };
+    assert.equal(await bridge._generationCatalog(body, 'video'), config, 'Hidden entries retain existing-node use');
+    entry.catalog.enabled = false;
+    await assert.rejects(bridge._generationCatalog(body, 'video'), { code: 'MODEL_NOT_IN_CATALOG' });
+    config.models = [];
+    await assert.rejects(bridge._generationCatalog(body, 'video'), { code: 'MODEL_NOT_IN_CATALOG' });
+});
+
+test('scoped generation guard preserves custom media while enforcing an empty managed video directory', async () => {
+    const { bridge } = createBridge();
+    bridge.getMainWindow = () => ({ webContents: { executeJavaScript() {} } });
+    const config = { catalogMode: 'remote', catalogScope: { hosts: ['relay.example'], kinds: ['video'] }, models: [] };
+    bridge.readModelConfigSnapshot = async () => ({ config });
+    const body = { providerConfig: { model: 'custom-video', endpoint: 'https://custom.test/v1' } };
+    assert.equal(await bridge._generationCatalog(body, 'video'), config);
+    body.providerConfig.endpoint = 'https://relay.example/v1';
+    await assert.rejects(bridge._generationCatalog(body, 'video'), { code: 'MODEL_NOT_IN_CATALOG' });
+    body.providerConfig.model = 'gpt-image-2';
+    assert.equal(await bridge._generationCatalog(body, 'image'), config);
+});
+
 test('board tool requests require a ready renderer and preserve structured errors', async () => {
     const { bridge, requests } = createBridge();
     await assert.rejects(

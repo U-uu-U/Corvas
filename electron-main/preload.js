@@ -193,7 +193,13 @@ contextBridge.exposeInMainWorld('flowCanvas', {
 
     // 模型能力 CONFIG：渲染层不直接发请求，拉取与 schema 校验都在主进程完成。
     modelConfig: {
+        runtime: ipcRenderer.sendSync('model-config:runtime'),
         fetch: (payload) => ipcRenderer.invoke('model-config:fetch', payload),
+        onRefreshTick: (callback) => {
+            const handler = () => callback();
+            ipcRenderer.on('model-config:tick', handler);
+            return () => ipcRenderer.removeListener('model-config:tick', handler);
+        },
     },
 
     // 网页图片摘取

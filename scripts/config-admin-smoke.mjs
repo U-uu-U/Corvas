@@ -31,6 +31,7 @@ try {
     assert.deepEqual(JSON.parse(await page.locator('#configText').inputValue()), original.config);
     const modelId = 'ravenhash-video.sd2.5-route1';
     const select = async id => {
+        await page.getByRole('tab', { name: '表单', exact: true }).click();
         await page.locator('#modelSearch').fill(id);
         await page.locator(`button[data-model-id="${id}"]`).click();
     };
@@ -116,7 +117,7 @@ try {
     assert.deepEqual(server.store.current().config, original.config);
     const draft = server.store.list().find(version => !version.current);
     assert.ok(draft, 'A draft version is created');
-    await page.locator(`a[href="/admin?version=${draft.name}"]`).click();
+    await page.locator(`a[href="/admin?channel=stable&version=${draft.name}"]`).click();
     await page.locator('#formPane').waitFor({ state: 'visible' });
     await select(modelId);
     assert.equal(await field('amount').inputValue(), '6.5');
@@ -130,14 +131,15 @@ try {
     assert.deepEqual(server.store.current().config, original.config);
 
     await page.getByRole('tab', { name: 'JSON', exact: true }).click();
-    await page.locator('#configText').fill('{"schemaVersion":1,"models":[]}');
+    const rejectedText = '{"schemaVersion":1,"models":"invalid"}';
+    await page.locator('#configText').fill(rejectedText);
     await page.locator('input[name="draft"]').check();
     await page.getByLabel('变更说明').fill('keep rejected draft');
     await page.getByRole('button', { name: '保存草稿', exact: true }).click();
     await page.waitForURL('**/admin/save');
     assert.equal(await page.locator('input[name="draft"]').isChecked(), true);
     assert.equal(await page.getByLabel('变更说明').inputValue(), 'keep rejected draft');
-    assert.equal(await page.locator('#configText').inputValue(), '{"schemaVersion":1,"models":[]}');
+    assert.equal(await page.locator('#configText').inputValue(), rejectedText);
     assert.deepEqual(server.store.current().config, original.config);
     assert.deepEqual(errors, []);
     console.log('PASS config admin: login, forms/JSON, validation, isolated edits, currencies, draft, publish, rollback, rejected input, desktop/mobile.');

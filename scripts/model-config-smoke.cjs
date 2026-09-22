@@ -17,10 +17,12 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { app, safeStorage } = require('electron');
 const { ApiConfigStore } = require('../electron-main/api-config-store');
+const { createModelConfigSnapshotReader } = require('../electron-main/model-config-service.cjs');
 
 const HERE = path.dirname(__filename);
 const ADMIN_PASSWORD = 'smoke-admin-password';
 const MODEL_COUNT = require('../shared/model-config.default.json').models.length;
+const REMOTE_CATALOG_SMOKE = process.env.FLOW_CONFIG_REMOTE_SMOKE === '1';
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-model-config-smoke-'));
 fs.mkdirSync(path.join(profile, 'data', 'asset-library'), { recursive: true });
@@ -45,13 +47,22 @@ const seedConfig = {
         name: 'Smoke Video',
         type: 'openai',
         capability: 'video',
-        endpoint: 'https://smoke.test/v1',
+        endpoint: 'https://art.ravenhash.org/v1',
         model: 'sd2.5-route1',
         models: ['sd2.5-route1', 'sd2.5-route2'],
         apiKey: 'smoke-key'
     }],
     globalConfig: { videoProviderId: 'smoke-video' }
 };
+if (REMOTE_CATALOG_SMOKE) {
+    seedConfig.providers[0].model = '';
+    seedConfig.providers[0].models = [];
+    items[0].config.sourceProviderId = 'smoke-video';
+} else {
+    seedConfig.providers.push({ id: 'smoke-text', name: 'Smoke Text', type: 'openai', capability: 'text',
+        endpoint: 'https://text.example.invalid/v1', model: 'gpt-5', models: ['gpt-5'], apiKey: 'smoke-text-key' });
+    seedConfig.globalConfig.textProviderId = 'smoke-text';
+}
 
 app.setPath('userData', profile);
 Object.defineProperty(app, 'isPackaged', { value: true });
@@ -144,7 +155,14 @@ const READ_DOM = `(() => {
         modelButton: text(document.querySelector('[data-model-label]')),
         routeTitle: text(document.querySelector('.generation-composer-route-trigger strong')),
         modelCards: text(document.querySelector('.generation-composer-model-options')),
+        modelOptions: Array.from(document.querySelectorAll('.generation-composer-model-option strong'), el => el.textContent),
+        selectedModelOptions: Array.from(document.querySelectorAll('.generation-composer-model-option[aria-selected="true"] strong'), el => el.textContent),
+        groupTitles: Array.from(document.querySelectorAll('.generation-composer-route-trigger strong'), el => el.textContent),
         agentModels: text(document.querySelector('.agent-model-list-item')),
+        agentModelOptions: Array.from(document.querySelectorAll('.agent-model-list-item'), el => ({
+            id: el.dataset.agentProviderId, kind: el.dataset.agentModelKind, label: text(el.querySelector('strong')),
+            selected: el.getAttribute('aria-pressed') === 'true'
+        })),
         prompt: text(document.querySelector('.generation-composer-prompt'))
     };
 })()`;
@@ -240,16 +258,54 @@ app.on('browser-window-created', (_event, win) => {
             await waitFor(win, dom => (dom.configSnapshot?.status?.origin === 'remote'
                 && dom.configSnapshot.status.revision === seedRevision + 1),
                 { label: '客户端应用服务器配置 r1' });
+            if (REMOTE_CATALOG_SMOKE) {
+                await runRemoteCatalogSmoke(win);
+                return finish(0, 'PASS remote-only CONFIG: empty local account models, remote empty/add/reorder/remove/clear, live canvas updates without reload');
+            }
             const applied = await openVideoParameters(win);
             expect(!applied.settingsMounted, '模型配置维护界面仍对用户可见');
             expect(applied.configSnapshot?.status?.modelCount === MODEL_COUNT,
                 `远端配置模型数异常：${JSON.stringify(applied.configSnapshot?.status)}`);
             expect(applied.bridgeAvailable, 'preload 未暴露 flowCanvas.modelConfig.fetch');
+            expect(applied.configSnapshot?.status?.refreshIntervalMs === 10000,
+                `安装运行时未启用 10 秒轮询：${applied.configSnapshot?.status?.refreshIntervalMs}`);
             expect(applied.legacyWorkspaceCount === 0, '旧侧栏生成工作区仍有残留 DOM');
             expect(applied.agentMounted, 'Agent 聊天入口未保留');
             expect(applied.videoDurationControl === '30s', `画布节点时长未跟随 CONFIG：${applied.videoDurationControl}`);
             expect(applied.ratioOptions === 2, `比例控件没有跟随远端配置：${applied.ratioOptions}`);
             if (problems.length) return finish(1, `FAIL 客户端应用服务端配置：\n  - ${problems.join('\n  - ')}\nDOM: ${JSON.stringify(applied, null, 2)}`);
+
+            await win.webContents.executeJavaScript("document.querySelector('[data-model]').click()");
+            let menu = await readDom(win);
+            expect(menu.routeTitle === 'Remote routes', `远端分组名被本地覆盖：${menu.routeTitle}`);
+            expect(menu.modelOptions.length === 1 && menu.modelOptions[0] === 'Remote route',
+                `远端名称或隐藏状态未生效：${JSON.stringify(menu.modelOptions)}`);
+            const refresh = createModelConfigSnapshotReader({ getMainWindow: () => win });
+            const revision2 = await fetch(`${serverUrl}/config`).then(response => response.json());
+            const route = revision2.models.find(entry => entry.id === 'ravenhash-video.sd2.5-route1');
+            Object.assign(route.presentation, { label: 'Updated model', routeLabel: 'Updated route',
+                routeGroupLabel: 'Updated routes', routeGroupOrder: -10, routeOrder: 0, routeGroupScope: 'provider' });
+            const other = revision2.models.find(entry => entry.id === 'ravenhash-video.sd2.5');
+            Object.assign(other.presentation, { visible: true, routeGroupOrder: 10 });
+            await adminPost(serverUrl, '/admin/save', {
+                csrf: await adminCsrf(serverUrl, cookie), content: JSON.stringify(revision2), note: 'Live presentation update'
+            }, cookie);
+            const refreshed = await refresh({ refresh: true });
+            expect(refreshed.ok === true && refreshed.status.revision === seedRevision + 2, '刷新未回报实际生效版本');
+            menu = await readDom(win);
+            expect(menu.groupTitles[0] === 'Updated routes' && menu.modelOptions.length === 2,
+                `已展开菜单未随 CONFIG 改名、重排或恢复模型：${JSON.stringify(menu)}`);
+            expect(menu.modelButton.includes('Updated'), `当前模型按钮未更新：${menu.modelButton}`);
+
+            route.presentation.routeGroup = '';
+            route.presentation.routeLabel = '';
+            await adminPost(serverUrl, '/admin/save', {
+                csrf: await adminCsrf(serverUrl, cookie), content: JSON.stringify(revision2), note: 'Ungroup model'
+            }, cookie);
+            await refresh({ refresh: true });
+            menu = await readDom(win);
+            expect(!menu.groupTitles.includes('Updated routes') && menu.modelOptions.includes('Updated model'),
+                'CONFIG 清空分组后模型未恢复为独立选项');
 
             await adminPost(serverUrl, '/admin/apply', {
                 csrf: await adminCsrf(serverUrl, cookie), name: seedVersionName
@@ -274,12 +330,15 @@ app.on('browser-window-created', (_event, win) => {
 
             if (problems.length) return finish(1, `FAIL 端到端断言：\n  - ${problems.join('\n  - ')}`);
 
+            await runScopedUpgradeSmoke(win);
+
             finish(0, [
                 'PASS 模型 CONFIG 端到端烟测（真实 configserver + 真实 Electron 渲染层）',
                 `  服务端：${serverUrl}/config（版本 ${seedVersionName} 已回滚为现行 r0）`,
-                '  首次拉取：r1 已应用到画布节点（固定 30 秒、2 个比例）',
+                '  首次拉取和在线刷新：名称、分组、排序、显隐、解除分组与当前模型按钮均生效',
                 '  用户设置面板不展示 CONFIG 维护入口，自动更新仍保留',
                 '  旧侧栏生成 DOM 已移除，Agent 入口保留',
+                '  安装运行时：10 秒轮询、旧账号模型绑定、非托管文字模型、远程停用和空目录均通过',
                 `  IPC 结果：${JSON.stringify(bridge)}`,
                 ''
             ].join('\n'));
@@ -309,8 +368,14 @@ const serverReady = (async () => {
     const route1 = edited.models.find(entry => entry.id === 'ravenhash-video.sd2.5-route1');
     route1.options.ratio.values = ['16:9', '9:16'];
     route1.options.ratio.default = '16:9';
-    route1.presentation = { ...route1.presentation, label: 'Remote model', description: 'Remote description', routeGroupLabel: 'Remote routes' };
+    route1.presentation = { ...route1.presentation, label: 'Remote model', description: 'Remote description',
+        routeLabel: 'Remote route', routeGroupLabel: 'Remote routes', routeGroupAlways: true };
+    edited.models.find(entry => entry.id === 'ravenhash-video.sd2.5').presentation.visible = false;
     route1.pricing = { ...route1.pricing, amount: 7, hosts: ['smoke.test'] };
+    if (REMOTE_CATALOG_SMOKE) {
+        edited.catalogMode = 'remote';
+        edited.models = [];
+    }
     await adminPost(serverUrl, '/admin/save', { csrf, content: JSON.stringify(edited), note: '烟测比例选项' }, cookie);
     const published = await fetch(`${serverUrl}/config`).then(response => response.json());
     if (published.revision !== 1) throw new Error(`发布后 revision 应为 1，实际 ${published.revision}`);
@@ -320,3 +385,106 @@ const serverReady = (async () => {
 serverReady.catch(error => finish(1, `FAIL 启动烟测环境失败：${error?.stack || error}`));
 
 require('../electron-main/main.js');
+
+async function runScopedUpgradeSmoke(win) {
+    const assert = require('node:assert/strict');
+    const refresh = createModelConfigSnapshotReader({ getMainWindow: () => win });
+    const baseline = require('../shared/model-config.default.json');
+    const saved = JSON.parse(JSON.stringify(baseline.models.find(entry => entry.id === 'ravenhash-video.sd2.5-route1')));
+    saved.catalog = { model: 'sd2.5-route1', hosts: ['art.ravenhash.org'], enabled: true };
+    saved.presentation = { label: 'Scoped saved route', routeGroup: '', routeLabel: '', routeOrder: 1 };
+    const added = { ...JSON.parse(JSON.stringify(saved)), id: 'scoped.upgrade.first',
+        match: { model: ['^remote-new-model$'] }, catalog: { model: 'remote-new-model', hosts: ['art.ravenhash.org'] },
+        presentation: { label: 'Scoped first route', routeGroup: '', routeLabel: '', routeOrder: 0 } };
+    const config = { schemaVersion: 1, catalogMode: 'remote',
+        catalogScope: { hosts: ['art.ravenhash.org', 'cart.ravenhash.org'], kinds: ['video'] },
+        fields: baseline.fields, capabilities: baseline.capabilities, models: [added, saved] };
+    const publish = async () => {
+        await adminPost(serverUrl, '/admin/save', { csrf: await adminCsrf(serverUrl, cookie),
+            content: JSON.stringify(config), note: 'Packaged scoped upgrade smoke' }, cookie);
+        const snapshot = await refresh({ refresh: true });
+        assert.equal(snapshot.ok, true);
+        assert.equal(snapshot.status.refreshIntervalMs, 10000);
+        assert.deepEqual(snapshot.config.catalogScope, config.catalogScope);
+        return readDom(win);
+    };
+    const readBindings = () => win.webContents.executeJavaScript(`(async () => {
+        const loaded = await window.flowCanvas.apiConfig.load();
+        const config = loaded.config;
+        const account = config?.providers?.find(provider => provider.id === 'smoke-video');
+        const text = config?.providers?.find(provider => provider.id === 'smoke-text');
+        return { videoProviderId: config?.globalConfig?.videoProviderId, model: account?.model, models: account?.models,
+            textProviderId: config?.globalConfig?.textProviderId, textModel: text?.model };
+    })()`);
+    const before = await readBindings();
+    assert.equal(before.model, 'sd2.5-route1');
+    assert.equal(before.videoProviderId, 'smoke-video');
+    await win.webContents.executeJavaScript(`document.querySelector('#agentModelTabs [data-agent-model-kind="text"]').click()`);
+    try {
+        await publish();
+        await win.webContents.executeJavaScript(`(() => {
+            if (!document.querySelector('.generation-composer-model-options')) document.querySelector('[data-model]').click();
+        })()`);
+        let menu = await waitFor(win, dom => dom.modelOptions.length === 2, { label: '安装升级后的远程模型候选' });
+        assert.deepEqual(menu.modelOptions, ['Scoped first route', 'Scoped saved route']);
+        assert.deepEqual(menu.selectedModelOptions, ['Scoped saved route'], 'Legacy node binding must retain the saved model');
+        assert.ok(menu.modelButton.includes('Scoped saved route'), `Legacy model button lost its selection: ${menu.modelButton}`);
+        assert.deepEqual(menu.agentModelOptions, [{ id: 'smoke-text', kind: 'text', label: 'gpt-5', selected: true }]);
+        assert.deepEqual(await readBindings(), before, 'Publishing CONFIG must not rewrite saved API accounts or roles');
+        saved.catalog.enabled = false;
+        await publish();
+        menu = await waitFor(win, dom => dom.modelOptions.length === 1, { label: '停用后模型候选移除' });
+        assert.deepEqual(menu.modelOptions, ['Scoped first route']);
+        assert.deepEqual(menu.selectedModelOptions, [], 'Disabling the saved model must not select another model');
+        config.models = [];
+        await publish();
+        menu = await waitFor(win, dom => dom.modelOptions.length === 0, { label: '受管目录清空' });
+        assert.deepEqual(menu.agentModelOptions, [{ id: 'smoke-text', kind: 'text', label: 'gpt-5', selected: true }]);
+        assert.deepEqual(await readBindings(), before);
+    } finally {
+        await adminPost(serverUrl, '/admin/apply', { csrf: await adminCsrf(serverUrl, cookie), name: seedVersionName }, cookie);
+        assert.equal((await refresh({ refresh: true })).ok, true);
+    }
+}
+
+async function runRemoteCatalogSmoke(win) {
+    const assert = require('node:assert/strict');
+    const refresh = createModelConfigSnapshotReader({ getMainWindow: () => win });
+    const publish = async config => {
+        await adminPost(serverUrl, '/admin/save', { csrf: await adminCsrf(serverUrl, cookie),
+            content: JSON.stringify(config), note: 'Remote-only smoke' }, cookie);
+        assert.equal((await refresh({ refresh: true })).ok, true);
+        return readDom(win);
+    };
+    await waitFor(win, dom => dom.canvasNodeMounted, { label: 'Remote catalog node' });
+    await win.webContents.executeJavaScript(`(() => {
+        window.Konva.stages[0].findOne('#smoke-video-node').fire('click', { evt: { button: 0 } });
+        document.querySelector('[data-model]').click();
+    })()`);
+    assert.deepEqual((await readDom(win)).modelOptions, [], 'Empty remote directory must not show bundled or account models');
+    const baseline = require('../shared/model-config.default.json');
+    const first = JSON.parse(JSON.stringify(baseline.models.find(e => e.id === 'ravenhash-video.sd2.5-route1')));
+    first.catalog = { model: 'sd2.5-route1', hosts: ['art.ravenhash.org'] };
+    first.presentation = { label: 'Remote only A', routeLabel: 'Remote only A', routeGroup: 'remote-a',
+        routeGroupLabel: 'Remote A', routeGroupAlways: true, routeGroupOrder: 2, routeOrder: 0 };
+    const second = { ...JSON.parse(JSON.stringify(first)), id: 'remote.only.b',
+        catalog: { model: 'remote-new-model', hosts: ['art.ravenhash.org'] },
+        match: { model: ['^remote-new-model$'] },
+        presentation: { ...first.presentation, label: 'Remote only B', routeLabel: 'Remote only B',
+            routeGroup: 'remote-b', routeGroupLabel: 'Remote B', routeGroupOrder: 1 } };
+    const config = { schemaVersion: 1, catalogMode: 'remote', fields: baseline.fields, capabilities: baseline.capabilities,
+        models: [first, second] };
+    let menu = await publish(config);
+    assert.deepEqual(menu.groupTitles, ['Remote B', 'Remote A']);
+    assert.deepEqual(menu.modelOptions, ['Remote only B', 'Remote only A']);
+    first.presentation.routeGroupOrder = 0;
+    menu = await publish(config);
+    assert.deepEqual(menu.groupTitles, ['Remote A', 'Remote B']);
+    config.models = [second];
+    menu = await publish(config);
+    assert.deepEqual(menu.modelOptions, ['Remote only B']);
+    config.models = [];
+    menu = await publish(config);
+    assert.deepEqual(menu.modelOptions, []);
+    assert.equal(menu.configSnapshot.config.models.length, 0);
+}

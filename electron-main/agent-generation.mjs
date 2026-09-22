@@ -12,8 +12,9 @@ import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from
 import { getVideoModelProfile } from '../shared/video-model-profiles.mjs';
 import { isVideoGenerationAvailable, assertVideoGenerationAvailable } from '../shared/video-generation-availability.mjs';
 import { DEFAULT_MODEL_CONFIG } from '../src/model-config-default.js';
-import { resolveModelConfigEntry, toVideoProfileOverrides, mergeVideoProfile, validateModelRequest } from '../src/model-config-capabilities.js';
+import { resolveModelConfigEntry, toVideoProfileOverrides, resolveVideoModelProfile, validateModelRequest } from '../src/model-config-capabilities.js';
 import { getModelPresentation } from '../shared/model-presentation.mjs';
+import { expandCatalogProviders, isCatalogManaged } from '../shared/model-catalog.mjs';
 import adapters from './video-provider-adapters.js';
 import { mediaKind } from './agent-media.cjs';
 
@@ -103,7 +104,7 @@ export class AgentGeneration {
         const resolution = resolveModelConfigEntry(modelConfig, { ...provider, kind });
         const candidates = resolution.ambiguous ? resolution.candidates : [resolution.entry].filter(Boolean);
         const profile = kind === 'video'
-            ? mergeVideoProfile(getVideoModelProfile(provider), toVideoProfileOverrides(modelConfig, resolution.entry, provider))
+            ? resolveVideoModelProfile(modelConfig, provider)
             : null;
         const presentation = profile || getModelPresentation(resolution.entry, provider);
         return { ...resolution, candidates, profile, presentation };
@@ -148,27 +149,32 @@ export class AgentGeneration {
             throw error('INVALID_RESOLUTION', 'Midjourney 的 definition 无法编码该画质，请使用 1K 或 2K');
         }
     }
-    providers() {
+    providers(modelConfig, options) {
         const config = this.loadConfig();
-        return (config.providers || []).flatMap(provider => [...new Set(provider.models || [provider.model])].filter(Boolean)
-            .map((model, index) => ({ ...provider, model, sourceProviderId: provider.id,
-                id: index ? `${provider.id}::model:${encodeURIComponent(model)}` : provider.id })));
+        return expandCatalogProviders(modelConfig, config.providers, options);
     }
-    resolveProvider(binding = {}, kind = 'text') {
+    resolveProvider(binding = {}, kind = 'text', modelConfig) {
         const config = this.loadConfig();
         const id = binding.providerId || binding.id || binding.sourceProviderId || config.globalConfig?.[`${kind}ProviderId`];
-        const list = this.providers().filter(p => inferProviderCapability(p) === kind && (kind !== 'text' || canUseTextProvider(p)));
-        let provider = list.find(p => p.id === id && (!binding.model || p.model === binding.model))
-            || list.find(p => p.sourceProviderId === (binding.sourceProviderId || id) && (!binding.model || p.model === binding.model));
+        const list = this.providers(modelConfig, { includeHidden: true }).filter(p => inferProviderCapability(p) === kind && (kind !== 'text' || canUseTextProvider(p)));
+        const account = (config.providers || []).find(account => account.id === (binding.sourceProviderId || id));
+        const model = binding.model || (id === account?.id ? account.model : '');
+        let provider = list.find(p => p.id === id && (!model || p.model === model))
+            || list.find(p => p.sourceProviderId === (binding.sourceProviderId || id) && (!model || p.model === model));
         if (!provider && binding.model && !id) provider = list.find(p => p.model === binding.model);
         if (!provider && !id && !binding.model) provider = list[0];
+        if (!provider && binding.model && binding.sourceProviderId && account
+            && !isCatalogManaged(modelConfig, { ...account, model: binding.model, kind })) {
+            provider = { ...account, id, sourceProviderId: account.id, model: binding.model };
+        }
         if (!provider?.apiKey) throw error('PROVIDER_REQUIRED', `未找到可用的 ${kind} 模型，请在设置中选择模型`);
         return provider;
     }
     listModels(modelConfig = this.loadModelConfig()) {
-        return this.providers().filter(p => inferProviderCapability(p) !== 'text' && isVideoGenerationAvailable(p)).map(p => {
+        return this.providers(modelConfig).filter(p => inferProviderCapability(p) !== 'text' && isVideoGenerationAvailable(p, modelConfig)).map(p => {
             const kind = inferProviderCapability(p);
             const { profile, presentation, candidates, matched, ambiguous } = this._capabilities(p, kind, modelConfig);
+            if (presentation?.visible === false) return null;
             const price = presentation?.price?.kind === 'sale' ? presentation.price : null;
             return { id: p.id, model: p.model, kind, name: p.name,
                 ratios: catalogOptions(candidates, 'ratio', profile?.ratios || IMAGE_RATIOS),
@@ -178,7 +184,7 @@ export class AgentGeneration {
                 referenceLimits: catalogReferenceLimits(candidates, profile?.referenceLimits), price,
                 modelConfig: { revision: modelConfig.revision, matched, ambiguous, candidates: copy(candidates) },
                 pricingStatus: price ? 'configured_sale' : 'unknown' };
-        });
+        }).filter(Boolean);
     }
     _isPreparedGenerationNode(node, kind, run) {
         if (!node || node.kind !== 'op' || node.nodeType !== kind) return false;
@@ -245,8 +251,8 @@ export class AgentGeneration {
             // The orchestrator has already compiled the image intent into the node prompt.
             const count = Number(config.count ?? 1);
             if (!Number.isInteger(count) || count < 1 || count > 8) throw error('COUNT_LIMIT', '单节点每批次需要 1 到 8 次生成');
-            const provider = this.resolveProvider(config, node.nodeType);
-            if (node.nodeType === 'video') assertVideoGenerationAvailable(provider);
+            const provider = this.resolveProvider(config, node.nodeType, modelConfig);
+            if (node.nodeType === 'video') assertVideoGenerationAvailable(provider, modelConfig);
             if (Number(config.midjourneyRepeat || 1) > 1)
                 throw error('COUNT_LIMIT', 'Agent 批次请使用生成数量，不使用额外的 Midjourney repeat');
             const { profile, presentation, entry } = this._capabilities(provider, node.nodeType, modelConfig);
@@ -328,8 +334,8 @@ export class AgentGeneration {
         // Completed or submitted work does not need the renderer or today's model limits.
         const modelConfig = submitting
             ? (this.refreshModelConfig ? await this.refreshModelConfig() : this.loadModelConfig()) : null;
-        const provider = this.resolveProvider(step.providerRef, step.kind);
-        if (submitting && step.kind === 'video') assertVideoGenerationAvailable(provider);
+        const provider = this.resolveProvider(step.providerRef, step.kind, modelConfig);
+        if (submitting && step.kind === 'video') assertVideoGenerationAvailable(provider, modelConfig);
         if ((step.providerRef.endpoint && provider.endpoint !== step.providerRef.endpoint)
             || (step.providerRef.type && provider.type !== step.providerRef.type)) throw error('PROVIDER_CHANGED', 'API 路线已变更，请重新确认计划');
         const references = step.references.map(ref => {

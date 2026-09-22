@@ -61,8 +61,7 @@ async function bootstrap() {
 
         // 1. 加载数据
         storeData = await window.flowCanvas.store.load();
-        // 模型能力 CONFIG：内置默认立刻可用，随后按 1 小时周期从服务器静默更新。
-        // 不 await：拉取失败或网络慢都不能拖住启动，UI 先用内置/缓存配置渲染。
+        // Source-mode catalog experiments start empty and use only the selected CONFIG source.
         const modelConfig = initModelConfigUi();
         storeData.items = (Array.isArray(storeData.items) ? storeData.items : [])
             .filter(item => item?.kind !== 'generation');
@@ -89,6 +88,7 @@ async function bootstrap() {
                 agentSidebar?.saveImageGenerationPreferences?.(config, binding) || false,
             getVideoProvider: (binding) => agentSidebar?.getVideoProviderConfig?.(binding) || null,
             getGenerationProviders: (kind) => agentSidebar?.getGenerationProviderOptions?.(kind) || [],
+            getModelConfigStatus: () => modelConfig.getStatus(),
             getImageModelProfile: (binding) => agentSidebar?.getImageModelProfile?.(binding) || null,
             getVideoModelProfile: (binding) => agentSidebar?.getVideoModelProfile?.(binding) || null,
             getPromptPresets: (kind) => agentSidebar?.getPromptPresets?.(kind) || [],

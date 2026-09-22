@@ -13,6 +13,7 @@ import {
     resolveModelConfigEntry,
     toImageProfileOverrides,
     toVideoProfileOverrides,
+    resolveVideoModelProfile,
     validateModelRequest
 } from './model-config-capabilities.js';
 
@@ -289,9 +290,41 @@ test('每条 CONFIG 条目都有可编译的正则与唯一 id', () => {
         for (const source of entry.match.model) {
             if (/[[\](){}|+*?]/.test(source)) continue;
             const probe = source.replace(/^\^/, '').replace(/\$$/, '').replace(/\\(.)/g, '$1');
-            const matched = matchModelConfigEntries(config, { model: probe, kind: entry.kind });
+            const endpoint = entry.id.startsWith('shanhai-video.') ? 'https://shanhai.vnshu.cn/api/v1' : undefined;
+            const matched = matchModelConfigEntries(config, { model: probe, kind: entry.kind, endpoint });
             assert.ok(matched.some(item => item.entry.id === entry.id), `${entry.id} 无法被探针 ${probe} 命中`);
         }
+    }
+});
+
+test('remote directory profiles never inherit local model names, groups or parameter presets', () => {
+    const provider = { model: 'sd2.5-route1', endpoint: 'https://art.ravenhash.org/v1', kind: 'video' };
+    const config = { schemaVersion: 1, catalogMode: 'remote', models: [{ id: 'only-remote', kind: 'video',
+        match: { model: ['^sd2.5-route1$'] }, catalog: { model: provider.model, hosts: ['art.ravenhash.org'] },
+        presentation: { label: 'Remote entry' } }] };
+    const profile = resolveVideoModelProfile(config, provider);
+    assert.equal(profile.label, 'Remote entry');
+    assert.equal(profile.routeGroup, undefined);
+    assert.deepEqual(profile.durations, []);
+    assert.deepEqual(profile.ratios, []);
+    assert.deepEqual(profile.referenceLimits, { image: 0, video: 0, audio: 0 });
+    assert.equal(validateModelRequest({ config: { ...config, models: [] }, provider }).ok, false);
+    config.models[0].catalog.enabled = false;
+    assert.equal(validateModelRequest({ config, provider }).ok, false);
+});
+
+test('scoped catalogs preserve custom profiles and validation while rejecting removed managed models', () => {
+    const config = { schemaVersion: 1, catalogMode: 'remote',
+        catalogScope: { hosts: ['art.ravenhash.org'], kinds: ['video'] }, models: [] };
+    const managed = { model: 'sd2.5-route1', kind: 'video', endpoint: 'https://art.ravenhash.org/v1' };
+    assert.equal(resolveVideoModelProfile(config, managed), null);
+    assert.equal(validateModelRequest({ config, provider: managed }).ok, false);
+    const custom = { ...managed, endpoint: 'https://custom.test/v1' };
+    assert.deepEqual(resolveVideoModelProfile(config, custom), resolveVideoModelProfile({ models: [] }, custom));
+    assert.equal(validateModelRequest({ config, provider: custom }).ok, true);
+    for (const kind of ['image', 'text']) {
+        const provider = { ...managed, kind, model: kind === 'image' ? 'gpt-image-2' : 'gpt-5' };
+        assert.equal(validateModelRequest({ config, provider }).ok, true);
     }
 });
 

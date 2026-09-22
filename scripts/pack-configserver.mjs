@@ -15,7 +15,7 @@ import { spawnSync } from 'node:child_process';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sourceDir = path.join(root, 'configserver');
 const releaseDir = path.join(root, 'release');
-const include = ['server.mjs', 'package.json', 'README.md', 'lib', 'schema', 'seed', 'deploy', '.gitignore'];
+const include = ['server.mjs', 'catalog-control.mjs', 'package.json', 'README.md', 'lib', 'assets', 'schema', 'seed', 'deploy', '.gitignore'];
 const exclude = new Set(['data', 'node_modules', 'package-lock.json']);
 
 const version = JSON.parse(fs.readFileSync(path.join(sourceDir, 'package.json'), 'utf8')).version;

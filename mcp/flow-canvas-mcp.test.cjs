@@ -114,6 +114,45 @@ test('workflow schemas require scoped IDs and reject unsupported inputs', () => 
         ['download', 'connect', 'import', 'inspect', 'clean', 'quad', 'validate']);
 });
 
+test('model CONFIG tools read and refresh the renderer separately from MCP settings', async t => {
+    const requests = [];
+    const bridge = http.createServer(async (req, res) => {
+        const body = await readJson(req);
+        requests.push({ method: req.method, path: req.url, body });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, status: { revision: 123, origin: 'remote' } }));
+    });
+    await listen(bridge);
+    t.after(() => closeServer(bridge));
+    const client = spawnMcpClient(t, bridge);
+    const listed = await client.request('tools/list', {});
+    const tools = listed.result.tools.filter(tool => tool.name.startsWith('flow_canvas.model_config.'));
+    assert.deepEqual(tools.map(tool => tool.name), ['flow_canvas.model_config.get', 'flow_canvas.model_config.refresh']);
+    for (const tool of tools) {
+        const response = await client.request('tools/call', { name: tool.name, arguments: {} });
+        assert.equal(JSON.parse(response.result.content[0].text).status.revision, 123);
+    }
+    assert.deepEqual(requests.map(({ method, path }) => ({ method, path })), [
+        { method: 'GET', path: '/model-config' }, { method: 'POST', path: '/model-config/refresh' }
+    ]);
+});
+
+test('model CONFIG refresh errors retain the applied revision through stdio', async t => {
+    const status = { revision: 123, origin: 'cache', lastError: 'offline' };
+    const bridge = http.createServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'offline', code: 'MODEL_CONFIG_REFRESH_FAILED',
+            details: { status } }));
+    });
+    await listen(bridge);
+    t.after(() => closeServer(bridge));
+    const response = await spawnMcpClient(t, bridge).request('tools/call', {
+        name: 'flow_canvas.model_config.refresh', arguments: {}
+    });
+    assert.equal(response.error.data.code, 'MODEL_CONFIG_REFRESH_FAILED');
+    assert.deepEqual(response.error.data.details.status, status);
+});
+
 test('stdio MCP exposes workflows and forwards them directly to workflow routes', async t => {
     const requests = [];
     const bridge = http.createServer(async (req, res) => {

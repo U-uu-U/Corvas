@@ -7557,7 +7557,7 @@ export class CanvasManager {
                 button.type = 'button';
                 button.className = 'op-model-option';
                 const isSelected = provider.id === data.config?.providerId
-                    || (provider.sourceProviderId === data.config?.sourceProviderId && provider.model === data.config?.model);
+                    || (provider.sourceProviderId === (data.config?.sourceProviderId || data.config?.providerId) && provider.model === data.config?.model);
                 button.classList.toggle('selected', isSelected);
                 const model = document.createElement('strong');
                 model.textContent = provider.model || '未命名模型';
@@ -9342,7 +9342,7 @@ export class CanvasManager {
         const providers = this.options.getGenerationProviders?.(data.nodeType) || [];
         const selected = providers.find(provider =>
             provider.id === data.config?.providerId
-            || (provider.sourceProviderId === data.config?.sourceProviderId && provider.model === data.config?.model)
+            || (provider.sourceProviderId === (data.config?.sourceProviderId || data.config?.providerId) && provider.model === data.config?.model)
         );
         const modelLabel = selected?.modelLabel && selected.modelLabel !== '未收录模型' ? selected.modelLabel : selected?.model;
         label.textContent = [selected?.routeLabel, modelLabel || data.config?.model].filter(Boolean).join(' · ')
@@ -9456,7 +9456,9 @@ export class CanvasManager {
                 empty.className = 'generation-composer-popover-empty';
                 empty.textContent = providers.length
                     ? '没有匹配的模型'
-                    : `请先在设置中添加${data.nodeType === 'video' ? '视频' : '图片'} API`;
+                    : this.options.getModelConfigStatus?.().catalogMode === 'remote'
+                        ? '远程目录暂无可用模型'
+                        : `请先在设置中添加${data.nodeType === 'video' ? '视频' : '图片'} API`;
                 list.appendChild(empty);
                 return;
             }
@@ -9470,7 +9472,7 @@ export class CanvasManager {
                     const groupLabel = row[0].routeGroupLabel || row[0].modelLabel || row[0].model;
                     group.setAttribute('aria-label', `${groupLabel}线路选择`);
                     const current = row.find(provider => provider.id === data.config?.providerId
-                        || (provider.sourceProviderId === data.config?.sourceProviderId && provider.model === data.config?.model));
+                        || (provider.sourceProviderId === (data.config?.sourceProviderId || data.config?.providerId) && provider.model === data.config?.model));
                     const trigger = document.createElement('button');
                     trigger.type = 'button';
                     trigger.className = 'generation-composer-route-trigger';
@@ -9572,7 +9574,7 @@ export class CanvasManager {
                 }
                 row.forEach(provider => {
                     const selected = provider.id === data.config?.providerId
-                        || (provider.sourceProviderId === data.config?.sourceProviderId && provider.model === data.config?.model);
+                        || (provider.sourceProviderId === (data.config?.sourceProviderId || data.config?.providerId) && provider.model === data.config?.model);
                     const button = document.createElement('button');
                     button.type = 'button';
                     button.className = 'generation-composer-model-option';

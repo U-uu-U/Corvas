@@ -18,7 +18,7 @@ export function inferProviderCapability(provider = {}) {
     if (explicit) return explicit;
 
     const marker = `${provider.model || ''} ${provider.endpoint || ''} ${provider.name || ''}`.toLowerCase();
-    if (/^ch0107-sd-2\.5-720p(?:\s|$)/.test(marker)) return PROVIDER_CAPABILITIES.VIDEO;
+    if (/^ch(?:0107|1401)-sd-2\.5-720p(?:\s|$)/.test(marker)) return PROVIDER_CAPABILITIES.VIDEO;
     if (/(oc-model-(?:qbdmeb|1iq31f|bkb50q|c6ws7e)(?:\s|$)|shanhai[-_](?:dola|seedance)[a-z0-9._-]*|seedance|^sd_2\.5_discount_v1(?:\s|$)|^sd2[._-]?5(?:-route[12]|-haidiyue-face)?(?:\s|$)|artsdance|dreamina|video|kling|可灵|sora|runway|veo|vidu|minimax[^a-z0-9]*h3|hunyuan|腾讯|通义.*视频|wan[^\s]*(?:t2v|i2v))/.test(marker)) {
         return PROVIDER_CAPABILITIES.VIDEO;
     }
@@ -39,7 +39,7 @@ export function canUseTextProvider(provider) {
     if (capability && capability !== PROVIDER_CAPABILITIES.TEXT) return false;
     // A saved role is not proof that a dedicated generation model supports chat.
     const model = String(provider.model).trim().toLowerCase();
-    if (model === 'ch0107-sd-2.5-720p' || /^(?:oc-model-(?:qbdmeb|1iq31f|bkb50q|c6ws7e))$/.test(model)
+    if (/^ch(?:0107|1401)-sd-2\.5-720p$/.test(model) || /^(?:oc-model-(?:qbdmeb|1iq31f|bkb50q|c6ws7e))$/.test(model)
         || /^shanhai[-_](?:image|nano)/.test(model)) return false;
     return !/^(?:gpt[-_]image(?:[-_.]|$)|dall[-_]?e(?:[-_.]|$)|mj_imagine$|midjourney$|(?:doubao[-_])?seedance|artsdance|sd_2\.5_discount_v1$|sd2[._-]?5(?:[-_]|$)|minimax[-_]?h3(?:[-_]|$))/.test(model);
 }

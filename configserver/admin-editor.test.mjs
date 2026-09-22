@@ -59,6 +59,51 @@ test('explicit clears do not create overrides for untouched inherited fields', (
     assert.equal(patch(entry, { recommended: 'false' }).presentation.recommended, false);
 });
 
+test('grouping controls preserve explicit zero, false and per-provider grouping when serialized', () => {
+    const before = { ...structuredClone(entry), presentation: { ...entry.presentation,
+        routeGroupDescription: 'Group details', routeGroupOrder: 20, routeOrder: 3,
+        routeGroupAlways: true, routeGroupScope: 'catalog', visible: true } };
+    const changed = patch(before, { routeGroupDescription: '', routeGroupOrder: '0', routeOrder: '-1',
+        routeGroupAlways: 'false', routeGroupScope: 'provider', visible: 'false' });
+    assert.deepEqual(changed.presentation, { ...before.presentation, routeGroupDescription: '',
+        routeGroupOrder: 0, routeOrder: -1, routeGroupAlways: false, routeGroupScope: 'provider', visible: false });
+    const values = readEditorValues(changed);
+    assert.equal(values.routeGroupOrder, '0');
+    assert.equal(values.routeOrder, '-1');
+    assert.equal(values.routeGroupAlways, 'false');
+    assert.equal(values.routeGroupScope, 'provider');
+    assert.equal(values.visible, 'false');
+    assert.deepEqual(patch(changed, {}), changed);
+    assert.deepEqual({ ...changed, presentation: before.presentation }, before);
+});
+
+test('clearing optional grouping controls restores inheritance without clearing display text', () => {
+    const base = { ...structuredClone(entry), presentation: { ...entry.presentation, routeGroupOrder: 0,
+        routeOrder: 0, routeGroupAlways: false, routeGroupScope: 'provider', visible: false } };
+    const cleared = patch(base, { routeGroupOrder: '', routeOrder: '', routeGroupAlways: 'inherit',
+        routeGroupScope: 'inherit', visible: 'inherit' });
+    for (const key of ['routeGroupOrder', 'routeOrder', 'routeGroupAlways', 'routeGroupScope', 'visible']) {
+        assert.equal(Object.hasOwn(cleared.presentation, key), false, key);
+    }
+    const bare = { id: 'bare', kind: 'video', match: { model: ['^bare$'] } };
+    const values = readEditorValues(bare);
+    assert.equal(values.routeGroupOrder, '');
+    assert.equal(values.routeOrder, '');
+    assert.equal(values.routeGroupAlways, 'inherit');
+    assert.equal(values.routeGroupScope, 'inherit');
+    assert.equal(values.visible, 'inherit');
+    assert.equal(patch(bare, { routeGroupOrder: '', visible: '', routeGroupScope: '' }).presentation, undefined);
+    assert.equal(patch(base, { routeGroupDescription: '' }).presentation.routeGroupDescription, '');
+});
+
+test('grouping controls reject invalid values instead of coercing them', () => {
+    for (const values of [{ routeGroupOrder: '0.5' }, { routeOrder: '-100001' }, { routeGroupOrder: '100001' },
+        { routeOrder: 'NaN' }, { routeOrder: 'Infinity' }, { routeGroupScope: 'all' },
+        { routeGroupAlways: 'yes' }, { visible: '0' }, { routeGroupDescription: 'x'.repeat(501) }]) {
+        assert.throws(() => patch(entry, values), undefined, JSON.stringify(values));
+    }
+});
+
 test('untouched generation parameters round-trip unchanged for every seeded model', () => {
     for (const model of parseEditorConfig(source).models) {
         assert.deepEqual(patch(model, {}), model, model.id);
@@ -149,6 +194,11 @@ test('every shape the form can emit passes the same ajv schema the publish route
     const validator = await createValidator({ schemaPath: fileURLToPath(new URL('./schema/model-config.schema.json', import.meta.url)) });
     assert.equal(validator.mode, 'schema', validator.note);
     const shapes = [
+        { routeGroupDescription: '', routeGroupOrder: '0', routeOrder: '-100000', routeGroupAlways: 'false',
+            routeGroupScope: 'provider', visible: 'false' },
+        { routeGroupDescription: 'x'.repeat(500), routeGroupOrder: '100000', routeOrder: '0', routeGroupAlways: 'true',
+            routeGroupScope: 'catalog', visible: 'true' },
+        { routeGroupOrder: '', routeOrder: '', routeGroupAlways: 'inherit', routeGroupScope: 'inherit', visible: 'inherit' },
         { durationMode: 'fixed', durationValue: '30', durationNote: '固定 30 秒' },
         { durationMode: 'range', durationMin: '4', durationMax: '30', durationDefault: '30' },
         { durationMode: 'range', durationMin: '0.5', durationMax: '4.5', durationInteger: 'false' },
@@ -236,7 +286,7 @@ test('undisplayed declared keys survive an edit of the same constraint type', ()
 test('bad JSON and duplicate IDs stay in the raw editor instead of dropping data', () => {
     assert.throws(() => parseEditorConfig('{bad'));
     assert.throws(() => parseEditorConfig(JSON.stringify({ schemaVersion: 1, models: [entry, entry] })));
-    assert.throws(() => parseEditorConfig(JSON.stringify({ schemaVersion: 1, models: [] })));
+    assert.deepEqual(parseEditorConfig(JSON.stringify({ schemaVersion: 1, models: [] })).models, []);
 });
 
 test('admin forms use absolute routes and safely preserve rejected JSON, draft and note', () => {

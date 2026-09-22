@@ -34,7 +34,8 @@ test('装了 ajv 时走完整 schema 校验', async () => {
     assert.equal(validator.validate(JSON.stringify(seed)).ok, true);
     assert.equal(validator.validate(seed).ok, true);
 
-    const missingModels = validator.validate({ schemaVersion: 1, models: [] });
+    assert.equal(validator.validate({ schemaVersion: 1, catalogMode: 'remote', models: [] }).ok, true);
+    const missingModels = validator.validate({ schemaVersion: 1 });
     assert.equal(missingModels.ok, false);
     assert.match(missingModels.errors.join(' '), /models/);
 
@@ -83,7 +84,7 @@ test('结构校验覆盖客户端真正依赖的不变量', () => {
 
     const cases = [
         [{ ...base, schemaVersion: 2 }, /schemaVersion/],
-        [{ schemaVersion: 1, models: [] }, /models 必须是非空数组/],
+        [{ schemaVersion: 1, models: null }, /models 必须是数组/],
         [{ schemaVersion: 1, models: [{ id: 'x', kind: 'video', match: { model: ['('] } }] }, /不是合法正则/],
         [{ schemaVersion: 1, models: [{ id: 'x', kind: 'video', match: { model: [] } }] }, /match\.model/],
         [{ schemaVersion: 1, models: [base.models[0], base.models[0]] }, /id 重复/],

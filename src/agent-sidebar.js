@@ -41,16 +41,16 @@ import { showStatusNotification } from './status-notification.js';
 import { createApplicationLauncher, createHunyuanPanel } from './hunyuan-accounts.js';
 import { createRhinoPanel } from './rhino-workbench.js';
 import { createBlenderPanel } from './blender-workbench.js';
-import { getVideoModelProfile, describeVideoModelProfile, getVideoModelGroup } from '../shared/video-model-profiles.mjs';
+import { describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
 import { isVideoGenerationAvailable } from '../shared/video-generation-availability.mjs';
 import { getModelPresentation, describeModelPresentation } from '../shared/model-presentation.mjs';
 import { modelConfigStore } from './model-config.js';
+import { expandCatalogProviders, isRemoteCatalog } from '../shared/model-catalog.mjs';
 import {
     mergeImageProfile,
-    mergeVideoProfile,
+    resolveVideoModelProfile,
     resolveModelConfigEntry,
     toImageProfileOverrides,
-    toVideoProfileOverrides,
     validateModelRequest
 } from './model-config-capabilities.js';
 import {
@@ -1212,12 +1212,19 @@ export class AgentSidebar {
     _renderAgentComposerModels() {
         if (!this.agentComposerModelList) return;
         const kind = this.agentModelKind;
-        const allProviders = this._providerVariants().filter(isVideoGenerationAvailable);
+        const allProviders = this._providerVariants().filter(provider => isVideoGenerationAvailable(provider, modelConfigStore.getConfig()))
+            .filter(provider => this._getProviderPresentation(provider, inferProviderCapability(provider))?.visible !== false);
         const providers = allProviders.filter(provider => kind === 'video'
             ? this._isVideoProvider(provider)
             : kind === 'image'
                 ? this._isImageProvider(provider)
-                : this._isTextProvider(provider));
+                : this._isTextProvider(provider))
+            .sort((a, b) => {
+                const left = this._getProviderPresentation(a, kind);
+                const right = this._getProviderPresentation(b, kind);
+                return (left?.routeGroupOrder ?? 0) - (right?.routeGroupOrder ?? 0)
+                    || (left?.routeOrder ?? 0) - (right?.routeOrder ?? 0);
+            });
         const selectedId = kind === 'video'
             ? this.globalConfig.videoProviderId
             : kind === 'image'
@@ -2743,11 +2750,7 @@ export class AgentSidebar {
     }
 
     _getVideoModelProfile(provider) {
-        const base = getVideoModelProfile(provider);
-        if (!base) return null;
-        const config = modelConfigStore.getConfig();
-        const { entry } = resolveModelConfigEntry(config, { ...provider, kind: 'video' });
-        return { ...mergeVideoProfile(base, toVideoProfileOverrides(config, entry, provider)), ...getVideoModelGroup(provider) };
+        return resolveVideoModelProfile(modelConfigStore.getConfig(), provider);
     }
 
     _loadGenerationTasks() {
@@ -4015,7 +4018,10 @@ export class AgentSidebar {
     }
 
     _findProvider(id) {
-        return this._providerVariants().find(provider => provider.id === id) || null;
+        const variants = this._providerVariants({ includeHidden: true });
+        return variants.find(provider => provider.id === id)
+            || variants.find(provider => provider.sourceProviderId === id
+                && provider.model === this.providers.find(account => account.id === id)?.model) || null;
     }
 
     _providerModels(provider) {
@@ -4023,16 +4029,8 @@ export class AgentSidebar {
         return [...new Set(source.map(model => String(model || '').trim()).filter(Boolean))];
     }
 
-    _providerVariants() {
-        return this.providers.flatMap(provider => {
-            const models = this._providerModels(provider);
-            return models.map((model, index) => ({
-                ...provider,
-                id: index === 0 ? provider.id : `${provider.id}::model:${encodeURIComponent(model)}`,
-                sourceProviderId: provider.id,
-                model
-            }));
-        });
+    _providerVariants(options) {
+        return expandCatalogProviders(modelConfigStore.getConfig(), this.providers, options);
     }
 
     _selectionUsesProvider(selectionId, providerId) {
@@ -4049,6 +4047,8 @@ export class AgentSidebar {
     }
 
     _ensureProviderRoles() {
+        // A remote directory can be loading or empty without deleting saved account preferences.
+        if (isRemoteCatalog(modelConfigStore.getConfig())) return;
         if (this.providers.length === 0) {
             this.globalConfig.textProviderId = null;
             this.globalConfig.imageProviderId = null;
@@ -4099,7 +4099,7 @@ export class AgentSidebar {
 
     _setVideoProvider(id) {
         const provider = this._findProvider(id);
-        if (!provider || !this._isVideoProvider(provider) || !isVideoGenerationAvailable(provider)) return;
+        if (!provider || !this._isVideoProvider(provider) || !isVideoGenerationAvailable(provider, modelConfigStore.getConfig())) return;
         this.globalConfig.videoProviderId = id;
         this._saveConfig();
         this._renderProviderList();
@@ -4148,7 +4148,8 @@ export class AgentSidebar {
 
     getGenerationProviderOptions(kind) {
         return this._providerVariants()
-            .filter(provider => kind !== 'video' || isVideoGenerationAvailable(provider))
+            .filter(provider => kind !== 'video' || isVideoGenerationAvailable(provider, modelConfigStore.getConfig()))
+            .filter(provider => this._getProviderPresentation(provider, kind)?.visible !== false)
             .filter(provider => kind === 'video'
                 ? this._isVideoProvider(provider)
                 : kind === 'text'

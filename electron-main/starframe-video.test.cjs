@@ -18,6 +18,18 @@ test('StarFrame uses references mode with singular and plural fields instead of 
         { referenceVideos: Array(11).fill(media) }, { referenceAudios: Array(11).fill(media) }]) assert.throws(() => buildStarFrameBody({ ...base, ...invalid }));
 });
 
+test('CH1401 keeps its model ID and rejects unsupported audio/video references', () => {
+    const media = 'https://media.test/asset';
+    const body = buildStarFrameBody({ model: 'ch1401-sd-2.5-720p', clientTaskId: 'request-1401', prompt: 'test', duration: 4,
+        referenceImages: [media] });
+    assert.equal(body.model, 'ch1401-sd-2.5-720p');
+    assert.deepEqual(body.references, { image: media });
+    assert.throws(() => buildStarFrameBody({ model: 'ch1401-sd-2.5-720p', clientTaskId: 'request-1401', prompt: 'test',
+        referenceVideos: [media] }), /最多支持 0 个参考视频/);
+    assert.throws(() => buildStarFrameBody({ model: 'ch1401-sd-2.5-720p', clientTaskId: 'request-1401', prompt: 'test',
+        referenceAudios: [media] }), /最多支持 0 个参考音频/);
+});
+
 test('client IDs remain stable and the native content URL cannot redirect API credentials to another task or host', () => {
     const endpoint = 'https://api.xzapi.vip/v1/videos';
     for (const base of ['https://api.xzapi.vip', 'https://api.xzapi.vip/v1', endpoint]) assert.equal(buildVideoGenerationEndpoint(base, STARFRAME_MODEL), endpoint);

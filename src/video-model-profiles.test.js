@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_MODEL_CONFIG } from './model-config-default.js';
-import { mergeVideoProfile, resolveModelConfigEntry, toVideoProfileOverrides } from './model-config-capabilities.js';
+import { mergeVideoProfile, resolveModelConfigEntry, resolveVideoModelProfile, toVideoProfileOverrides } from './model-config-capabilities.js';
 import { canUseTextProvider, inferProviderCapability } from './provider-capabilities.js';
 import { DEFAULT_VIDEO_MODEL_PROFILE, getVideoModelProfile, describeVideoModelProfile, getVideoModelGroup } from '../shared/video-model-profiles.mjs';
 
@@ -31,10 +31,7 @@ test('the new RavenHash site retains all nine enabled model presentations after 
         'sd2.5-route1', ...['fast', 'mini', 'pro'].map(variant => `artsdance2-0-${variant}-intl-260701`)];
     const profiles = host => models.map(model => {
         const provider = { model, endpoint: `https://${host}/v1` };
-        const base = getVideoModelProfile(provider);
-        const { entry } = resolveModelConfigEntry(DEFAULT_MODEL_CONFIG, { ...provider, kind: 'video' });
-        return { ...mergeVideoProfile(base, toVideoProfileOverrides(DEFAULT_MODEL_CONFIG, entry, provider)),
-            ...getVideoModelGroup(provider) };
+        return resolveVideoModelProfile(DEFAULT_MODEL_CONFIG, provider);
     });
     const current = profiles('cart.ravenhash.org');
     const withoutPrice = entries => entries.map(({ price: _price, ...profile }) => profile);
@@ -87,6 +84,21 @@ test('StarFrame keeps host-specific per-second sales with or without a remote ca
     assert.equal(canUseTextProvider({ model: provider.model }), false);
 });
 
+test('StarFrame CH1401 uses the card-face route, request pricing and image-only references', () => {
+    const provider = { model: 'ch1401-sd-2.5-720p', endpoint: 'https://api.xzapi.vip/v1' };
+    const profile = getVideoModelProfile(provider);
+    assert.deepEqual(profile.referenceLimits, { image: 30, video: 0, audio: 0 });
+    assert.equal(profile.faceRestriction, true);
+    assert.equal(profile.price.amount, 5);
+    assert.equal(profile.price.unit, 'request');
+    assert.equal(getVideoModelProfile({ ...provider, endpoint: 'https://art.ravenhash.org/v1' }).price.amount, 5);
+    assert.equal(getVideoModelProfile({ ...provider, endpoint: 'https://cart.ravenhash.org/v1' }).price.amount, 5.72);
+    const group = getVideoModelGroup(provider);
+    assert.equal(group.routeGroup, 'seedance25-backup');
+    assert.equal(group.label, '2.5pro 备用（卡人脸）');
+    assert.equal(group.routeOrder, 2);
+});
+
 test('Shanhai backup group exposes the four selected models and user prices only on its exact host', () => {
     const cases = [
         ['oc-model-qbdmeb', 4, 'request', [5, 10, 15]],
@@ -109,6 +121,14 @@ test('Shanhai backup group exposes the four selected models and user prices only
             { ...provider, endpoint: 'https://shanhai.vnshu.cn.evil.test/api/v1', kind: 'video' }).entry, null);
         assert.deepEqual(getVideoModelGroup({ ...provider, endpoint: 'https://shanhai.vnshu.cn.evil.test/api/v1' }), {});
     }
+});
+
+test('older CONFIG retains bundled visibility while an explicit remote value can replace it', () => {
+    const provider = { model: 'oc-model-qbdmeb', endpoint: 'https://shanhai.vnshu.cn/api/v1' };
+    assert.equal(resolveVideoModelProfile({ models: [] }, provider).visible, false);
+    const config = structuredClone(DEFAULT_MODEL_CONFIG);
+    config.models.find(entry => entry.id === 'shanhai-video.oc-model-qbdmeb').presentation.visible = true;
+    assert.equal(resolveVideoModelProfile(config, provider).visible, true);
 });
 
 test('StarFrame joins the shared Seedance 2.5 backup group only on supported exact hosts and model', () => {

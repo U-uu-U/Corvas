@@ -58,6 +58,17 @@ const tools = [
         }
     },
     {
+        name: 'flow_canvas.model_config.get',
+        description: 'Read the model CONFIG actually applied by the Corvas canvas: revision, source, refresh status and model presentation/capabilities. Separate from MCP service settings and API credentials.',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        annotations: { readOnlyHint: true }
+    },
+    {
+        name: 'flow_canvas.model_config.refresh',
+        description: 'Fetch the published model CONFIG from the canvas configured source, validate it and apply it to the live model picker. Returns the applied revision/status; fetch failure retains the previous config and reports failure. Does not publish config, register provider accounts or change API keys.',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+    },
+    {
         name: 'flow_canvas.context.get_active_group',
         description: 'Get the active Corvas folder group, planning context, viewport, and item count.',
         inputSchema: {
@@ -343,6 +354,8 @@ const toolHandlers = {
     'flow_canvas.health': () => api('GET', '/health'),
     'flow_canvas.config.get': () => api('GET', '/config'),
     'flow_canvas.config.update': (body = {}) => api('PATCH', '/config', body),
+    'flow_canvas.model_config.get': () => api('GET', '/model-config'),
+    'flow_canvas.model_config.refresh': () => api('POST', '/model-config/refresh', {}),
     'flow_canvas.context.get_active_group': () => api('GET', '/context'),
     'flow_canvas.plan.list': () => api('GET', '/plans'),
     'flow_canvas.plan.get': ({ planId }) => api('GET', `/plans/${encodeURIComponent(required(planId, 'planId'))}`),

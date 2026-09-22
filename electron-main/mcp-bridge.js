@@ -8,8 +8,9 @@ const { app, net } = require('electron');
 const { PlanService, DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
 const { WORKFLOW_TOOL_DEFINITIONS } = require('../shared/workflow-tools.cjs');
 const { HANDOFF_TOOL_DEFINITIONS } = require('../shared/handoff-tools.cjs');
+const { createModelConfigSnapshotReader } = require('./model-config-service.cjs');
 const { isGlobalAiOpcModel, buildGlobalAiOpcBody, GlobalAiOpcAssets, LIMITS: GLOBALAIOPC_LIMITS } = require('./globalaiopc-video.cjs');
-const { isStarFrameModel, buildStarFrameBody, starFrameContentUrl, starFrameDownloadRequest, STARFRAME_LIMITS } = require('./starframe-video.cjs');
+const { isStarFrameModel, buildStarFrameBody, starFrameContentUrl, starFrameDownloadRequest, starFrameLimits } = require('./starframe-video.cjs');
 const { isShanhaiEndpoint, isShanhaiModel, shanhaiReferenceLimits, generateShanhaiVideo, resumeShanhaiVideo } = require('./shanhai-video.cjs');
 const {
     appendMidjourneyParameters,
@@ -122,6 +123,7 @@ const RAVENHASH_IMAGE_SIZE_OPTIONS = [
     '2160x3840'
 ];
 const BOARD_TOOL_REQUEST_TIMEOUT_MS = 20_000;
+const GENERATION_MODEL_CONFIG = Symbol('generation-model-config');
 
 function generationCanceledError() {
     const error = new Error('生成任务已中断');
@@ -167,6 +169,8 @@ const ROUTE_TO_TOOL = {
     'GET /health': 'flow_canvas.health',
     'GET /config': 'flow_canvas.config.get',
     'PATCH /config': 'flow_canvas.config.update',
+    'GET /model-config': 'flow_canvas.model_config.get',
+    'POST /model-config/refresh': 'flow_canvas.model_config.refresh',
     'GET /context': 'flow_canvas.context.get_active_group',
     'GET /plans': 'flow_canvas.plan.list',
     'POST /plans': 'flow_canvas.plan.create',
@@ -205,6 +209,7 @@ class FlowCanvasBridge {
     constructor({ store, getMainWindow, getDefaultSaveFolder, getFallbackSaveDir, notifyRenderer, notifyTaskSubmitted, notifyTaskCompleted, notifyVideoProgress, registerMediaFile, boardToolRequestTimeoutMs, recoveryDirectory }) {
         this.store = store;
         this.getMainWindow = getMainWindow;
+        this.readModelConfigSnapshot = createModelConfigSnapshotReader({ getMainWindow });
         this.getDefaultSaveFolder = getDefaultSaveFolder;
         this.getFallbackSaveDir = getFallbackSaveDir;
         this.notifyRenderer = notifyRenderer;
@@ -610,6 +615,8 @@ class FlowCanvasBridge {
             ['GET', /^\/health$/, ROUTE_TO_TOOL['GET /health'], () => this._health()],
             ['GET', /^\/config$/, ROUTE_TO_TOOL['GET /config'], () => this._getConfig()],
             ['PATCH', /^\/config$/, ROUTE_TO_TOOL['PATCH /config'], (_, body) => this._updateConfig(body)],
+            ['GET', /^\/model-config$/, ROUTE_TO_TOOL['GET /model-config'], () => this._modelConfig(false)],
+            ['POST', /^\/model-config\/refresh$/, ROUTE_TO_TOOL['POST /model-config/refresh'], () => this._modelConfig(true)],
             ['GET', /^\/context$/, ROUTE_TO_TOOL['GET /context'], () => this._context()],
             ['GET', /^\/plans$/, ROUTE_TO_TOOL['GET /plans'], () => this._listPlans()],
             ['POST', /^\/plans$/, ROUTE_TO_TOOL['POST /plans'], (_, body) => this._createPlan(body)],
@@ -681,6 +688,14 @@ class FlowCanvasBridge {
                 allowedTools: [...this.allowedTools]
             }
         };
+    }
+
+    async _modelConfig(refresh) {
+        const snapshot = await this.readModelConfigSnapshot({ refresh });
+        const success = !refresh || snapshot.ok === true;
+        return { ...snapshot, success, ...(!success ? {
+            code: 'MODEL_CONFIG_REFRESH_FAILED', details: { status: snapshot.status }
+        } : {}) };
     }
 
     _getConfig() {
@@ -903,11 +918,35 @@ class FlowCanvasBridge {
     async generateImageFromRenderer(body) {
         const existing = body?.restoreToProject && this.recoveryStore.get(body.clientTaskId);
         if (existing?.taskId || existing?.result?.filePath) return this.recoverGenerationFromRenderer({ ...body, kind: 'image' });
+        await this._generationCatalog(body, 'image');
         body = this._rememberGeneration('image', body);
         return this._runCancelableGeneration(body?.clientTaskId, async signal => {
             const result = await this._generateImageFromRenderer(body, signal);
             return this._attachRetriedGeneration('image', body, result, signal);
         });
+    }
+
+    async _generationCatalog(body, kind) {
+        const window = this.getMainWindow?.();
+        if (typeof window?.webContents?.executeJavaScript !== 'function') {
+            if (app && !app.isPackaged && process.env.FLOW_CANVAS_REMOTE_CATALOG === '1') {
+                throw createBridgeError('MODEL_CONFIG_UNAVAILABLE', '远程目录尚未就绪，请打开源码版画布');
+            }
+            return null;
+        }
+        const { config } = await this.readModelConfigSnapshot();
+        if (config.catalogMode === 'remote') {
+            const { findCatalogEntry, isCatalogManaged } = await import('../shared/model-catalog.mjs');
+            const provider = { ...body.providerConfig, kind,
+                model: body.providerConfig?.model || body.model,
+                endpoint: body.providerConfig?.endpoint || body.endpoint };
+            if (!isCatalogManaged(config, provider)) return config;
+            const entry = findCatalogEntry(config, provider);
+            if (!entry || entry.catalog.enabled === false) {
+                throw createBridgeError('MODEL_NOT_IN_CATALOG', '该模型未在远程目录中启用，请刷新后重新选择');
+            }
+        }
+        return config;
     }
 
     async _attachRetriedGeneration(kind, body, result, signal) {
@@ -1057,14 +1096,15 @@ class FlowCanvasBridge {
     async generateVideoFromRenderer(body) {
         const existing = body?.restoreToProject && this.recoveryStore.get(body.clientTaskId);
         if (existing?.taskId || existing?.result?.filePath) return this.recoverGenerationFromRenderer({ ...body, kind: 'video' });
+        const modelConfig = await this._generationCatalog(body, 'video');
         body = this._rememberGeneration('video', body);
         return this._runCancelableGeneration(body?.clientTaskId, async signal => {
-            const result = await this._generateVideoFromRenderer(body, signal);
+            const result = await this._generateVideoFromRenderer(body, signal, modelConfig);
             return this._attachRetriedGeneration('video', body, result, signal);
         });
     }
 
-    async _generateVideoFromRenderer(body, signal) {
+    async _generateVideoFromRenderer(body, signal, modelConfig) {
         throwIfGenerationCanceled(signal);
         const prompt = String(body?.prompt || '').trim();
         if (!prompt) throw new Error('\u89c6\u9891\u63d0\u793a\u8bcd\u4e0d\u80fd\u4e3a\u7a7a');
@@ -1084,6 +1124,7 @@ class FlowCanvasBridge {
         }
         const result = await tryGenerateWithOpenAIVideo(prompt, targetDir, {
             ...body,
+            [GENERATION_MODEL_CONFIG]: modelConfig,
             signal,
             sourceReferences: sourceContext.references,
             videoReferences: videoSourceContext.references,
@@ -3476,14 +3517,14 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         if (!endpoint) return { success: false, error: '\u672a\u914d\u7f6e\u89c6\u9891 API \u5730\u5740' };
 
         const { assertVideoGenerationAvailable } = await import('../shared/video-generation-availability.mjs');
-        assertVideoGenerationAvailable({ model, endpoint });
+        assertVideoGenerationAvailable({ model, endpoint }, options[GENERATION_MODEL_CONFIG]);
 
         const isMiniMaxH3 = isMiniMaxH3Model(model);
         const isSeedance = isSeedanceVideoModel(model);
         const isGlobalAiOpc = isGlobalAiOpcModel(model);
         const isStarFrame = isStarFrameModel(model);
         const referenceLimits = isShanhai ? shanhaiReferenceLimits(model)
-            : isStarFrame ? STARFRAME_LIMITS : isGlobalAiOpc ? GLOBALAIOPC_LIMITS : isSeedance ? seedanceReferenceLimits(model) : { image: 9, video: 3, audio: 3 };
+            : isStarFrame ? starFrameLimits(model) : isGlobalAiOpc ? GLOBALAIOPC_LIMITS : isSeedance ? seedanceReferenceLimits(model) : { image: 9, video: 3, audio: 3 };
         const body = { model, prompt };
         const resolution = String(options.resolution || '').trim();
         let ratio = String(options.ratio || '').trim();

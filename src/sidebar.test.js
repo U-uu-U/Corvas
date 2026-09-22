@@ -50,6 +50,7 @@ function harness(t, emptyNextGroup) {
                 contextBridge: { exposeInMainWorld: (key, value) => { rendererWindow[key] = value; } },
                 ipcRenderer: {
                     sendSync(channel, envelope) {
+                        if (channel === 'model-config:runtime') return { refreshIntervalMs: 10000 };
                         if (channel === 'store:loadSync') return structuredClone(stored);
                         assert.equal(channel, 'store:saveSync');
                         const captured = structuredClone(envelope);

@@ -229,6 +229,22 @@ test('config 里的 refreshIntervalMs 可覆盖刷新周期并带上下限', () 
     assert.equal(normalizeRefreshInterval('abc'), DEFAULT_REFRESH_INTERVAL_MS);
 });
 
+test('a config source switch or reset discards an in-flight response without writing its cache', async () => {
+    for (const action of ['url', 'reset']) {
+        let resolve;
+        const storage = createStorage();
+        const store = createModelConfigStore({ storage, windowRef: null,
+            loadRemote: () => new Promise(done => { resolve = done; }) });
+        const pending = store.refresh({ force: true });
+        if (action === 'url') store.setUrl('https://new.example/config');
+        else store.reset();
+        resolve({ ok: true, raw: remoteConfig });
+        assert.equal((await pending).discarded, true);
+        assert.equal(store.getStatus().origin, 'builtin');
+        assert.equal(storage.getItem(MODEL_CONFIG_CACHE_KEY), null);
+    }
+});
+
 test('reset 清空缓存并回到内置默认配置', async () => {
     const storage = createStorage();
     const store = createModelConfigStore({
@@ -260,6 +276,104 @@ test('readModelConfig 丢弃损坏条目但保留可用条目', () => {
     assert.equal(sanitized.models.length, 1);
     assert.equal(sanitized.models[0].id, 'test.model');
     assert.equal(readModelConfig({ schemaVersion: 2, models: [] }), null);
-    assert.equal(readModelConfig({ schemaVersion: 1, models: [] }), null);
+    assert.deepEqual(readModelConfig({ schemaVersion: 1, models: [] }).models, []);
     assert.equal(readModelConfig(null), null);
+});
+
+test('remote-only source starts empty and cannot restore bundled entries after reset or remote clear', async () => {
+    let raw = { ...remoteConfig, catalogMode: 'remote' };
+    const store = createModelConfigStore({ remoteOnly: true, storage: createStorage(), windowRef: null,
+        loadRemote: async () => ({ ok: true, raw }) });
+    assert.equal(store.getStatus().catalogMode, 'remote');
+    assert.deepEqual(store.getConfig().models, []);
+    await store.refresh({ force: true });
+    assert.equal(store.getConfig().models.length, 1);
+    raw = { schemaVersion: 1, models: [] };
+    await store.refresh({ force: true });
+    assert.deepEqual(store.getConfig().models, []);
+    store.reset();
+    assert.deepEqual(store.getConfig().models, []);
+    assert.equal(store.getStatus().origin, 'empty');
+});
+
+test('remote-only startup ignores a local fallback cache and retains last remote data when offline', async () => {
+    const storage = createStorage({ [MODEL_CONFIG_CACHE_KEY]: JSON.stringify({ url: DEFAULT_MODEL_CONFIG_URL,
+        config: DEFAULT_MODEL_CONFIG, fetchedAt: 100 }) });
+    let response = { ok: true, raw: remoteConfig };
+    const store = createModelConfigStore({ remoteOnly: true, storage, windowRef: null,
+        loadRemote: async () => response, setIntervalImpl: () => null });
+    store.start({ refreshOnStart: false });
+    assert.deepEqual(store.getConfig().models, []);
+    await store.refresh({ force: true });
+    response = { ok: false, error: 'offline' };
+    await store.refresh({ force: true });
+    assert.equal(store.getConfig().models.length, 1);
+    store.stop();
+});
+
+test('source CONFIG ticks respect the ten-second request cadence without waiting a second whole interval', async () => {
+    let clock = 1000;
+    let tick;
+    let unsubscribed = 0;
+    let calls = 0;
+    const store = createModelConfigStore({ remoteOnly: true, storage: createStorage(), now: () => clock,
+        windowRef: { flowCanvas: { modelConfig: { onRefreshTick(callback) { tick = callback; return () => unsubscribed++; } } } },
+        setIntervalImpl: (_callback, ms) => { assert.equal(ms, 1000); return null; },
+        loadRemote: async () => { calls++; clock += 350; return { ok: true, raw: remoteConfig, fetchedAt: clock }; } });
+    store.start({ refreshOnStart: false });
+    await store.refresh({ force: true });
+    clock = 11000;
+    assert.equal(store.isDue(), true, 'Network time must not defer the request by another ten seconds');
+    tick();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 2);
+    tick();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 2, 'The one-second heartbeat must not send one request per second');
+    store.stop();
+    assert.equal(unsubscribed, 1);
+});
+
+test('installed runtime refreshes through main-process ticks and throttles offline retries', async () => {
+    let clock = 1000;
+    let tick;
+    let calls = 0;
+    const store = createModelConfigStore({ storage: createStorage(), now: () => clock,
+        windowRef: { flowCanvas: { modelConfig: { runtime: { refreshIntervalMs: 10000 },
+            onRefreshTick(callback) { tick = callback; return () => {}; } } } },
+        setIntervalImpl: () => null,
+        loadRemote: async () => { calls++; return { ok: false, error: 'offline' }; } });
+    assert.equal(store.getStatus().origin, 'builtin');
+    assert.equal(store.getStatus().refreshIntervalMs, 10000);
+    assert.equal(store.getUrl(), DEFAULT_MODEL_CONFIG_URL);
+    store.start({ refreshOnStart: false });
+    await store.refresh({ force: true });
+    clock = 10999;
+    tick();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 1);
+    clock = 11000;
+    tick();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 2);
+    assert.equal(store.getStatus().origin, 'builtin');
+    store.stop();
+});
+
+test('catalog scope survives parsing and cache restart when the managed catalog is empty', async () => {
+    const catalogScope = { hosts: ['art.ravenhash.org', 'cart.ravenhash.org'], kinds: ['video'] };
+    const raw = { schemaVersion: 1, catalogMode: 'remote', catalogScope, models: [] };
+    const storage = createStorage();
+    const store = createModelConfigStore({ storage, windowRef: null, loadRemote: async () => ({ ok: true, raw }) });
+    assert.equal((await store.refresh({ force: true })).ok, true);
+    assert.deepEqual(store.getConfig().catalogScope, catalogScope);
+    const restarted = createModelConfigStore({ storage, windowRef: null, setIntervalImpl: () => null });
+    restarted.start({ refreshOnStart: false });
+    assert.deepEqual(restarted.getConfig().catalogScope, catalogScope);
+    assert.deepEqual(restarted.getConfig().models, []);
+    restarted.stop();
+    for (const scope of [null, {}, { hosts: [], kinds: ['video'] }, { hosts: ['*.test'], kinds: ['video'] },
+        { hosts: ['art.ravenhash.org'], kinds: ['audio'] }]) {
+        assert.equal(readModelConfig({ ...raw, catalogScope: scope }), null);
+    }
 });

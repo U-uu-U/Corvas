@@ -65,6 +65,25 @@ export const VIDEO_MODEL_PROFILES = [
         defaultDuration: 4
     },
     {
+        matchModel: /^ch1401-sd-2\.5-720p$/i,
+        label: 'Seedance 2.5 720p（卡人脸）',
+        routeLabel: 'StarFrame CH1401',
+        faceRestriction: true,
+        ratios: ['16:9'],
+        resolutions: ['720p'],
+        durations: Array.from({ length: 27 }, (_, index) => index + 4),
+        durationControl: 'slider',
+        supportsWebSearch: false,
+        supportsCameraFixed: false,
+        supportsGeneratedAudio: false,
+        supportsWatermark: false,
+        referenceLimits: { image: 30, video: 0, audio: 0 },
+        defaultRatio: '16:9',
+        resolveAdaptiveRatio: false,
+        defaultResolution: '720p',
+        defaultDuration: 4
+    },
+    {
         matchModel: /^sd_2\.5_discount_v1$/i,
         label: 'Seedance 2.5',
         routeLabel: 'GlobalAiOpc',
@@ -227,7 +246,8 @@ export function getVideoModelProfile(provider) {
         'seedance_v2.5': [5.72, 'request'],
         'seedance_v2.0-933': [7.43, 'request'],
         'seedance_v2.5-101010': [8, 'request'],
-        'seedance_v2.5-301010': [11.43, 'request']
+        'seedance_v2.5-301010': [11.43, 'request'],
+        'ch1401-sd-2.5-720p': [5.72, 'request']
     }[model.toLowerCase()];
     const shanhaiPrice = {
         'oc-model-qbdmeb': [4, 'request'],
@@ -248,9 +268,13 @@ export function getVideoModelProfile(provider) {
         return { ...profile, price: { amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
             source: 'ravenhash configured sale', updatedAt: '2026-09-20T00:00:00Z' } };
     }
-    if (/^ch0107-sd-2\.5-720p$/i.test(model) && STARFRAME_VIDEO_HOSTS.has(host)) return { ...profile, price: {
-        amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
-        source: 'user configured sale', updatedAt: '2026-09-20T12:00:00Z'
+    const starFramePrice = {
+        'ch0107-sd-2.5-720p': [1.06, 'second'],
+        'ch1401-sd-2.5-720p': [5, 'request']
+    }[model.toLowerCase()];
+    if (starFramePrice && STARFRAME_VIDEO_HOSTS.has(host)) return { ...profile, price: {
+        amount: starFramePrice[0], currency: 'CNY', unit: starFramePrice[1], kind: 'sale',
+        source: 'user configured sale', updatedAt: '2026-09-22T00:00:00Z'
     } };
     const fixedSeedance = profile.routeGroup === 'seedance25-fixed';
     if (fixedSeedance) {
@@ -302,6 +326,13 @@ export function getVideoModelGroup(provider) {
         return { label, routeLabel: label, routeModelLabel: provider.model,
             routeGroup: 'seedance25-backup', routeGroupLabel: 'Seedance 2.5 备用渠道',
             routeGroupScope: 'catalog', routeGroupOrder: 20, routeOrder: 1,
+            routeGroupAlways: true, recommended: false };
+    }
+    if (STARFRAME_VIDEO_HOSTS.has(host) && model === 'ch1401-sd-2.5-720p') {
+        const label = '2.5pro 备用（卡人脸）';
+        return { label, routeLabel: label, routeModelLabel: provider.model,
+            routeGroup: 'seedance25-backup', routeGroupLabel: 'Seedance 2.5 备用渠道',
+            routeGroupScope: 'catalog', routeGroupOrder: 20, routeOrder: 2,
             routeGroupAlways: true, recommended: false };
     }
     const variant = /^artsdance2-0-(fast|mini|pro)-intl-260701$/.exec(model)?.[1];

@@ -52,8 +52,8 @@ async function login(base) {
     return { cookie: sessionCookie(response), location: response.headers.get('location') };
 }
 
-async function openAdmin(base, cookie) {
-    const response = await fetch(`${base}/admin`, { headers: { cookie } });
+async function openAdmin(base, cookie, channel = 'stable') {
+    const response = await fetch(`${base}/admin${channel === 'preview' ? '?channel=preview' : ''}`, { headers: { cookie } });
     assert.equal(response.status, 200);
     const html = await response.text();
     const csrf = /name="csrf" value="([^"]+)"/.exec(html)?.[1];
@@ -164,7 +164,7 @@ test('保存 → 客户端可见 → 回滚，全链路走通', async () => {
         const saved = await postForm(server.base, '/admin/save',
             { csrf, content: JSON.stringify(edited), note: '端到端测试' }, { cookie });
         assert.equal(saved.status, 303);
-        assert.match(decodeURIComponent(saved.headers.get('location')), /已保存并应用 r1/);
+        assert.match(new URL(saved.headers.get('location'), server.base).searchParams.get('flash'), /已保存并应用 r1/);
 
         const afterSave = await fetchConfig(server.base);
         assert.equal(afterSave.config.revision, 1, '服务端要盖章递增 revision');
@@ -197,7 +197,7 @@ test('校验不通过的配置被拒绝，现行版本保持不变', async () =>
         const { csrf } = await openAdmin(server.base, cookie);
 
         const invalid = await postForm(server.base, '/admin/save',
-            { csrf, content: JSON.stringify({ schemaVersion: 1, models: [] }) }, { cookie });
+            { csrf, content: JSON.stringify({ schemaVersion: 1, models: null }) }, { cookie });
         assert.equal(invalid.status, 400);
         assert.match(await invalid.text(), /校验/);
 
@@ -307,7 +307,7 @@ test('/admin/validate 只校验不落盘', async () => {
         const badResponse = await fetch(`${server.base}/admin/validate`, {
             method: 'POST',
             headers: { 'content-type': 'application/json', 'x-csrf-token': csrf, cookie },
-            body: JSON.stringify({ schemaVersion: 1, models: [] })
+            body: JSON.stringify({ schemaVersion: 1, models: null })
         });
         assert.equal((await badResponse.json()).ok, false);
         assert.equal(server.instance.store.list().length, 1, '校验不落盘');
@@ -397,4 +397,133 @@ test('未配置密码时拒绝启动（fail closed）', async () => {
         }),
         /未配置管理密码/
     );
+});
+
+test('未登录源码预览入口在登录成功及失败时保留通道，拒绝任意跳转地址', async () => {
+    const server = await startServer();
+    try {
+        const guarded = await fetch(`${server.base}/admin?channel=preview`, { redirect: 'manual' });
+        assert.equal(guarded.status, 303);
+        assert.equal(guarded.headers.get('location'), '/admin/login?channel=preview');
+        const loginHtml = await fetch(`${server.base}${guarded.headers.get('location')}`).then(response => response.text());
+        assert.match(loginHtml, /name="channel" value="preview"/);
+        assert.match(loginHtml, /模型配置服务 · 源码预览/);
+        assert.match(loginHtml, /href="\/config\/preview"/);
+        const wrong = await postForm(server.base, '/admin/login', { password: 'incorrect', channel: 'preview' });
+        assert.equal(wrong.status, 303);
+        const retry = new URL(wrong.headers.get('location'), server.base);
+        assert.equal(retry.pathname, '/admin/login');
+        assert.equal(retry.searchParams.get('channel'), 'preview');
+        assert.equal(retry.searchParams.get('error'), '1');
+        assert.equal(wrong.headers.get('set-cookie'), null);
+        const retryHtml = await fetch(retry).then(response => response.text());
+        assert.match(retryHtml, /name="channel" value="preview"/);
+        const success = await postForm(server.base, '/admin/login', { password: PASSWORD, channel: 'preview', next: 'https://invalid.example/' });
+        assert.equal(success.status, 303);
+        assert.equal(success.headers.get('location'), '/admin?channel=preview');
+        const admin = await fetch(`${server.base}${success.headers.get('location')}`, { headers: { cookie: sessionCookie(success) } });
+        assert.match(await admin.text(), /href="\/admin\?channel=preview" aria-current="page"/);
+
+        const arbitrary = await postForm(server.base, '/admin/login', { password: PASSWORD,
+            channel: 'https://invalid.example/', next: 'https://invalid.example/' });
+        assert.equal(arbitrary.headers.get('location'), '/admin');
+        const otherRoute = await fetch(`${server.base}/admin/download?channel=preview`, { redirect: 'manual' });
+        assert.equal(otherRoute.headers.get('location'), '/admin/login');
+    } finally {
+        await server.cleanup();
+    }
+});
+
+test('源码预览独立发布、清空与回滚，正式配置逐字不变', async () => {
+    const server = await startServer();
+    try {
+        const stableText = await fetch(`${server.base}/config`).then(response => response.text());
+        const stableName = server.instance.store.current().name;
+        assert.equal((await fetch(`${server.base}/config/preview`)).status, 404);
+        const { cookie } = await login(server.base);
+        const { html, csrf } = await openAdmin(server.base, cookie, 'preview');
+        assert.match(html, /href="\/admin\?channel=preview" aria-current="page"/);
+        assert.match(html, /name="channel" value="preview"/);
+        assert.match(html, /href="\/config\/preview"/);
+        assert.match(html, /尚无现行版本/);
+        assert.match(html, new RegExp(stableName));
+        assert.equal((await fetch(`${server.base}/config/preview`)).status, 404, '编辑预览草稿不会发布');
+
+        const previewConfig = { schemaVersion: 1, catalogMode: 'remote', models: [{
+            id: 'preview.video', kind: 'video', match: { model: ['^preview$'] },
+            catalog: { model: 'preview', hosts: ['art.ravenhash.org'] },
+            presentation: { label: '预览视频', routeOrder: 1, visible: true }
+        }] };
+        const saved = await postForm(server.base, '/admin/save',
+            { csrf, channel: 'preview', content: JSON.stringify(previewConfig) }, { cookie });
+        assert.equal(saved.status, 303);
+        assert.equal(new URL(saved.headers.get('location'), server.base).searchParams.get('channel'), 'preview');
+        const previewName = server.instance.store.current('preview').name;
+        const live = await fetch(`${server.base}/config/preview`);
+        assert.equal(live.status, 200);
+        assert.equal(live.headers.get('access-control-allow-origin'), '*');
+        assert.deepEqual((await live.json()).models, previewConfig.models);
+        assert.equal((await fetch(`${server.base}/config/preview`, {
+            headers: { 'if-none-match': live.headers.get('etag') }
+        })).status, 304);
+
+        const cleared = await postForm(server.base, '/admin/save',
+            { csrf, channel: 'preview', content: JSON.stringify({ ...previewConfig, models: [] }) }, { cookie });
+        assert.equal(cleared.status, 303);
+        assert.deepEqual((await fetch(`${server.base}/config/preview`).then(response => response.json())).models, []);
+        assert.equal(await fetch(`${server.base}/config`).then(response => response.text()), stableText);
+        const applied = await postForm(server.base, '/admin/apply',
+            { csrf, channel: 'preview', name: previewName }, { cookie });
+        assert.equal(new URL(applied.headers.get('location'), server.base).searchParams.get('channel'), 'preview');
+        assert.equal(server.instance.store.current('preview').name, previewName);
+        assert.equal(server.instance.store.current().name, stableName);
+        assert.equal(await fetch(`${server.base}/config`).then(response => response.text()), stableText);
+        for (const name of [stableName, previewName]) {
+            const refused = await postForm(server.base, '/admin/delete', { csrf, channel: 'preview', name }, { cookie });
+            assert.match(decodeURIComponent(refused.headers.get('location')), /删除失败/);
+            assert.equal(new URL(refused.headers.get('location'), server.base).searchParams.get('channel'), 'preview');
+        }
+        const health = await fetch(`${server.base}/health`).then(response => response.json());
+        assert.equal(health.current, stableName);
+        assert.equal(health.preview, previewName);
+    } finally {
+        await server.cleanup();
+    }
+});
+
+test('源码预览失败页、版本链接、重置和草稿保留通道，旧 r3 无需 catalog', async () => {
+    const server = await startServer();
+    try {
+        const { cookie } = await login(server.base);
+        const { csrf } = await openAdmin(server.base, cookie, 'preview');
+        const invalid = await postForm(server.base, '/admin/save',
+            { csrf, channel: 'preview', content: '{ invalid', draft: '1' }, { cookie });
+        assert.equal(invalid.status, 400);
+        const failureHtml = await invalid.text();
+        assert.match(failureHtml, /name="channel" value="preview"/);
+        assert.match(failureHtml, /href="\/config\/preview"/);
+        assert.match(failureHtml, /name="draft" value="1" checked/);
+        assert.match(failureHtml, /href="\/admin\?channel=preview&amp;version=/);
+
+        const legacy = { schemaVersion: 1, revision: 3, models: Array.from({ length: 18 }, (_, i) => ({
+            id: `legacy.${i}`, kind: 'video', match: { model: [`^legacy-${i}$`] },
+            presentation: { label: `Legacy ${i}` }
+        })) };
+        const saved = await postForm(server.base, '/admin/save',
+            { csrf, channel: 'preview', content: JSON.stringify(legacy), draft: '1' }, { cookie });
+        assert.equal(saved.status, 303);
+        assert.equal((await fetch(`${server.base}/config/preview`)).status, 404);
+        const draftName = server.instance.store.listNames().at(-1);
+        const loaded = await fetch(`${server.base}/admin?channel=preview&version=${draftName}`, { headers: { cookie } });
+        assert.match(await loaded.text(), /name="channel" value="preview"/);
+        const script = await fetch(`${server.base}/admin/assets/admin-editor.mjs`, { headers: { cookie } }).then(response => response.text());
+        assert.match(script, /form\.elements\.channel\?\.value === 'preview' \? '\/admin\?channel=preview' : '\/admin'/);
+        assert.match((await openAdmin(server.base, cookie)).html, /name="channel" value="stable"/);
+        const badChannel = await postForm(server.base, '/admin/save',
+            { csrf, channel: 'preveiw', content: JSON.stringify(legacy) }, { cookie });
+        assert.equal(badChannel.status, 400);
+        assert.equal(server.instance.store.list().length, 2);
+    } finally {
+        await server.cleanup();
+    }
 });

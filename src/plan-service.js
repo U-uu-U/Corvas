@@ -15,6 +15,7 @@ export const DEFAULT_PLAN_COLUMNS = [
 
 export const DEFAULT_PLAN_STATUSES = ['未开始', '进行中', '待确认', '已完成'];
 export const MCP_BOARD_TOOLS_VERSION = 2;
+const MODEL_CONFIG_MCP_TOOLS = ['flow_canvas.model_config.get', 'flow_canvas.model_config.refresh'];
 export const BOARD_TRANSACTION_MCP_TOOLS = [
     'flow_canvas.board.get_snapshot',
     'flow_canvas.board.transaction.preview',
@@ -27,10 +28,12 @@ export const DEFAULT_MCP_CONFIG = {
     host: '127.0.0.1',
     port: 18765,
     boardToolsVersion: MCP_BOARD_TOOLS_VERSION,
+    modelConfigToolsVersion: 1,
     allowedTools: [
         'flow_canvas.health',
         'flow_canvas.config.get',
         'flow_canvas.config.update',
+        ...MODEL_CONFIG_MCP_TOOLS,
         'flow_canvas.context.get_active_group',
         'flow_canvas.plan.list',
         'flow_canvas.plan.get',
@@ -64,9 +67,10 @@ export function normalizeMcpConfig(config = {}) {
         ...DEFAULT_MCP_CONFIG,
         ...source,
         boardToolsVersion: MCP_BOARD_TOOLS_VERSION,
-        allowedTools: shouldMigrateBoardTools
-            ? [...new Set([...configuredTools, ...BOARD_TRANSACTION_MCP_TOOLS])]
-            : [...new Set(configuredTools)]
+        modelConfigToolsVersion: 1,
+        allowedTools: [...new Set([...configuredTools,
+            ...(shouldMigrateBoardTools ? BOARD_TRANSACTION_MCP_TOOLS : []),
+            ...(Number(source.modelConfigToolsVersion) >= 1 ? [] : MODEL_CONFIG_MCP_TOOLS)])]
     };
 }
 

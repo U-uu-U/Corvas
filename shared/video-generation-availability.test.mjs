@@ -2,6 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertVideoGenerationAvailable, isVideoGenerationAvailable } from './video-generation-availability.mjs';
 
+test('scoped remote availability blocks only managed accounts and keeps legacy pause rules elsewhere', () => {
+    const config = { catalogMode: 'remote', catalogScope: { hosts: ['art.ravenhash.org'], kinds: ['video'] }, models: [] };
+    assert.equal(isVideoGenerationAvailable({ model: 'sd2.5', capability: 'video', endpoint: 'https://art.ravenhash.org/v1' }, config), false);
+    assert.equal(isVideoGenerationAvailable({ model: 'sd2.5', capability: 'video', endpoint: 'https://custom.test/v1' }, config), true);
+    assert.equal(isVideoGenerationAvailable({ model: 'gpt-image-2', capability: 'image', endpoint: 'https://art.ravenhash.org/v1' }, config), true);
+    assert.equal(isVideoGenerationAvailable({ model: 'seedance_v2.5-101010', endpoint: 'https://cart.ravenhash.org/v1' }, config), false);
+});
+
 test('both RavenHash sites pause only the two retired HM variants', () => {
     for (const host of ['art.ravenhash.org', 'cart.ravenhash.org']) {
         for (const model of ['seedance_v2.5-101010', 'seedance_v2.5-301010']) {

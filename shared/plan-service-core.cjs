@@ -20,6 +20,7 @@ const { HANDOFF_TOOL_DEFINITIONS } = require('./handoff-tools.cjs');
 const MCP_BOARD_TOOLS_VERSION = 3;
 const MCP_WORKFLOW_TOOLS_VERSION = 3;
 const MCP_HANDOFF_TOOLS_VERSION = 1;
+const MODEL_CONFIG_MCP_TOOLS = ['flow_canvas.model_config.get', 'flow_canvas.model_config.refresh'];
 const WORKFLOW_MCP_TOOLS = WORKFLOW_TOOL_DEFINITIONS.map(tool => tool.name);
 const HANDOFF_MCP_TOOLS = HANDOFF_TOOL_DEFINITIONS.map(tool => tool.name);
 const BOARD_TRANSACTION_MCP_TOOLS = [
@@ -38,10 +39,12 @@ const DEFAULT_MCP_CONFIG = {
     boardToolsVersion: MCP_BOARD_TOOLS_VERSION,
     workflowToolsVersion: MCP_WORKFLOW_TOOLS_VERSION,
     handoffToolsVersion: MCP_HANDOFF_TOOLS_VERSION,
+    modelConfigToolsVersion: 1,
     allowedTools: [
         'flow_canvas.health',
         'flow_canvas.config.get',
         'flow_canvas.config.update',
+        ...MODEL_CONFIG_MCP_TOOLS,
         'flow_canvas.context.get_active_group',
         'flow_canvas.plan.list',
         'flow_canvas.plan.get',
@@ -88,11 +91,13 @@ function normalizeMcpConfig(config = {}) {
         boardToolsVersion: MCP_BOARD_TOOLS_VERSION,
         workflowToolsVersion: MCP_WORKFLOW_TOOLS_VERSION,
         handoffToolsVersion: MCP_HANDOFF_TOOLS_VERSION,
+        modelConfigToolsVersion: 1,
         allowedTools: [...new Set([
             ...configuredTools.filter(tool => tool !== 'flow_canvas.rhino.cleanup'),
             ...(shouldMigrateBoardTools ? BOARD_TRANSACTION_MCP_TOOLS : []),
             ...workflowToolAdditions,
-            ...(shouldMigrateHandoffTools ? HANDOFF_MCP_TOOLS : [])
+            ...(shouldMigrateHandoffTools ? HANDOFF_MCP_TOOLS : []),
+            ...(Number(source.modelConfigToolsVersion) >= 1 ? [] : MODEL_CONFIG_MCP_TOOLS)
         ])]
     };
 }

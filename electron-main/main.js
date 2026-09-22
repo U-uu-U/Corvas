@@ -220,6 +220,15 @@ function createWindow() {
     });
 
     const nextMainWindow = mainWindow;
+    {
+        const configTicker = setInterval(() => {
+            if (!nextMainWindow.isDestroyed() && !nextMainWindow.webContents.isDestroyed()) {
+                nextMainWindow.webContents.send('model-config:tick');
+            }
+        }, 1000);
+        configTicker.unref();
+        nextMainWindow.once('closed', () => clearInterval(configTicker));
+    }
     nextMainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     nextMainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
     const startupSplash = splashWindow;
@@ -1679,6 +1688,16 @@ ipcMain.handle('folder:select', async () => {
     if (result.canceled || result.filePaths.length === 0) return null;
     await mediaAccess.grant(result.filePaths[0], { directory: true });
     return result.filePaths[0];
+});
+
+ipcMain.on('model-config:runtime', event => {
+    event.returnValue = {
+        refreshIntervalMs: 10_000,
+        ...(!app.isPackaged ? {
+            remoteOnly: process.env.FLOW_CANVAS_REMOTE_CATALOG === '1',
+            url: process.env.FLOW_CANVAS_CONFIG_URL || undefined
+        } : {})
+    };
 });
 
 ipcMain.handle('model-config:fetch', async (_, payload) => {

@@ -16,7 +16,8 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             'seedance_v2.5-101010', 'seedance_v2.5-301010', 'seedance-2.5-pro'];
         const raw = models.map(model => ({ id: model, sourceProviderId: 'relay', endpoint: 'https://art.ravenhash.org/v1', name: 'RavenHash', model }));
         raw.push({ id: 'global', model: 'sd_2.5_discount_v1', endpoint: 'https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks' },
-            { id: 'star', sourceProviderId: 'star', name: 'StarFrame API', model: 'ch0107-sd-2.5-720p', endpoint: 'https://api.xzapi.vip/v1' });
+            { id: 'star', sourceProviderId: 'star', name: 'StarFrame API', model: 'ch0107-sd-2.5-720p', endpoint: 'https://api.xzapi.vip/v1' },
+            { id: 'star', sourceProviderId: 'star', name: 'StarFrame API', model: 'ch1401-sd-2.5-720p', endpoint: 'https://api.xzapi.vip/v1' });
         const sidebar = await fs.readFile(path.join(__dirname, '../src/agent-sidebar.js'), 'utf8');
         const optionsMethod = sidebar.slice(sidebar.indexOf('    getGenerationProviderOptions('), sidebar.indexOf('    getImageProviderConfig('));
         const OptionsFixture = new Function('isVideoGenerationAvailable', 'describeVideoModelProfile', 'describeModelPresentation',
@@ -26,7 +27,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         optionsFixture._isVideoProvider = () => true;
         optionsFixture._getProviderPresentation = provider => ({ ...getVideoModelProfile(provider), ...getVideoModelGroup(provider) });
         const providers = optionsFixture.getGenerationProviderOptions('video');
-        assert.equal(providers.length, 10);
+        assert.equal(providers.length, 11);
         assert.ok(providers.every(provider => !/¥|US\$|价格|费用/.test(provider.description)));
         const env = { ...process.env, FLOW_MCP_SMOKE_PROFILE: profile };
         delete env.ELECTRON_RUN_AS_NODE;
@@ -68,14 +69,14 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         assert.deepEqual(await recommended.locator('.generation-composer-model-option strong').allTextContents(),
             ['SD2.5 固定 30 秒（电商效果优化）', 'Seedance 2.5 Pro（满血满参）', 'HM-Seedance 2.5', 'HM-Seedance 2.0 933']);
         assert.deepEqual(await backup.locator('.generation-composer-model-option strong').allTextContents(),
-            ['Seedance 2.5 固定 30 秒（过人脸）', '2.5pro 备用（满参）']);
+            ['Seedance 2.5 固定 30 秒（过人脸）', '2.5pro 备用（满参）', '2.5pro 备用（卡人脸）']);
         assert.deepEqual(await version2.locator('.generation-composer-model-option strong').allTextContents(), ['Seedance 2.0 Fast', 'Seedance 2.0 Mini', 'Seedance 2.0 Pro']);
         assert.deepEqual(await groups.locator('.generation-composer-route-trigger small').allTextContents(), [
             '当前使用：SD2.5 固定 30 秒（电商效果优化）',
             '当前使用：Seedance 2.5 固定 30 秒（过人脸）',
             '当前使用：Seedance 2.0 Fast'
         ]);
-        assert.equal(await page.locator('.generation-composer-model-option').count(), 10);
+        assert.equal(await page.locator('.generation-composer-model-option').count(), 11);
         assert.doesNotMatch(await page.locator('.generation-composer-model-options').textContent(), /¥|US\$|价格|费用/);
         const output = path.join(__dirname, '../output/playwright');
         await fs.mkdir(output, { recursive: true });
@@ -107,7 +108,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             }
         }
         for (const [group, model] of [[recommended, 'sd2.5'], [recommended, 'seedance-2.5-pro'], [backup, 'sd2.5-route1'],
-            [backup, 'ch0107-sd-2.5-720p'], [version2, 'artsdance2-0-mini-intl-260701']]) {
+            [backup, 'ch0107-sd-2.5-720p'], [backup, 'ch1401-sd-2.5-720p'], [version2, 'artsdance2-0-mini-intl-260701']]) {
             await group.locator('.generation-composer-route-trigger').focus();
             await page.keyboard.press('ArrowRight');
             const index = await group.locator('.generation-composer-model-option small').allTextContents();
@@ -116,7 +117,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             await group.locator('.generation-composer-model-option').nth(position).click();
             const selected = await page.evaluate(() => window.channelFixture.data.config);
             assert.equal(selected.model, model);
-            const expectedSource = model === 'ch0107-sd-2.5-720p' ? 'star' : 'relay';
+            const expectedSource = /^ch(?:0107|1401)-sd-2\.5-720p$/.test(model) ? 'star' : 'relay';
             assert.equal(selected.sourceProviderId, expectedSource);
             if (expectedSource === 'star') assert.equal(selected.id, 'star');
             await page.evaluate(() => window.channelFixture.fixture._showGenerationComposerModelMenu('node', {}));
@@ -125,7 +126,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         const search = page.locator('.generation-composer-popover-search input');
         await search.fill('备用渠道');
         assert.equal(await groups.count(), 1);
-        assert.equal(await page.locator('.generation-composer-model-option').count(), 2);
+        assert.equal(await page.locator('.generation-composer-model-option').count(), 3);
         await search.fill('可NSFW');
         assert.equal(await groups.count(), 1);
         assert.equal(await page.locator('.generation-composer-model-option').count(), 3);

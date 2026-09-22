@@ -18,8 +18,8 @@ export function structuralValidate(config) {
     const errors = [];
     if (!isPlainObject(config)) return { ok: false, errors: ['配置必须是 JSON 对象'] };
     if (Number(config.schemaVersion) !== 1) errors.push(`schemaVersion 必须是 1（当前 ${JSON.stringify(config.schemaVersion)}）`);
-    if (!Array.isArray(config.models) || !config.models.length) {
-        errors.push('models 必须是非空数组');
+    if (!Array.isArray(config.models)) {
+        errors.push('models 必须是数组');
         return { ok: errors.length === 0, errors };
     }
     const ids = new Set();

@@ -10,7 +10,7 @@
 
 2026-09-21 重新启用已保存的 StarFrame 直连账号（`api.xzapi.vip`，模型 `ch0107-sd-2.5-720p`），显示名称为“2.5pro 备用（满参）”，放入“Seedance 2.5 备用渠道”。该备用组使用明确的 `routeGroupScope: catalog` 合并不同供应商的展示，条目仍保留原 `sourceProviderId`、模型 ID 和请求端点，选择时不会混用凭据。其它组继续按账户隔离。鉴权模型列表已返回 200 并包含该模型；此次未发起真实视频生成。
 
-推荐组依次显示 `sd2.5`（电商效果优化）、`seedance-2.5-pro`（满血满参）、`seedance_v2.5`、`seedance_v2.0-933`。模型 ID、参数和账户绑定不变。展示由 `shared/video-model-profiles.mjs` 的 `getVideoModelGroup` 统一覆盖旧 CONFIG 展示；只有明确标记的备用组允许跨账号展示，单条备用渠道也保留分组。排序和组说明是本地菜单元数据，不改变远端 CONFIG schema。
+推荐组依次显示 `sd2.5`（电商效果优化）、`seedance-2.5-pro`（满血满参）、`seedance_v2.5`、`seedance_v2.0-933`。模型 ID、参数和账户绑定不变。2026-09-22 起，展示由当前生效 CONFIG 的 `presentation` 最后覆盖，本地 `getVideoModelGroup` 只补未声明字段。分组、排序、合组范围、显隐均可配置；只有 `routeGroupScope: catalog` 明确允许跨账号展示。
 
 `shared/video-generation-availability.mjs` 暂停以下主机与模型的新提交，并同步过滤画布菜单和 Agent 模型列表：
 
