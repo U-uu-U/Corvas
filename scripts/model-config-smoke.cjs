@@ -198,7 +198,7 @@ async function adminLogin(base) {
     const response = await fetch(`${base}/admin/login`, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ password: ADMIN_PASSWORD }),
+        body: new URLSearchParams({ username: 'admin', password: ADMIN_PASSWORD }),
         redirect: 'manual'
     });
     if (response.status !== 303) throw new Error(`管理员登录失败：HTTP ${response.status}`);

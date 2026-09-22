@@ -29,11 +29,13 @@ import { createConfigStore, normalizeConfigChannel } from './lib/store.mjs';
 import { createValidator } from './lib/validate.mjs';
 import { createAuth, hashPassword, parseCookies, serializeCookie, SESSION_COOKIE, AUTH_LIMITS } from './lib/auth.mjs';
 import { adminPage, loginPage, landingPage, escapeHtml } from './lib/pages.mjs';
+import { createAdminBalances } from './lib/admin-balances.mjs';
+import { projectAdminModelCosts } from './lib/admin-model-costs.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_PORT = 8087;
-const EDITOR_ASSETS = new Map(['admin-editor.mjs', 'admin-editor-model.mjs', 'admin-catalog-model.mjs', 'admin-catalog-view.mjs']
+const EDITOR_ASSETS = new Map(['admin-editor.mjs', 'admin-editor-model.mjs', 'admin-catalog-model.mjs', 'admin-catalog-view.mjs', 'admin-balances-client.mjs']
     .map(name => [`/admin/assets/${name}`, path.join(HERE, 'lib', name)]));
 EDITOR_ASSETS.set('/admin/assets/flow-icons.svg', path.join(HERE, 'assets', 'flow-icons.svg'));
 
@@ -156,6 +158,43 @@ function sameOrigin(req, config) {
     }
 }
 
+function projectAdminModelPrices(value) {
+    const object = item => item !== null && typeof item === 'object' && !Array.isArray(item);
+    const text = item => typeof item === 'string';
+    const nonemptyText = item => text(item) && item.trim().length > 0;
+    const timestamp = item => nonemptyText(item) && Number.isFinite(Date.parse(item));
+    const currencyCode = item => text(item) && /^[A-Z]{3}$/.test(item);
+    const fail = () => { throw new Error('Invalid model price catalog'); };
+    if (!object(value) || !timestamp(value.checkedAt) || !Array.isArray(value.sites)) fail();
+    const hosts = new Set();
+    const sites = value.sites.map(site => {
+        if (!object(site) || !['art.ravenhash.org', 'cart.ravenhash.org'].includes(site.host)
+            || hosts.has(site.host) || !nonemptyText(site.label) || !timestamp(site.checkedAt)
+            || !currencyCode(site.currency) || !Number.isFinite(site.exchangeToCny) || site.exchangeToCny <= 0
+            || !Array.isArray(site.models)) fail();
+        hosts.add(site.host);
+        const modelNames = new Set();
+        const models = site.models.map(model => {
+            if (!object(model) || !nonemptyText(model.model) || modelNames.has(model.model)
+                || !nonemptyText(model.status) || typeof model.active !== 'boolean'
+                || !currencyCode(model.currency) || !Array.isArray(model.prices)
+                || (model.reason !== undefined && !text(model.reason))
+                || (model.ids !== undefined && (!Array.isArray(model.ids) || !model.ids.every(nonemptyText)))) fail();
+            modelNames.add(model.model);
+            const prices = model.prices.map(price => {
+                if (!object(price) || !text(price.label) || !nonemptyText(price.unit)
+                    || !Number.isFinite(price.amount) || price.amount < 0) fail();
+                return { label: price.label, amount: price.amount, unit: price.unit };
+            });
+            return { model: model.model, status: model.status, active: model.active, currency: model.currency,
+                prices, reason: model.reason, ...(model.ids === undefined ? {} : { ids: model.ids }) };
+        });
+        return { host: site.host, label: site.label, checkedAt: site.checkedAt, currency: site.currency,
+            exchangeToCny: site.exchangeToCny, models };
+    });
+    return { checkedAt: value.checkedAt, sites };
+}
+
 /**
  * 启动服务。返回 { port, url, close(), store, validator }，便于测试里直接拿到端口。
  */
@@ -176,6 +215,8 @@ export async function createConfigServer(options = {}) {
     store.ensureSeed();
     const validator = options.validator || await createValidator({ schemaPath: config.schemaPath });
     const auth = createAuth({ passwordRecord, logger });
+    const balances = options.balances || createAdminBalances({ dataDir: config.dataDir,
+        seedPath: path.join(HERE, 'seed', 'admin-balance-accounts.json') });
     const startedAt = Date.now();
 
     if (validator.mode !== 'schema') {
@@ -284,6 +325,60 @@ export async function createConfigServer(options = {}) {
             return res.end(body);
         }
 
+        if (method === 'GET' && pathname === '/admin/model-sources') {
+            if (!requireAdmin(req, res)) return;
+            const localPath = path.join(config.dataDir, 'admin-model-sources.json');
+            try {
+                const sources = JSON.parse(fs.readFileSync(fs.existsSync(localPath)
+                    ? localPath : path.join(HERE, 'seed', 'admin-model-sources.json'), 'utf8'));
+                if (!Array.isArray(sources.entries)) throw new Error('Invalid source catalog');
+                const entries = sources.entries.map(({ ids, models, hosts, name, url }) => ({ ids, models, hosts, name, url }));
+                return json(res, 200, { entries }, { 'cache-control': 'no-store' });
+            } catch {
+                return json(res, 500, { error: '无法读取上游来源资料' }, { 'cache-control': 'no-store' });
+            }
+        }
+
+        if (method === 'GET' && pathname === '/admin/model-prices') {
+            res.setHeader('cache-control', 'no-store');
+            if (!requireAdmin(req, res)) return;
+            const localPath = path.join(config.dataDir, 'admin-model-prices.json');
+            try {
+                const prices = JSON.parse(fs.readFileSync(fs.existsSync(localPath)
+                    ? localPath : path.join(HERE, 'seed', 'admin-model-prices.json'), 'utf8'));
+                return json(res, 200, projectAdminModelPrices(prices));
+            } catch {
+                return json(res, 500, { error: '无法读取中转站价格资料' });
+            }
+        }
+
+        if (method === 'GET' && pathname === '/admin/model-costs') {
+            res.setHeader('cache-control', 'no-store');
+            if (!requireAdmin(req, res)) return;
+            const localPath = path.join(config.dataDir, 'admin-model-costs.json');
+            try {
+                const costs = JSON.parse(fs.readFileSync(fs.existsSync(localPath)
+                    ? localPath : path.join(HERE, 'seed', 'admin-model-costs.json'), 'utf8'));
+                return json(res, 200, projectAdminModelCosts(costs));
+            } catch { return json(res, 500, { error: '无法读取上游成本资料' }); }
+        }
+
+        if (pathname === '/admin/balances' && method === 'GET') {
+            if (!requireAdmin(req, res)) return;
+            try { return json(res, 200, await balances.list(), { 'cache-control': 'no-store' }); }
+            catch { return json(res, 500, { error: '余额服务暂时无法访问' }, { 'cache-control': 'no-store' }); }
+        }
+        if (method === 'POST' && ['/admin/balances/refresh', '/admin/balances/threshold'].includes(pathname)) {
+            if (!requireAdmin(req, res)) return;
+            if (!sameOrigin(req, config)) return json(res, 403, { error: 'Origin 校验失败' });
+            if (!requireCsrf(req, res)) return;
+            try {
+                const body = JSON.parse(await readBody(req));
+                const result = pathname.endsWith('/threshold') ? balances.setThreshold(body.id, body.threshold) : await balances.list({ force: true });
+                return json(res, 200, result, { 'cache-control': 'no-store' });
+            } catch { return json(res, 400, { error: '余额操作未完成，请检查输入或稍后重试' }, { 'cache-control': 'no-store' }); }
+        }
+
         if (method === 'GET' && pathname === '/config') return handleConfig(req, res);
         if (method === 'GET' && pathname === '/config/preview') return handleConfig(req, res, 'preview');
         if (method === 'GET' && pathname === '/health') {
@@ -301,7 +396,7 @@ export async function createConfigServer(options = {}) {
         }
         if (method === 'GET' && pathname === '/admin/login') {
             const code = url.searchParams.get('error');
-            const message = code === '2' ? '尝试过于频繁，请稍后再试' : (code === '1' ? '密码不正确' : '');
+            const message = code === '2' ? '尝试过于频繁，请稍后再试' : (code === '1' ? '账号或密码不正确' : '');
             const channel = url.searchParams.get('channel') === 'preview' ? 'preview' : 'stable';
             return html(res, 200, loginPage({ error: message, channel,
                 publicConfigPath: channel === 'preview' ? '/config/preview' : '/config' }));
@@ -310,7 +405,7 @@ export async function createConfigServer(options = {}) {
             const body = await readBody(req);
             const form = parseForm(body);
             const channel = form.channel === 'preview' ? 'preview' : 'stable';
-            const result = auth.login(form.password || '', { ip: clientIp(req) });
+            const result = auth.login(form.password || '', { ip: clientIp(req), username: form.username || '' });
             if (!result.ok) {
                 logger.warn(`[configserver] 登录失败 ip=${clientIp(req)}：${result.error}`);
                 return redirect(res, `/admin/login?error=${result.retryAfter ? 2 : 1}${channel === 'preview' ? '&channel=preview' : ''}`);

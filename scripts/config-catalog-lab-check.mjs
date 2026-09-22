@@ -9,7 +9,7 @@ const bridge = 'http://127.0.0.1:18766';
 const password = process.env.CONFIG_LAB_PASSWORD;
 if (!password) throw new Error('CONFIG_LAB_PASSWORD is required');
 const login = await fetch(`${admin}/admin/login`, { method: 'POST',
-    body: new URLSearchParams({ password }), redirect: 'manual' });
+    body: new URLSearchParams({ username: 'admin', password }), redirect: 'manual' });
 assert.equal(login.status, 303);
 const cookie = login.headers.get('set-cookie').split(';')[0];
 const publish = async config => {

@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
 export const SESSION_COOKIE = 'flow_config_session';
+export const ADMIN_USERNAME = 'admin';
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 小时
 const MAX_FAILURES = 8;
 const FAILURE_WINDOW_MS = 15 * 60 * 1000;
@@ -84,12 +85,13 @@ export function createAuth({ passwordRecord, now = () => Date.now(), logger = co
         failures.set(ip, record);
     }
 
-    function login(password, { ip = 'unknown' } = {}) {
+    function login(password, { ip = 'unknown', username = ADMIN_USERNAME } = {}) {
         const wait = retryAfterSeconds(ip);
         if (wait > 0) return { ok: false, error: `尝试过于频繁，请 ${wait} 秒后再试`, retryAfter: wait };
-        if (!verifyPassword(password, passwordRecord)) {
+        const passwordValid = verifyPassword(password, passwordRecord);
+        if (String(username).trim() !== ADMIN_USERNAME || !passwordValid) {
             registerFailure(ip);
-            return { ok: false, error: '密码不正确' };
+            return { ok: false, error: '账号或密码不正确' };
         }
         const token = crypto.randomBytes(32).toString('base64url');
         // csrf 与 session 绑定：即使浏览器被诱导发起跨站表单，攻击者也拿不到这个值。

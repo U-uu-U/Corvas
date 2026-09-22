@@ -1,0 +1,147 @@
+{
+    "checkedAt": "2026-09-22T17:40:06Z",
+    "entries": [
+        {
+            "ids": ["ravenhash-video.sd2.5"], "models": ["sd2.5", "sd2.5-route2", "sd2.5-haidiyue-face"],
+            "supplier": "主播视频", "sourceUrl": "https://video.zhubo.asia/api/video/models",
+            "status": "reference", "currency": "CNY", "note": "上游标价，账号优惠另计",
+            "prices": [{ "label": "720p", "amount": 2, "unit": "request" }]
+        },
+        {
+            "ids": ["ravenhash-video.sd2.5-route1"], "models": ["sd2.5-route1"],
+            "supplier": "968API", "sourceUrl": "https://ap.968968968.xyz",
+            "status": "historical", "currency": "USD", "quotedAt": "2026-09-03",
+            "note": "2026-09-03 文档报价，当前价格待核对",
+            "prices": [{ "label": "", "amount": 1.5, "unit": "request" }],
+            "evidence": "server/seedance968/README.md"
+        },
+        {
+            "ids": ["ravenhash-video.hm-seedance-933"], "models": ["seedance_v2.0-933"],
+            "supplier": "主播视频", "sourceUrl": "https://video.zhubo.asia/api/video/models",
+            "status": "historical", "currency": "CNY", "quotedAt": "2026-09-12",
+            "note": "2026-09-12 报价；当前价表未收录此型号",
+            "prices": [{ "label": "720p", "amount": 2.5, "unit": "request" }]
+        },
+        {
+            "ids": ["ravenhash-video.hm-seedance-101010"], "models": ["seedance_v2.5-101010"],
+            "supplier": "主播视频", "sourceUrl": "https://video.zhubo.asia/api/video/models",
+            "status": "historical", "currency": "CNY", "quotedAt": "2026-09-12",
+            "note": "2026-09-12 报价；当前价表未收录此型号",
+            "prices": [{ "label": "720p", "amount": 3, "unit": "request" }]
+        },
+        {
+            "ids": ["ravenhash-video.hm-seedance-301010"], "models": ["seedance_v2.5-301010"],
+            "supplier": "主播视频", "sourceUrl": "https://video.zhubo.asia/api/video/models",
+            "status": "historical", "currency": "CNY", "quotedAt": "2026-09-12",
+            "note": "2026-09-12 报价；当前价表未收录此型号",
+            "prices": [{ "label": "720p", "amount": 5.5, "unit": "request" }]
+        },
+        {
+            "ids": ["ravenhash-video.seedance-v2.5"], "models": ["seedance_v2.5"],
+            "supplier": "主播视频", "sourceUrl": "https://video.zhubo.asia/api/video/models",
+            "status": "unknown", "note": "当前上游价表未收录此型号", "prices": []
+        },
+        {
+            "ids": ["starframe.ch0107-sd-2.5-720p"], "models": ["ch0107-sd-2.5-720p"],
+            "supplier": "StarFrame", "sourceUrl": "https://api.xzapi.vip/api/pricing",
+            "status": "reference", "currency": "CNY", "note": "上游 default 标价；按用户指定 1:1 折人民币",
+            "prices": [{ "label": "720p", "amount": 1.5, "unit": "second" }]
+        },
+        {
+            "ids": ["starframe.ch1401-sd-2.5-720p"], "models": ["ch1401-sd-2.5-720p"],
+            "supplier": "StarFrame", "sourceUrl": "https://api.xzapi.vip/api/pricing",
+            "status": "reference", "currency": "CNY", "note": "上游 default 标价；按用户指定 1:1 折人民币",
+            "prices": [{ "label": "720p", "amount": 4, "unit": "request" }]
+        },
+        {
+            "ids": ["ravenhash-video.sd2-fast"], "models": ["sd2-fast"],
+            "supplier": "Yueqi", "sourceUrl": "https://yueqi.icu/api/pricing",
+            "status": "reference", "currency": "CNY", "note": "上游 default 标价；USD 按用户指定 1:1 折人民币",
+            "prices": [{ "label": "480p / 720p", "amount": 0.8, "unit": "request" }]
+        },
+        {
+            "ids": ["ravenhash-video.seedance-2.5-pro-720"], "models": ["seedance-2.5-pro-720"],
+            "supplier": "Yueqi", "sourceUrl": "https://yueqi.icu/api/pricing",
+            "status": "reference", "currency": "CNY", "note": "上游 default 标价；USD 按用户指定 1:1 折人民币",
+            "prices": [{ "label": "720p", "amount": 8.3, "unit": "request" }]
+        },
+        {
+            "ids": ["ravenhash-video.seedance-2.5-pro", "ravenhash-video.seedance-2.5-pro-1"], "models": ["seedance-2.5-pro", "seedance-2.5-pro/1"],
+            "supplier": "Yueqi", "sourceUrl": "https://yueqi.icu/api/pricing",
+            "status": "unknown", "note": "当前价表只列 -480 / -720，未列此精确型号", "prices": []
+        },
+        {
+            "ids": ["ravenhash-video.seedance-2.0-fast"], "models": ["artsdance2-0-fast-intl-260701"],
+            "supplier": "ArtsMCP", "sourceUrl": "https://ai.artsmcp.com/api/v1/marketplace/public",
+            "status": "reference", "currency": "CNY", "note": "上游全站55折；按其公示汇率 USD:CNY=1:6.8；账号优惠另计",
+            "prices": [
+                { "label": "720p 无参考视频", "amount": 20.944, "unit": "million_tokens" },
+                { "label": "720p 有参考视频", "amount": 12.342, "unit": "million_tokens" },
+                { "label": "1080p 无参考视频", "amount": 23.188, "unit": "million_tokens" },
+                { "label": "1080p 有参考视频", "amount": 13.651, "unit": "million_tokens" }
+            ]
+        },
+        {
+            "ids": ["ravenhash-video.seedance-2.0-mini"], "models": ["artsdance2-0-mini-intl-260701"],
+            "supplier": "ArtsMCP", "sourceUrl": "https://ai.artsmcp.com/api/v1/marketplace/public",
+            "status": "reference", "currency": "CNY", "note": "上游全站4折；按其公示汇率 USD:CNY=1:6.8；账号优惠另计",
+            "prices": [
+                { "label": "720p 无参考视频", "amount": 9.52, "unit": "million_tokens" },
+                { "label": "720p 有参考视频", "amount": 5.712, "unit": "million_tokens" },
+                { "label": "1080p 无参考视频", "amount": 10.472, "unit": "million_tokens" },
+                { "label": "1080p 有参考视频", "amount": 6.392, "unit": "million_tokens" }
+            ]
+        },
+        {
+            "ids": ["ravenhash-video.seedance-2.0-pro"], "models": ["artsdance2-0-pro-intl-260701"],
+            "supplier": "ArtsMCP", "sourceUrl": "https://ai.artsmcp.com/api/v1/marketplace/public",
+            "status": "reference", "currency": "CNY", "note": "上游全站7折；按其公示汇率 USD:CNY=1:6.8；账号优惠另计",
+            "prices": [
+                { "label": "720p 无参考视频", "amount": 33.32, "unit": "million_tokens" },
+                { "label": "720p 有参考视频", "amount": 20.468, "unit": "million_tokens" },
+                { "label": "1080p 无参考视频", "amount": 36.652, "unit": "million_tokens" },
+                { "label": "1080p 有参考视频", "amount": 22.372, "unit": "million_tokens" },
+                { "label": "4k 无参考视频", "amount": 19.04, "unit": "million_tokens" },
+                { "label": "4k 有参考视频", "amount": 11.424, "unit": "million_tokens" }
+            ]
+        },
+        {
+            "ids": ["minimax-video.minimax-h3-seconds", "ravenhash-video.minimax-h3"], "models": ["minimax-h3", "minimax-h3-per-second"],
+            "supplier": "MiniMax H3 上游", "sourceUrl": "http://122.228.216.60:3000/api/pricing",
+            "status": "reference", "currency": "CNY", "note": "minimaxh3 标准档原价；上游另有每日00-09三折，账号档位及实时优惠另计",
+            "prices": [
+                { "label": "480p", "amount": 0.03, "unit": "second" },
+                { "label": "768p", "amount": 0.07, "unit": "second" },
+                { "label": "1080p / 2K超分", "amount": 0.12, "unit": "second" },
+                { "label": "4K超分", "amount": 0.15, "unit": "second" }
+            ]
+        },
+        {
+            "ids": ["shanhai-video.oc-model-qbdmeb"], "models": ["oc-model-qbdmeb"],
+            "supplier": "山海", "sourceUrl": "https://shanhai.vnshu.cn/api/v1/models",
+            "status": "reference", "currency": "CREDITS", "note": "账号 API 返回积分标价，人民币兑换比例待核对",
+            "prices": [{ "label": "720p", "amount": 0.9, "unit": "request" }]
+        },
+        {
+            "ids": ["shanhai-video.oc-model-1iq31f"], "models": ["oc-model-1iq31f"],
+            "supplier": "山海", "sourceUrl": "https://shanhai.vnshu.cn/api/v1/models",
+            "status": "reference", "currency": "CREDITS", "note": "账号 API 返回积分标价，人民币兑换比例待核对",
+            "prices": [
+                { "label": "480p", "amount": 0.48, "unit": "second" },
+                { "label": "720p", "amount": 0.78, "unit": "second" },
+                { "label": "1080p", "amount": 1.58, "unit": "second" }
+            ]
+        },
+        {
+            "ids": ["shanhai-video.oc-model-bkb50q", "shanhai-video.oc-model-c6ws7e"],
+            "models": ["oc-model-bkb50q", "oc-model-c6ws7e"],
+            "supplier": "山海", "sourceUrl": "https://shanhai.vnshu.cn/api/v1/models",
+            "status": "unknown", "note": "当前账号 API 目录未收录此型号", "prices": []
+        },
+        {
+            "ids": ["globalaiopc.sd-2.5-discount-v1"], "models": ["sd_2.5_discount_v1"],
+            "supplier": "GlobalAiOpc", "sourceUrl": "https://docs.globalaiopc.com/api-reference/model-center/video-gen/sd_2.5_discount_v1",
+            "status": "unknown", "note": "模型接口文档未列价格，需账号价表", "prices": []
+        }
+    ]
+}

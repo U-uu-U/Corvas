@@ -1,7 +1,8 @@
 // 服务端渲染的页面：登录页、管理面板、公开落地页。
 // 不引入任何前端框架/构建步骤——纯 HTML + 少量原生 JS，方便直接拷到服务器上跑。
-import { SESSION_COOKIE } from './auth.mjs';
+import { ADMIN_USERNAME, SESSION_COOKIE } from './auth.mjs';
 import { EDITOR_STYLE, modelEditorMarkup } from './admin-editor-view.mjs';
+import { BALANCE_STYLE, balancesMarkup } from './admin-balances-view.mjs';
 
 const STYLE = `
 :root { color-scheme: dark; }
@@ -42,12 +43,14 @@ button.link { background: none; border: none; color: #7fb2ff; padding: 0; }
 .flash.ok { background: #14291b; border-color: #24512f; color: #b6e6c6; }
 .flash.err { background: #2c1717; border-color: #54282a; color: #f0c0c0; }
 pre.errors { background: #1a1113; border: 1px solid #54282a; border-radius: 8px; padding: 10px; overflow: auto; max-height: 240px; color: #f0c0c0; font-size: 12.5px; }
-.login { max-width: 380px; margin: 12vh auto; }
+.login { width:min(380px,calc(100% - 32px)); margin:12vh auto; }
 .login form { display: grid; gap: 10px; }
-.login input { width: 100%; }
+.login input { width:100%; min-width:0; }
+.login label { font-size:13px; color:#b9c0cc; }
 .audit { font-size: 12.5px; }
 code { background: #161b24; padding: 1px 5px; border-radius: 5px; }
 ${EDITOR_STYLE}
+${BALANCE_STYLE}
 `;
 
 export function escapeHtml(value) {
@@ -76,9 +79,12 @@ export function loginPage({ error = '', publicConfigPath = '/config', channel = 
   <h1 style="font-size:16px">模型配置服务${channel === 'preview' ? ' · 源码预览' : ''}</h1>
   <p class="muted">客户端从这里获取模型能力 CONFIG：<a href="${escapeHtml(publicConfigPath)}"><code>${escapeHtml(publicConfigPath)}</code></a></p>
   ${error ? `<div class="flash err">${escapeHtml(error)}</div>` : ''}
-  <form method="post" action="/admin/login">
+  <form id="loginForm" method="post" action="/admin/login" autocomplete="on">
     <input type="hidden" name="channel" value="${channel}">
-    <input type="password" name="password" placeholder="管理密码" autocomplete="current-password" autofocus required>
+    <label for="username">账号</label>
+    <input id="username" type="text" name="username" value="${ADMIN_USERNAME}" placeholder="账号" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64" required>
+    <label for="password">密码</label>
+    <input id="password" type="password" name="password" placeholder="管理密码" autocomplete="current-password" autofocus required>
     <button class="primary" type="submit">登录</button>
   </form>
 </div>`);
@@ -188,6 +194,8 @@ export function adminPage({
     </form>
   </section>
 
+  ${balancesMarkup()}
+
   <section>
     <h2>版本记录 · ${versions.length}</h2>
     <div class="table-scroll"><table>
@@ -204,7 +212,8 @@ export function adminPage({
     </table></div>
   </section>
 </main>
-<script type="module" src="/admin/assets/admin-editor.mjs"></script>`);
+<script type="module" src="/admin/assets/admin-editor.mjs"></script>
+<script type="module" src="/admin/assets/admin-balances-client.mjs"></script>`);
 }
 
 export function landingPage({ current = null, publicConfigPath = '/config', adminPath = '/admin' } = {}) {
