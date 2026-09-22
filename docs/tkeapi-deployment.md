@@ -1,5 +1,9 @@
 # 视频中转站部署记录
 
+## 2026-09-23 CH1401 按次备用渠道
+
+已在两站现有 StarFrame 渠道增加 `ch1401-sd-2.5-720p`，不新建或替换供应商凭据。老站 5.00 元/次、新站 5.72 元/次，两个站点均已启用。沿用 `starframe-video-backup` 转发到原生 `/v1/videos`；画布现有 CONFIG 条目和 beta.7 客户端已经支持该模型。部署备份、验证范围和入口见 `docs/starframe-video.md` 的 CH1401 记录。
+
 ## 2026-09-21 StarFrame 备用渠道
 
 已在 `art.ravenhash.org` 和 `cart.ravenhash.org` 新增独立的 `ch0107-sd-2.5-720p` 模型、StarFrame 渠道、计费与转发规则，名称为“2.5pro 备用（满参）”，归入“Seedance 2.5 备用渠道”。上游使用 Corvas 原已保存的 StarFrame 凭据；未覆盖主播 Pro，也未替换原有渠道凭据。
