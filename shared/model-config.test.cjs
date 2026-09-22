@@ -103,7 +103,7 @@ test('CSV 每一行都被默认 CONFIG 恰好一个条目覆盖，且 notes 逐�
     const { readCsvRows, checkConfigAgainstCsv } = await import('../scripts/sync-model-config.mjs');
     const rows = readCsvRows();
     const config = readConfig();
-    assert.equal(rows.length, 18, 'CSV 行数变化时必须同步确认 CONFIG');
+    assert.equal(rows.length, 23, 'CSV 行数变化时必须同步确认 CONFIG');
     assert.deepEqual(checkConfigAgainstCsv({ rows, config }), []);
 });
 
@@ -133,15 +133,15 @@ test('src/model-config-default.js 与 JSON 完全一致（renderer 打包用的�
     assert.deepEqual(module.DEFAULT_MODEL_CONFIG, readConfig());
 });
 
-test('默认 CONFIG 的 refreshIntervalMs 是 1 小时，且不依赖远端即可给出 18 个模型', () => {
+test('默认 CONFIG 的 refreshIntervalMs 是 1 小时，且不依赖远端即可给出 23 个模型', () => {
     const config = readConfig();
     assert.equal(config.refreshIntervalMs, 60 * 60 * 1000);
-    assert.equal(config.models.length, 18);
+    assert.equal(config.models.length, 23);
     const kinds = config.models.reduce((acc, entry) => {
         acc[entry.kind] = (acc[entry.kind] || 0) + 1;
         return acc;
     }, {});
-    assert.deepEqual(kinds, { image: 3, video: 13, text: 2 });
+    assert.deepEqual(kinds, { image: 3, video: 18, text: 2 });
 });
 
 // 管理面板改时长/参考素材上限，是这次改造对用户的承诺。表单产出的配置必须真的让客户端改判，

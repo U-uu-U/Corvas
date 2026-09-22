@@ -2,6 +2,8 @@
 
 供应商：`https://api.xzapi.vip`。模型：`ch0107-sd-2.5-720p`。Key 沿用 Corvas 加密凭据仓库保存。
 
+2026-09-21 已同步到 art/cart 两站，显示名称“2.5pro 备用（满参）”。新站售价 1.25 元/秒，老站 1.06 元/秒；两站使用 `/v1/video/generations` 提交/查询入口。直连供应商仍使用 `/v1/videos`。归一化结果的 `data[].url` 与原生 `metadata.url` 均可识别经校验的 StarFrame 签名存储链接。详情见 `docs/tkeapi-deployment.md`。
+
 售价按用户在 2026-09-20 指定的 **CNY 1.06/秒**展示，仅精确匹配 `api.xzapi.vip`。公开价格 API 的 `model_price` 是平台内部计价字段，不用于覆盖用户指定售价。任务计划按生成时长乘以条数计算预计费用，例如 5 秒 x 2 条 = CNY 10.60；实际账单以供应商扣费为准。
 
 ## 已接入

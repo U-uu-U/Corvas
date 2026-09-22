@@ -127,8 +127,8 @@ async function fetchModelConfig({ url, fetchImpl, timeoutMs = DEFAULT_TIMEOUT_MS
 
 // Read the applied store, not the fetch response or a second main-process cache.
 // Renderer contract: window.__flowCanvasGetModelConfigSnapshot() -> { config, status }.
-function createEffectiveModelConfigReader({ getMainWindow } = {}) {
-    return async function readEffectiveModelConfig() {
+function createModelConfigSnapshotReader({ getMainWindow } = {}) {
+    return async function readModelConfigSnapshot({ refresh = false } = {}) {
         const unavailable = message => Object.assign(new Error(message), { code: 'MODEL_CONFIG_UNAVAILABLE' });
         const window = getMainWindow?.();
         if (!window || window.isDestroyed() || window.webContents.isDestroyed?.()) {
@@ -138,7 +138,8 @@ function createEffectiveModelConfigReader({ getMainWindow } = {}) {
         let snapshot;
         try {
             snapshot = await window.webContents.executeJavaScript(
-                'globalThis.__flowCanvasGetModelConfigSnapshot?.() ?? null');
+                refresh ? 'globalThis.__flowCanvasRefreshModelConfig?.() ?? null'
+                    : 'globalThis.__flowCanvasGetModelConfigSnapshot?.() ?? null');
         } catch (cause) {
             throw unavailable(`读取已生效模型 CONFIG 失败：${cause.message}`);
         }
@@ -149,8 +150,13 @@ function createEffectiveModelConfigReader({ getMainWindow } = {}) {
         // Reapplying the remote schema here would reject accepted legacy caches.
         const config = readModelConfig(snapshot?.config);
         if (!config) throw unavailable('已生效模型 CONFIG 尚未就绪，请等待画布加载完成');
-        return structuredClone(config);
+        return structuredClone({ ...snapshot, config });
     };
+}
+
+function createEffectiveModelConfigReader(options) {
+    const read = createModelConfigSnapshotReader(options);
+    return async () => (await read()).config;
 }
 
 module.exports = {
@@ -158,6 +164,7 @@ module.exports = {
     MAX_BYTES,
     SCHEMA_PATH,
     createEffectiveModelConfigReader,
+    createModelConfigSnapshotReader,
     fetchModelConfig,
     isAllowedModelConfigUrl,
     validateModelConfig

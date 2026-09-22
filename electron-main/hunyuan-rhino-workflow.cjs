@@ -13,16 +13,20 @@ class HunyuanRhinoWorkflow {
     constructor({ directory, getAccounts, getRhino, getRuntime, getProjectId, readMode, onChange }) {
         Object.assign(this, { directory, getAccounts, getRhino, getRuntime, getProjectId, onChange });
         this.file = path.join(directory, 'hunyuan-rhino-jobs.json');
-        this.mode = readMode() === 'ask' ? 'ask' : 'auto'; this.context = null; this.jobs = [];
+        this.mode = 'auto'; this.context = null; this.jobs = [];
         this.running = false; this.runningJobId = null; this.closed = false;
         this.cleanup = new RhinoCleanup(directory);
         getRuntime().rhinoCleanup = (run, input) => this.executeCleanup(run, input);
+        getRuntime().validateRhinoCleanup = (run, options) => this.validateCleanupRun(run, options);
         getRuntime().prepareRhinoResume = run => this.prepareResume(run);
+        let initializeMode = false;
         try {
             const saved = JSON.parse(fs.readFileSync(this.file, 'utf8'));
             if (saved.version !== 1 || !Array.isArray(saved.jobs) || saved.jobs.some(job =>
                 !/^[a-f0-9]{32}$/.test(job?.id || '') || !/^[a-f0-9]{32}$/.test(job?.generationId || '')
                 || typeof job.accountId !== 'string' || typeof job.worksId !== 'string')) throw new Error('Invalid workflow records');
+            if (['auto', 'ask'].includes(saved.mode)) this.mode = saved.mode;
+            else initializeMode = true;
             this.jobs = saved.jobs;
             // The runtime may have been persisted just before its ID reached the
             // workflow record. Recover that binding before exposing resume.
@@ -39,6 +43,12 @@ class HunyuanRhinoWorkflow {
             }
         } catch (error) {
             if (error.code !== 'ENOENT') this.loadError = '模型传递记录读取失败，原文件已保留，自动处理已暂停';
+            else initializeMode = true;
+        }
+        if (initializeMode && !this.loadError) {
+            this.mode = readMode() === 'ask' ? 'ask' : 'auto';
+            try { this.persist(); }
+            catch { this.loadError = '模型传递记录无法保存，自动处理已暂停，请检查磁盘空间后重启'; }
         }
         const stopOnStorageError = () => {
             this.loadError = '模型传递记录无法保存，自动处理已暂停，请检查磁盘空间后重启';
@@ -57,20 +67,21 @@ class HunyuanRhinoWorkflow {
     persist() {
         if (this.loadError) throw new Error(this.loadError);
         fs.mkdirSync(this.directory, { recursive: true });
-        fs.writeFileSync(`${this.file}.tmp`, JSON.stringify({ version: 1, jobs: this.jobs }, null, 2));
+        fs.writeFileSync(`${this.file}.tmp`, JSON.stringify({ version: 1, mode: this.mode, jobs: this.jobs }, null, 2));
         fs.renameSync(`${this.file}.tmp`, this.file);
     }
     changed() { this.persist(); this.onChange(this.snapshot()); }
     update(job, status, extra = {}) { Object.assign(job, extra, { status, updatedAt: Date.now() }); this.changed(); }
     configure({ mode, projectId, conversationId } = {}) {
-        this.mode = mode === 'ask' ? 'ask' : 'auto';
+        const updateMode = ['auto', 'ask'].includes(mode);
+        if (updateMode) this.mode = mode;
         if (typeof conversationId === 'string' && conversationId.length <= 200) {
             this.getRuntime().board.readProject(projectId ?? null);
             this.context = { projectId: projectId ?? null, conversationId };
         }
-        if (this.mode === 'ask') {
+        if (updateMode && this.mode === 'ask') {
             for (const job of this.jobs) if (['queued', 'waiting_rhino'].includes(job.status) && !job.approved) job.status = 'awaiting_confirmation';
-        } else {
+        } else if (updateMode) {
             for (const job of this.jobs) if (job.status === 'awaiting_confirmation' && !job.dismissed) job.status = 'queued';
         }
         if (!this.loadError) this.changed();
@@ -201,6 +212,16 @@ class HunyuanRhinoWorkflow {
         if (!job) throw new Error('找不到这条 Rhino 整理任务的绑定模型');
         return job;
     }
+    validateCleanupRun(run, { starting = false } = {}) {
+        const job = this.jobs.find(entry => entry.id === run.source?.hunyuanJobId && entry.projectId === run.projectId);
+        if (this.closed || this.loadError || !job || job.cancelRequested || !job.importStarted) return false;
+        if (starting ? job.runId || job.status !== 'processing' : job.runId !== run.id) return false;
+        try {
+            const report = JSON.parse(fs.readFileSync(path.join(this.directory, 'rhino-model-results', job.id, 'import-result.json'), 'utf8'));
+            return report.ok === true && report.jobId === job.id && Array.isArray(report.meshIds) && report.meshIds.length > 0
+                && (!job.importInvocationId || report.invocationId === job.importInvocationId);
+        } catch { return false; }
+    }
     async connectedRhino() {
         const rhino = this.getRhino();
         await rhino.status();
@@ -218,6 +239,7 @@ class HunyuanRhinoWorkflow {
         return this.cleanup.execute(job, parameters, rhino.mcpClient, rhino.server().id);
     }
     async prepareResume(run) {
+        if (!this.validateCleanupRun(run)) throw new Error('Rhino 工作流与原任务绑定不符，请在 ChatGPT/Codex 中检查工作流状态');
         const job = this.jobForRun(run);
         const rhino = await this.connectedRhino();
         if (job.cancelRequested) throw new Error('任务已取消');
@@ -227,8 +249,7 @@ class HunyuanRhinoWorkflow {
         run.skillInstructions = [RHINO_EDIT_SKILL.instruction];
         run.source.rhinoSkillVersion = RHINO_EDIT_SKILL.version;
         run.execution = 'rhino_cleanup';
-        run.toolAllowlist = [CLEANUP_TOOL, ...rhino.mcpClient.definitions()
-            .filter(tool => rhino.mcpClient.tools.get(tool.name)?.serverId === rhino.server().id).map(tool => tool.name)];
+        run.toolAllowlist = [CLEANUP_TOOL];
         run.messages.push({ role: 'user', content: '继续这条 Rhino 整理任务。先用 flow_canvas.rhino.cleanup 的 status 查看阶段报告，再按 inspect、clean、quad、validate 执行缺少的阶段。该工具会写入真实脚本文件并复用已完成结果。不要重新导入模型，也不要把 Python 源码放进 RunPythonScript 命令字符串。' });
         this.getRuntime().runStore?.save(run);
         this.update(job, 'processing', { runId: run.id, dismissed: false, error: '' });
@@ -291,7 +312,6 @@ class HunyuanRhinoWorkflow {
     }
     async startCleanup(job, rhino, { imported, resultDirectory, report }) {
         const runtime = this.getRuntime();
-        const mcp = rhino.mcpClient;
         const { RHINO_EDIT_SKILL } = await import('../shared/rhino-model-skill.mjs');
         if (!this.assertProceed(job)) return;
         const sourceDescription = imported.meshIds.length <= 128 ? JSON.stringify(imported.meshIds)
@@ -302,7 +322,7 @@ class HunyuanRhinoWorkflow {
             projectId: job.projectId, conversationId: job.conversationId, mode: 'auto', execution: 'rhino_cleanup',
             source: { hunyuanJobId: job.id, rhinoSkillVersion: RHINO_EDIT_SKILL.version }, selectedItemIds: [], attachments: [],
             skillInstructions: [RHINO_EDIT_SKILL.instruction],
-            toolAllowlist: [CLEANUP_TOOL, ...mcp.definitions().filter(tool => mcp.tools.get(tool.name)?.serverId === rhino.server().id).map(tool => tool.name)],
+            toolAllowlist: [CLEANUP_TOOL],
             messages: [{ role: 'user', content: `将刚从混元导入 Rhino 的模型按“Rhino 模型编辑”Skill 整理四边面。此次发送和整理已获授权。\n`
                 + `只使用已连接服务 ${rhino.server().name}，先核对当前文档序号 ${imported.documentId}；若文档不同就停止，不切换或覆盖文档。\n`
                 + `只处理这些网格对象 ID：${sourceDescription}。它们已导入，禁止重新导入文件，不要使用当前选择代替这些 ID。\n`
@@ -312,7 +332,7 @@ class HunyuanRhinoWorkflow {
         };
         // Record the launch boundary before starting: recovery searches source.hunyuanJobId.
         this.update(job, 'processing');
-        const run = runtime.start(request);
+        const run = runtime.startRhinoCleanup(request);
         this.update(job, 'processing', { runId: run.id, resumeRequested: false });
     }
     close() { this.closed = true; clearInterval(this.timer); }

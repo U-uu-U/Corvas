@@ -1,4 +1,7 @@
 import { parseEditorConfig, readEditorValues, applyEditorValues, REFERENCE_KINDS } from './admin-editor-model.mjs';
+import { addCatalogModel, catalogGroupKey, catalogGroups, catalogModelPrice, createCatalogGroup, createCatalogHistory,
+    deleteCatalogModel, modelName, moveCatalogModel, renameCatalogGroup, reorderCatalog, toggleCatalogVisibility } from './admin-catalog-model.mjs';
+import { renderCatalog } from './admin-catalog-view.mjs';
 
 export function initAdminEditor(document) {
     const window = document.defaultView;
@@ -15,7 +18,8 @@ export function initAdminEditor(document) {
     let config = null;
     let original = null;
     let selectedId = '';
-    let mode = 'form';
+    let mode = 'json';
+    let history = null;
     const touched = new Set();
     let submitting = false;
     const selected = () => config?.models.find(entry => entry.id === selectedId);
@@ -28,8 +32,11 @@ export function initAdminEditor(document) {
         errors.textContent = (messages || []).join('\n');
     };
     const dirty = () => text.value !== originalText || touched.size > 0;
-    const writeConfig = () => {
+    const writeConfig = (record = true) => {
         text.value = JSON.stringify(config) === JSON.stringify(original) ? originalText : JSON.stringify(config, null, 2);
+        if (record) history?.push(config);
+        document.getElementById('undoCatalogBtn').disabled = !history?.canUndo;
+        document.getElementById('redoCatalogBtn').disabled = !history?.canRedo;
     };
     const values = () => Object.fromEntries(Object.entries(controls).map(([key, input]) => [key, input.value]));
     const updatePriceFields = () => {
@@ -37,7 +44,7 @@ export function initAdminEditor(document) {
         document.getElementById('priceScope').hidden = status === 'inherit';
         document.getElementById('knownPriceFields').hidden = status !== 'known';
         for (const key of ['hosts', 'amount', 'currency', 'unit', 'source']) {
-            controls[key].disabled = key === 'hosts' ? status === 'inherit' : status !== 'known';
+            controls[key].disabled = mode === 'operation' || (key === 'hosts' ? status === 'inherit' : status !== 'known');
             controls[key].required = !controls[key].disabled;
         }
     };
@@ -107,13 +114,11 @@ export function initAdminEditor(document) {
             detail.textContent = [({ image: '图片', video: '视频', text: '文字' })[entry.kind] || entry.kind,
                 entry.presentation?.routeLabel, entry.id].filter(Boolean).join(' · ');
             button.append(label, detail);
-            button.addEventListener('click', () => {
-                if (!flushSelected()) return;
-                selectedId = entry.id;
-                renderEditor();
-                renderList();
-                [...list.children].find(button => button.dataset.modelId === selectedId)?.focus();
-            });
+            const price = document.createElement('span');
+            price.className = 'catalog-price';
+            price.textContent = catalogModelPrice(entry);
+            button.append(price);
+            button.addEventListener('click', () => selectModel(entry.id));
             list.appendChild(button);
         }
         if (!entries.length) {
@@ -123,11 +128,32 @@ export function initAdminEditor(document) {
             list.appendChild(empty);
         }
         list.scrollTop = scroll;
+        if (config) renderCatalog(document, config, selectedId, selectModel);
     };
+    function selectModel(id) {
+        if (!flushSelected()) return;
+        const focused = document.activeElement;
+        const parentId = focused?.parentElement?.id;
+        const groupKey = focused?.dataset.catalogGroup;
+        selectedId = id;
+        renderEditor();
+        renderList();
+        if (parentId === 'modelList') [...list.children].find(button => button.dataset.modelId === id)?.focus({ preventScroll: true });
+        else if (['catalogGroups', 'catalogModels'].includes(parentId)) {
+            [...document.getElementById(parentId).children].find(button => groupKey
+                ? button.dataset.catalogGroup === groupKey : button.dataset.catalogModelId === id)?.focus({ preventScroll: true });
+        }
+    }
     const renderEditor = () => {
         const entry = selected();
-        fieldset.disabled = !entry || mode !== 'form';
-        if (!entry) return;
+        fieldset.disabled = !entry || mode === 'json';
+        document.getElementById('selectedModelId').textContent = entry?.id || '未选择模型';
+        document.getElementById('restoreModelBtn').disabled = !original?.models.some(model => model.id === entry?.id);
+        if (!entry) {
+            touched.clear();
+            for (const input of Object.values(controls)) input.value = '';
+            return;
+        }
         touched.clear();
         const current = readEditorValues(entry);
         for (const [key, input] of Object.entries(controls)) input.value = current[key] ?? '';
@@ -138,7 +164,7 @@ export function initAdminEditor(document) {
         updateConstraintFields();
     };
     function flushSelected(report = true) {
-        if (mode !== 'form' || !selected() || !touched.size) return true;
+        if (mode === 'json' || !selected() || !touched.size) return true;
         try {
             const next = applyEditorValues(selected(), values(), touched);
             config.models[config.models.findIndex(entry => entry.id === selectedId)] = next;
@@ -156,12 +182,18 @@ export function initAdminEditor(document) {
         }
     }
     function setMode(nextMode) {
-        if (nextMode === 'json' && !flushSelected()) return;
-        if (nextMode === 'form') {
+        if (!flushSelected()) return;
+        if (nextMode !== 'json') {
             try {
                 config = parseEditorConfig(text.value);
                 original ||= structuredClone(config);
-                if (!selected()) selectedId = config.models[0].id;
+                history ||= createCatalogHistory(config);
+                history.push(config);
+                if (!selected()) selectedId = config.models[0]?.id || '';
+                if (nextMode === 'operation' && document.getElementById('catalogKind').value
+                    && selected()?.kind !== document.getElementById('catalogKind').value) {
+                    selectedId = config.models.find(entry => entry.kind === document.getElementById('catalogKind').value)?.id || '';
+                }
                 showErrors([]);
             } catch (error) {
                 showErrors([error.message]);
@@ -174,12 +206,18 @@ export function initAdminEditor(document) {
             button.setAttribute('aria-selected', String(button.dataset.editorMode === mode));
             button.tabIndex = button.dataset.editorMode === mode ? 0 : -1;
         }
-        document.getElementById('formPane').hidden = mode !== 'form';
+        document.getElementById('formPane').hidden = mode === 'json';
+        document.getElementById('formPane').classList.toggle('is-operation', mode === 'operation');
+        document.getElementById('formPane').setAttribute('aria-labelledby', mode === 'operation' ? 'operationTab' : 'formTab');
+        document.getElementById('catalogPane').hidden = mode !== 'operation';
+        document.getElementById('catalogActions').hidden = mode === 'json';
         document.getElementById('jsonPane').hidden = mode !== 'json';
-        fieldset.disabled = mode !== 'form';
-        if (mode === 'form') {
+        fieldset.disabled = mode === 'json';
+        if (mode !== 'json') {
             renderList();
             renderEditor();
+            document.getElementById('undoCatalogBtn').disabled = !history?.canUndo;
+            document.getElementById('redoCatalogBtn').disabled = !history?.canRedo;
             setState(dirty() ? '有未保存修改' : '无修改');
         }
     }
@@ -202,12 +240,149 @@ export function initAdminEditor(document) {
         event.preventDefault();
         buttons[next]?.click();
     });
+    for (const id of ['catalogGroups', 'catalogModels']) {
+        document.getElementById(id).addEventListener('keydown', event => {
+            if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+            const buttons = [...event.currentTarget.querySelectorAll('button')];
+            const index = buttons.indexOf(document.activeElement);
+            const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+                : Math.max(0, Math.min(buttons.length - 1, index + (event.key === 'ArrowUp' ? -1 : 1)));
+            event.preventDefault();
+            buttons[next]?.click();
+            [...document.getElementById(id).querySelectorAll('button')][next]?.focus();
+        });
+    }
     document.querySelectorAll('[data-editor-mode]').forEach(button => button.addEventListener('click', () => setMode(button.dataset.editorMode)));
     document.getElementById('editorTabs').addEventListener('keydown', event => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault();
-        setMode(event.key === 'Home' ? 'form' : event.key === 'End' ? 'json' : mode === 'form' ? 'json' : 'form');
+        const modes = ['operation', 'form', 'json'];
+        const index = modes.indexOf(mode);
+        setMode(event.key === 'Home' ? 'operation' : event.key === 'End' ? 'json'
+            : modes[(index + (event.key === 'ArrowLeft' ? -1 : 1) + modes.length) % modes.length]);
         document.querySelector(`[data-editor-mode="${mode}"]`).focus();
+    });
+    function replaceConfig(next, id = selectedId, record = true) {
+        config = next;
+        selectedId = config.models.some(entry => entry.id === id) ? id : config.models[0]?.id || '';
+        touched.clear();
+        writeConfig(record);
+        renderEditor();
+        renderList();
+        showErrors([]);
+        setState(dirty() ? '有未保存修改' : '无修改');
+    }
+    const operate = action => {
+        if (!flushSelected()) return;
+        try { replaceConfig(action()); }
+        catch (error) { showErrors([error.message]); setState('操作未完成', true); }
+    };
+    document.getElementById('catalogMode').addEventListener('change', event => {
+        const catalogMode = event.target.value;
+        operate(() => ({ ...config, catalogMode }));
+    });
+    for (const [id, direction, scope] of [['moveModelUpBtn', -1, 'model'], ['moveModelDownBtn', 1, 'model'],
+        ['moveGroupUpBtn', -1, 'group'], ['moveGroupDownBtn', 1, 'group']]) {
+        document.getElementById(id).addEventListener('click', () => operate(() => reorderCatalog(config, selectedId, direction, scope)));
+    }
+    document.getElementById('catalogMoveGroup').addEventListener('change', event => {
+        const destination = event.target.value;
+        operate(() => moveCatalogModel(config, selectedId, destination));
+    });
+    document.getElementById('catalogVisible').addEventListener('change', () => operate(() => toggleCatalogVisibility(config, selectedId)));
+    document.getElementById('deleteModelBtn').addEventListener('click', () => operate(() => deleteCatalogModel(config, selectedId)));
+    for (const [id, method] of [['undoCatalogBtn', 'undo'], ['redoCatalogBtn', 'redo']]) {
+        document.getElementById(id).addEventListener('click', () => {
+            if (history && flushSelected()) replaceConfig(history[method](), selectedId, false);
+        });
+    }
+    const filterCatalog = () => {
+        if (!flushSelected()) return;
+        const groups = catalogGroups(config, { kind: document.getElementById('catalogKind').value,
+            query: document.getElementById('catalogSearch').value, includeHidden: document.getElementById('catalogShowHidden').checked,
+            includeLegacy: config.catalogMode !== 'remote' || document.getElementById('catalogShowLegacy').checked });
+        if (!groups.some(group => group.entries.some(entry => entry.id === selectedId))) {
+            selectedId = groups[0]?.entries[0]?.id || '';
+            renderEditor();
+        }
+        renderList();
+    };
+    document.getElementById('catalogSearch').addEventListener('input', filterCatalog);
+    document.getElementById('catalogKind').addEventListener('change', filterCatalog);
+    document.getElementById('catalogShowHidden').addEventListener('change', filterCatalog);
+    document.getElementById('catalogShowLegacy').addEventListener('change', filterCatalog);
+    const dialog = document.getElementById('catalogDialog');
+    const dialogFields = document.getElementById('catalogDialogFields');
+    const dialogError = document.getElementById('catalogDialogError');
+    let dialogAction = '';
+    function openDialog(action) {
+        if (!flushSelected()) return;
+        dialogAction = action;
+        const creating = action === 'add' || action === 'copy';
+        const grouping = action === 'createGroup' || action === 'renameGroup';
+        document.getElementById('catalogDialogTitle').textContent = ({ add: '新增模型', copy: '复制模型',
+            createGroup: '新建分组', renameGroup: '修改分组名', clear: '清空模型目录' })[action];
+        dialogFields.disabled = false;
+        for (const row of dialogFields.querySelectorAll('[data-dialog-row]')) {
+            row.hidden = !creating && !(grouping && row.dataset.dialogRow === 'label');
+            for (const input of row.querySelectorAll('input,select,textarea')) {
+                input.disabled = row.hidden;
+                input.required = !row.hidden;
+            }
+        }
+        document.getElementById('catalogDialogLabelTitle').textContent = grouping ? '分组名' : '显示名称';
+        document.getElementById('catalogDialogLabel').value = action === 'renameGroup'
+            ? selected()?.presentation?.routeGroupLabel || selected()?.presentation?.routeGroup || ''
+            : action === 'copy' ? `${modelName(selected())} 副本`.slice(0, 100) : '';
+        document.getElementById('catalogDialogKind').value = selected()?.kind || document.getElementById('catalogKind').value || 'video';
+        document.getElementById('catalogDialogModel').value = '';
+        document.getElementById('catalogDialogHosts').value = selected()?.catalog?.hosts?.join('\n') || '';
+        const message = document.getElementById('catalogDialogMessage');
+        message.hidden = action !== 'clear';
+        message.textContent = `移除目录中的 ${config.models.length} 个模型？`;
+        document.getElementById('catalogDialogConfirm').textContent = action === 'clear' ? '清空目录' : '确定';
+        dialogError.hidden = true;
+        dialog.showModal();
+        (creating || grouping ? document.getElementById('catalogDialogLabel') : document.getElementById('catalogDialogCancel')).focus();
+    }
+    for (const [id, action] of [['addModelBtn', 'add'], ['copyModelBtn', 'copy'], ['createGroupBtn', 'createGroup'],
+        ['renameGroupBtn', 'renameGroup'], ['clearCatalogBtn', 'clear']]) {
+        document.getElementById(id).addEventListener('click', () => openDialog(action));
+    }
+    dialog.addEventListener('close', () => { dialogFields.disabled = true; });
+    document.getElementById('catalogDialogCancel').addEventListener('click', () => dialog.close());
+    function confirmDialog() {
+        for (const input of dialogFields.querySelectorAll('input,select,textarea')) {
+            if (!input.disabled && !input.reportValidity()) return;
+        }
+        try {
+            const label = document.getElementById('catalogDialogLabel').value;
+            if (dialogAction === 'add' || dialogAction === 'copy') {
+                const kind = document.getElementById('catalogDialogKind').value;
+                const result = addCatalogModel(config, { label, kind,
+                    model: document.getElementById('catalogDialogModel').value,
+                    hosts: document.getElementById('catalogDialogHosts').value,
+                    sourceId: dialogAction === 'copy' ? selectedId : undefined,
+                    groupKey: selected()?.kind === kind && selected()?.presentation?.routeGroup ? catalogGroupKey(selected()) : '' });
+                document.getElementById('catalogKind').value = kind;
+                document.getElementById('catalogSearch').value = '';
+                replaceConfig(result.config, result.id);
+            } else if (dialogAction === 'createGroup') replaceConfig(createCatalogGroup(config, selectedId, label));
+            else if (dialogAction === 'renameGroup') replaceConfig(renameCatalogGroup(config, catalogGroupKey(selected()), label));
+            else if (dialogAction === 'clear') replaceConfig({ ...config, models: [] });
+            dialog.close();
+        } catch (error) {
+            dialogError.textContent = error.message;
+            dialogError.hidden = false;
+        }
+    }
+    document.getElementById('catalogDialogConfirm').addEventListener('click', confirmDialog);
+    dialog.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && event.target.tagName !== 'TEXTAREA') {
+            event.preventDefault();
+            event.stopPropagation();
+            confirmDialog();
+        }
     });
     const updateSaveLabel = () => { document.getElementById('saveBtn').textContent = form.elements.draft.checked ? '保存草稿' : '发布配置'; };
     form.elements.draft.addEventListener('change', updateSaveLabel);
@@ -253,14 +428,16 @@ export function initAdminEditor(document) {
             event.preventDefault();
         }
     });
-    document.getElementById('resetBtn').addEventListener('click', () => { window.location.href = '/admin'; });
+    document.getElementById('resetBtn').addEventListener('click', () => {
+        window.location.href = form.elements.channel?.value === 'preview' ? '/admin?channel=preview' : '/admin';
+    });
     window.addEventListener('beforeunload', event => {
         if (dirty() && !submitting) { event.preventDefault(); event.returnValue = ''; }
     });
     window.addEventListener('pageshow', () => { submitting = false; document.getElementById('saveBtn').disabled = false; });
     document.getElementById('editorTabs').hidden = false;
     updateSaveLabel();
-    setMode('form');
+    setMode('operation');
 }
 
 if (globalThis.document) initAdminEditor(globalThis.document);

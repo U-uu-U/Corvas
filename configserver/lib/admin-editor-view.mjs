@@ -1,4 +1,5 @@
-import { DISPLAY_FIELDS, REFERENCE_KINDS, DURATION_PRESERVED } from './admin-editor-model.mjs';
+import { DISPLAY_FIELDS, DISPLAY_ORDER_FIELDS, REFERENCE_KINDS, DURATION_PRESERVED } from './admin-editor-model.mjs';
+import { CATALOG_STYLE, catalogActionsMarkup, catalogPaneMarkup, catalogDialogMarkup } from './admin-catalog-view.mjs';
 
 export const EDITOR_STYLE = `
 [hidden] { display: none !important; }
@@ -59,6 +60,7 @@ pre.errors { white-space: pre-wrap; overflow-wrap: anywhere; }
     .publish-bar label { width: 100%; }
     .login { padding: 16px; }
 }
+${CATALOG_STYLE}
 `;
 
 export function modelEditorMarkup() {
@@ -69,12 +71,14 @@ export function modelEditorMarkup() {
     return `
       <div class="editor-toolbar">
         <div class="editor-tabs" id="editorTabs" role="tablist" aria-label="编辑方式" hidden>
+          <button type="button" id="operationTab" role="tab" aria-controls="formPane" data-editor-mode="operation">操作模式</button>
           <button type="button" id="formTab" role="tab" aria-controls="formPane" data-editor-mode="form">表单</button>
           <button type="button" id="jsonTab" role="tab" aria-controls="jsonPane" data-editor-mode="json">JSON</button>
         </div>
         <span id="editorState" role="status" aria-live="polite"></span>
       </div>
       <pre class="errors" id="editorErrors" role="alert" hidden></pre>
+      ${catalogActionsMarkup()}
       <div id="formPane" role="tabpanel" aria-labelledby="formTab" hidden>
         <div class="editor-grid">
           <aside class="model-browser">
@@ -85,19 +89,30 @@ export function modelEditorMarkup() {
             </div>
             <div class="model-list" id="modelList" role="listbox" aria-label="模型列表"></div>
           </aside>
+          ${catalogPaneMarkup()}
           <div class="model-details">
             <div class="model-heading"><output id="selectedModelId" class="mono"></output><button type="button" id="restoreModelBtn">还原此模型</button></div>
             <fieldset id="modelFields" disabled>
+              <div class="field-grid">
+                <label class="field"><span>模型 ID</span><input type="text" data-field="catalogModel" maxlength="200" autocomplete="off" spellcheck="false" placeholder="未设置"></label>
+                <label class="field"><span>目录状态</span><select data-field="catalogEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
+                <label class="field full"><span>API 主机名</span><textarea data-field="catalogHosts" rows="2" placeholder="art.ravenhash.org&#10;cart.ravenhash.org" spellcheck="false"></textarea></label>
+              </div>
+              <div class="form-section"><h3>模型展示</h3></div>
               <div class="field-grid">${DISPLAY_FIELDS.slice(0, 2).map(field).join('')}</div>
               <div class="form-section">
                 <h3>线路展示</h3>
                 <div class="field-grid">
                   ${DISPLAY_FIELDS.slice(2).map(field).join('')}
+                  ${DISPLAY_ORDER_FIELDS.map(({ key, label }) => `<label class="field"><span>${label}</span><input type="number" data-field="${key}" min="-100000" max="100000" step="1" inputmode="numeric" placeholder="沿用默认"></label>`).join('')}
+                  <label class="field"><span>分组合并范围</span><select data-field="routeGroupScope"><option value="inherit">沿用默认</option><option value="provider">按 API 账户分组</option><option value="catalog">跨 API 账户合并</option></select></label>
+                  <label class="field"><span>单模型保留分组</span><select data-field="routeGroupAlways"><option value="inherit">沿用默认</option><option value="true">是</option><option value="false">否</option></select></label>
+                  <label class="field"><span>模型可见性</span><select data-field="visible"><option value="inherit">默认</option><option value="true">显示</option><option value="false">隐藏</option></select></label>
                   <label class="field"><span>推荐状态</span><select data-field="recommended"><option value="inherit">沿用默认</option><option value="true">推荐</option><option value="false">不推荐</option></select></label>
                 </div>
               </div>
-              <div class="form-section">
-                <h3>展示售价</h3>
+              <div class="form-section price-section">
+                <h3>内部估算价格</h3>
                 <div class="field-grid">
                   <label class="field"><span>售价状态</span><select data-field="priceMode"><option value="inherit">沿用客户端默认价</option><option value="unknown">费用未知</option><option value="known">指定售价</option></select></label>
                 </div>
@@ -158,10 +173,10 @@ export function modelEditorMarkup() {
                     <label class="field full" data-reference-note hidden><span data-reference-note-label>补充说明</span><input type="text" data-field="${kind.key}Note" maxlength="200" autocomplete="off" placeholder="未设置"></label>
                   </div>
                 </div>`).join('')}
-                <p class="muted" style="margin:14px 0 0;font-size:11px">数量上限留空表示不限制：客户端会沿用本地默认值，不做拦截。</p>
               </div>
             </fieldset>
           </div>
         </div>
-      </div>`;
+      </div>
+      ${catalogDialogMarkup()}`;
 }

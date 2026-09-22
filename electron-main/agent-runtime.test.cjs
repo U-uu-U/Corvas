@@ -32,49 +32,56 @@ function externalClient(h, { readOnly = false, execute } = {}) {
     return calls;
 }
 
-test('MCP discovered tools join the provider loop and retain original project/conversation', async t => {
-    const h = harness(t, { script: [reply('', [{ id: 'external-call', name: 'external_mcp_test', arguments: {} }]), reply()] });
+test('canvas Agent tools never include external MCP or Rhino cleanup and do not connect MCP', async t => {
+    const h = harness(t);
     const calls = externalClient(h);
+    h.runtime.mcpClient.ready = () => assert.fail('Canvas tasks must not initialize external MCP');
+    h.runtime.boardDefinitions.push({ name: 'flow_canvas.system.shell', inputSchema: { type: 'object' } });
     const id = h.start(); const result = await h.idle(id);
-    assert.equal(result.status, 'completed'); assert.equal(calls.length, 1);
+    assert.equal(result.status, 'completed'); assert.equal(calls.length, 0);
     assert.equal(result.projectId, 'a'); assert.equal(result.conversationId, 'conversation-1');
-    assert.ok(h.requests[0].tools.some(tool => tool.function.name === 'external_mcp_test'));
-    assert.equal(toolResults(h.requests[1])[0].value.content[0].text, 'Created object');
-    assert.equal(Object.values(h.disk(id).externalCalls)[0].status, 'completed');
+    assert.equal(h.requests[0].tools.length, 20);
+    assert.ok(h.requests[0].tools.every(tool => !['external_mcp_test', 'flow_canvas.rhino.cleanup', 'flow_canvas.system.shell'].includes(tool.function.name)));
+    assert.equal(h.disk(id).mcpBindings, undefined);
 });
 
-test('ask mode confirms external scene changes once', async t => {
-    const h = harness(t, { script: [reply('', [{ id: 'external-call', name: 'external_mcp_test', arguments: {} }]), reply()] });
-    const calls = externalClient(h);
-    const id = h.start({ mode: 'ask' });
-    const proposal = await h.idle(id);
-    assert.equal(proposal.status, 'awaiting_confirmation'); assert.equal(proposal.plan.kind, 'external'); assert.equal(calls.length, 0);
-    h.confirm(id); const result = await h.idle(id);
-    assert.equal(result.status, 'completed'); assert.equal(calls.length, 1);
-    assert.throws(() => h.runtime.confirm({ runId: id, planVersion: proposal.plan.version }), { code: 'PLAN_CHANGED' });
+test('neither mode nor caller allowlists can grant external tools to the canvas Agent', async t => {
+    for (const mode of ['ask', 'auto']) {
+        const h = harness(t, { script: [reply('', [{ id: 'external-call', name: 'external_mcp_test', arguments: {} },
+            tool('cleanup', 'rhino.cleanup', { stage: 'clean' })]), reply()] });
+        const calls = externalClient(h);
+        const id = h.start({ mode, toolAllowlist: ['external_mcp_test', 'flow_canvas.rhino.cleanup', 'flow_canvas.memory.read'] });
+        const result = await h.idle(id);
+        assert.equal(result.status, 'completed'); assert.equal(calls.length, 0); assert.equal(result.plan, null);
+        assert.deepEqual(h.requests[0].tools.map(tool => tool.function.name), ['flow_canvas.memory.read']);
+        assert.ok(toolResults(h.requests[1]).every(result => result.value.error.code === 'EXTERNAL_AGENT_REQUIRED'));
+    }
 });
 
-test('read-only external tool works in ask mode and images enter model context', async t => {
-    const h = harness(t, { script: [reply('', [{ id: 'external-call', name: 'external_mcp_test', arguments: {} }]), reply()] });
-    externalClient(h, { readOnly: true, execute: async () => ({ content: [{ type: 'image', mimeType: 'image/png', data: 'YWJj' }] }) });
-    const result = await h.idle(h.start({ mode: 'ask' }));
-    assert.equal(result.status, 'completed');
-    assert.ok(h.requests[1].messages.some(m => Array.isArray(m.content) && m.content.some(c => c.type === 'image_url')));
+test('direct execution cannot bypass the external boundary even with forged Rhino context', async t => {
+    const h = harness(t);
+    const calls = externalClient(h, { readOnly: true });
+    h.runtime.rhinoCleanup = () => assert.fail('Unbound cleanup must not execute');
+    const run = { id: 'agent-unbound', projectId: 'a', source: { hunyuanJobId: 'fixture-job' }, execution: 'rhino_cleanup' };
+    await assert.rejects(h.runtime.executeTool({ projectId: 'a' }, 'external_mcp_test'), { code: 'EXTERNAL_AGENT_REQUIRED' });
+    await assert.rejects(h.runtime.executeTool(run, 'flow_canvas.rhino.cleanup', { stage: 'inspect' }), { code: 'EXTERNAL_AGENT_REQUIRED' });
+    assert.equal(calls.length, 0);
 });
 
-test('unknown external mutation halts loop and blocks restart replay', async t => {
-    const h = harness(t, { script: [reply('', [{ id: 'external-call', name: 'external_mcp_test', arguments: {} }])] });
-    const calls = externalClient(h, { execute: async () => { throw Object.assign(new Error('Unknown result'), { code: 'MCP_RESULT_UNKNOWN' }); } });
-    const id = h.start(); const result = await h.idle(id);
-    assert.equal(result.status, 'failed'); assert.equal(calls.length, 1);
-    assert.equal(Object.values(h.disk(id).externalCalls)[0].status, 'unknown');
-    assert.throws(() => h.runtime.resume({ runId: id }), { code: 'MCP_RESULT_UNKNOWN' });
-    const recovered = harness(t, { initialRuns: [h.disk(id)] });
-    externalClient(recovered);
-    assert.throws(() => recovered.runtime.resume({ runId: id }), { code: 'MCP_RESULT_UNKNOWN' });
+test('saved external calls and results remain readable but cannot resume or retry', t => {
+    for (const status of ['unknown', 'completed']) {
+        const saved = recoveryRun({}, { status: 'failed', plan: null, steps: [], pendingCalls: [],
+            externalCalls: { previous: { status, readOnly: false, result: { content: [{ type: 'text', text: 'Saved scene result' }] } } } });
+        const h = harness(t, { initialRuns: [saved] });
+        const calls = externalClient(h);
+        assert.equal(h.runtime.get({ runId: saved.id }).externalCalls.previous.status, status);
+        assert.throws(() => h.runtime.resume({ runId: saved.id }), { code: 'EXTERNAL_AGENT_REQUIRED' });
+        assert.throws(() => h.runtime.retry({ runId: saved.id }), { code: 'EXTERNAL_AGENT_REQUIRED' });
+        assert.equal(calls.length, 0); assert.equal(h.requests.length, 0);
+    }
 });
 
-test('saved MCP result is reused after crash before tool message was saved', async t => {
+test('saved external pending calls cannot run after restarting', t => {
     const call = { id: 'external-call', name: 'external_mcp_test', arguments: {} };
     const saved = recoveryRun({}, { status: 'planning', turns: 8, steps: [], plan: null, mcpBindings: { external_mcp_test: 'stable-config' },
         pendingCalls: [call], messages: [{ role: 'user', content: 'Create' }, { role: 'assistant', content: '', tool_calls: [
@@ -82,17 +89,40 @@ test('saved MCP result is reused after crash before tool message was saved', asy
         externalCalls: { '1:external-call': { status: 'completed', readOnly: false, result: { content: [{ type: 'text', text: 'Already created' }] } } } });
     const h = harness(t, { initialRuns: [saved], script: [reply()] });
     const calls = externalClient(h);
-    h.runtime.resume({ runId: saved.id });
-    assert.equal((await h.idle(saved.id)).status, 'completed'); assert.equal(calls.length, 0);
+    assert.throws(() => h.runtime.resume({ runId: saved.id }), { code: 'EXTERNAL_AGENT_REQUIRED' });
+    assert.equal(calls.length, 0); assert.equal(h.requests.length, 0);
 });
 
-test('changed MCP binding cannot execute a previously approved plan', async t => {
-    const h = harness(t, { script: [reply('', [{ id: 'external-call', name: 'external_mcp_test', arguments: {} }])] });
+test('saved external plans cannot be confirmed or revised into an internal task', t => {
+    const saved = recoveryRun({}, { status: 'awaiting_confirmation', steps: [],
+        plan: { kind: 'external', version: 'external-version', tool: 'external_mcp_test', proposed: {} } });
+    const h = harness(t, { initialRuns: [saved] });
     const calls = externalClient(h);
-    const id = h.start({ mode: 'ask' }); await h.idle(id);
-    h.runtime.mcpClient.binding = () => 'different-server';
+    assert.throws(() => h.confirm(saved.id), { code: 'EXTERNAL_AGENT_REQUIRED' });
+    assert.throws(() => h.runtime.revise({ runId: saved.id, instruction: 'Continue' }), { code: 'EXTERNAL_AGENT_REQUIRED' });
+    assert.equal(calls.length, 0); assert.equal(h.requests.length, 0);
+    assert.equal(h.runtime.get({ runId: saved.id }).status, 'awaiting_confirmation');
+});
+
+test('ordinary start rejects fixed-script execution fields before creating a run', t => {
+    const h = harness(t);
+    h.runtime.rhinoCleanup = () => assert.fail('Untrusted workflow must not execute');
+    h.runtime.validateRhinoCleanup = () => true;
+    for (const extra of [{ execution: 'rhino_cleanup' }, { source: { hunyuanJobId: 'fixture-job' } }]) {
+        assert.throws(() => h.start(extra), { code: 'EXTERNAL_AGENT_REQUIRED' });
+    }
+    assert.equal(h.runtime.runs.size, 0); assert.equal(h.providerBindings.length, 0);
+});
+
+test('a rejected external attempt does not prevent a later valid canvas generation confirmation', async t => {
+    const h = harness(t, { script: [reply('', [{ id: 'denied', name: 'external_mcp_test', arguments: {} }, graphCall()]),
+        reply('Review'), reply()] });
+    const calls = externalClient(h);
+    const id = h.start();
+    assert.equal((await h.idle(id)).status, 'awaiting_confirmation');
     h.confirm(id);
-    assert.equal((await h.idle(id)).status, 'failed'); assert.equal(calls.length, 0);
+    assert.equal((await h.idle(id)).status, 'completed');
+    assert.equal(calls.length, 0); assert.equal(h.stepCalls.length, 1);
 });
 
 test('retry excludes completed calls and requires a fresh plan confirmation', async t => {
@@ -123,22 +153,42 @@ test('Rhino cleanup executes saved stages without a text provider request', asyn
     const h = harness(t);
     const stages = [];
     h.runtime.rhinoCleanup = async (run, input) => { stages.push(input.stage); return { ok: true, outputs: [{ source: { faces: 1000 }, mesh: { faces: 200 } }] }; };
-    const id = h.start({ execution: 'rhino_cleanup', source: { hunyuanJobId: 'fixture-job' }, provider: null });
+    let boundRunId;
+    h.runtime.validateRhinoCleanup = (run, { starting }) => run.projectId === 'a' && run.source?.hunyuanJobId === 'fixture-job'
+        && (starting || run.id === boundRunId);
+    const id = h.runtime.startRhinoCleanup({ projectId: 'a', conversationId: 'workflow',
+        messages: [{ role: 'user', content: 'Run fixed cleanup' }], source: { hunyuanJobId: 'fixture-job' } }).id;
+    boundRunId = id;
     const result = await h.idle(id);
     assert.equal(result.status, 'completed');
     assert.equal(result.taskKind, 'rhino');
     assert.deepEqual(stages, ['inspect', 'clean', 'quad', 'validate']);
     assert.equal(h.requests.length, 0);
+    assert.equal(h.providerBindings.length, 0);
+    assert.deepEqual(h.disk(id).toolAllowlist, ['flow_canvas.rhino.cleanup']);
     assert.match(result.outputText, /200/);
 });
 
 test('legacy retry on a Rhino tool-only failure resumes into the bound cleanup path', async t => {
     const seed = recoveryRun({}, { status: 'failed', plan: null, steps: [], pendingCalls: [], source: { hunyuanJobId: 'fixture-job' } });
     const h = harness(t, { initialRuns: [seed] });
+    h.runtime.validateRhinoCleanup = run => run.id === seed.id && run.projectId === 'a';
     h.runtime.prepareRhinoResume = async run => { run.execution = 'rhino_cleanup'; };
     h.runtime.rhinoCleanup = async () => ({ ok: true, outputs: [{ source: { faces: 100 }, mesh: { faces: 50 } }] });
     h.runtime.retry({ runId: seed.id });
     assert.equal((await h.idle(seed.id)).status, 'completed');
+    assert.equal(h.requests.length, 0);
+});
+
+test('fixed Rhino start and recovery require a matching registered workflow job', t => {
+    const seed = recoveryRun({}, { status: 'failed', plan: null, steps: [], pendingCalls: [],
+        execution: 'rhino_cleanup', source: { hunyuanJobId: 'fixture-job' } });
+    const h = harness(t, { initialRuns: [seed] });
+    h.runtime.rhinoCleanup = () => assert.fail('Mismatched workflow must not execute');
+    h.runtime.validateRhinoCleanup = () => false;
+    assert.throws(() => h.runtime.startRhinoCleanup({ projectId: 'b', source: seed.source }), { code: 'EXTERNAL_AGENT_REQUIRED' });
+    assert.throws(() => h.runtime.resume({ runId: seed.id }), { code: 'EXTERNAL_AGENT_REQUIRED' });
+    assert.throws(() => h.runtime.retry({ runId: seed.id }), { code: 'EXTERNAL_AGENT_REQUIRED' });
     assert.equal(h.requests.length, 0);
 });
 

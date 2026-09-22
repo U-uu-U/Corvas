@@ -1,0 +1,16 @@
+.external-handoff { margin: 0 18px 22px; border-top: 1px solid var(--border-color); padding-top: 14px; }
+.external-handoff h3 { margin: 0 0 12px; font-size: 12px; font-weight: 500; }
+.external-handoff-form { display: grid; gap: 8px; }
+.external-handoff-form textarea { box-sizing: border-box; width: 100%; min-height: 70px; resize: vertical; padding: 8px; border: 1px solid var(--border-color); border-radius: 5px; background: var(--bg-color); color: var(--text-primary); font: inherit; font-size: 12px; line-height: 1.5; }
+.external-handoff-form button { justify-self: start; padding: 7px 12px; border: 1px solid var(--border-color); border-radius: 5px; background: var(--hover-bg); color: var(--text-primary); font: inherit; font-size: 11px; cursor: pointer; }
+.external-handoff-message, .external-handoff-empty { margin: 10px 0; font-size: 11px; line-height: 1.6; color: var(--text-secondary); overflow-wrap: anywhere; }
+.external-handoff-message:empty { display: none; }
+.external-handoff-task { min-width: 0; padding: 12px 0; border-bottom: 1px solid var(--border-color); }
+.external-handoff-task-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.external-handoff-task-head strong { font-size: 11px; font-weight: 500; }
+.external-handoff-task-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.external-handoff-task-actions button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border-color); border-radius: 5px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.external-handoff-task-actions button:hover:not(:disabled) { background: var(--hover-bg); color: var(--text-primary); }
+.external-handoff-task p { margin: 6px 0 0; font-size: 11px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); }
+.external-handoff-task .external-handoff-warning { color: var(--text-primary); }
+.external-handoff button:disabled { opacity: 0.5; cursor: default; }

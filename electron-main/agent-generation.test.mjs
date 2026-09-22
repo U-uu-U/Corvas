@@ -82,6 +82,17 @@ async function setup(t, { items = [op('image')], connections = [], providers, mo
 }
 
 describe('AgentGeneration planning', () => {
+    test('remote visibility hides new model choices without deleting provider bindings', async t => {
+        const p = { ...provider('videos', 'video', 'seedance-2.5-pro'), endpoint: 'https://art.ravenhash.org/v1' };
+        const h = await setup(t, { providers: [p] });
+        const entry = h.capabilities.current.models.find(entry => entry.id === 'ravenhash-video.seedance-2.5-pro');
+        entry.presentation.visible = false;
+        assert.deepEqual(h.generation.listModels(), []);
+        assert.equal(h.generation.resolveProvider({ providerId: 'videos' }, 'video').model, p.model);
+        entry.presentation.visible = true;
+        assert.equal(h.generation.listModels().length, 1);
+    });
+
     test('Seedance Pro estimates per-second sale using approved duration and expanded count', async t => {
         const p = { ...provider('videos', 'video', 'seedance-2.5-pro'), endpoint: 'https://art.ravenhash.org/v1' };
         const h = await setup(t, { providers: [p], items: [op('video', 'video', { count: 2, duration: 5 })] });
@@ -400,6 +411,46 @@ describe('AgentGeneration planning', () => {
 });
 
 describe('AgentGeneration effective CONFIG', () => {
+    test('scoped upgrade preserves legacy default models and out-of-scope accounts without switching a removed model', async t => {
+        const video = { ...provider('videos', 'video', 'saved-model'), endpoint: 'https://relay.example/v1' };
+        const modelConfig = { schemaVersion: 1, catalogMode: 'remote',
+            catalogScope: { hosts: ['relay.example'], kinds: ['video'] },
+            models: ['new-first', 'saved-model'].map(model => ({ id: model, kind: 'video',
+                match: { model: [`^${model}$`] }, catalog: { model, hosts: ['relay.example'] } })) };
+        const h = await setup(t, { providers: [video, provider('text', 'text', 'gpt-5'),
+            provider('custom', 'video', 'custom-video'), provider('images', 'image', 'gpt-image-2')], modelConfig });
+        h.config.globalConfig.textProviderId = 'text';
+        assert.equal(h.generation.resolveProvider({}, 'video', modelConfig).model, 'saved-model');
+        assert.equal(h.generation.resolveProvider({ providerId: 'videos' }, 'video', modelConfig).model, 'saved-model');
+        assert.equal(h.generation.resolveProvider({}, 'text', modelConfig).model, 'gpt-5');
+        modelConfig.models.pop();
+        assert.throws(() => h.generation.resolveProvider({}, 'video', modelConfig), { code: 'PROVIDER_REQUIRED' });
+        h.capabilities.current.models = [];
+        assert.deepEqual(h.generation.listModels().map(p => p.model), ['custom-video', 'gpt-image-2']);
+        const binding = { providerId: 'videos::model:saved-model', sourceProviderId: 'videos', model: 'saved-model' };
+        assert.equal(h.generation.resolveProvider(binding, 'video', null).model, 'saved-model');
+        assert.equal(h.generation.resolveProvider({ providerId: 'custom', sourceProviderId: 'custom', model: 'custom-old' },
+            'video', modelConfig).model, 'custom-old');
+    });
+
+    test('managed catalogs add models absent from saved account lists and preserve recovery bindings', async t => {
+        const p = provider('videos', 'video', '');
+        p.models = [];
+        p.endpoint = 'https://relay.example/v1';
+        const modelConfig = { schemaVersion: 1, catalogMode: 'remote', models: [{ id: 'remote-video',
+            kind: 'video', match: { model: ['^remote-video$'] },
+            catalog: { model: 'remote-video', hosts: ['relay.example'] },
+            options: { duration: { type: 'fixed', value: 8 } }, presentation: { label: 'Remote Video' } }] };
+        const h = await setup(t, { providers: [p], modelConfig });
+        assert.deepEqual(h.generation.listModels().map(model => model.model), ['remote-video']);
+        const binding = { providerId: 'videos::model:remote-video', sourceProviderId: 'videos', model: 'remote-video' };
+        assert.equal(h.generation.resolveProvider(binding, 'video', modelConfig).endpoint, p.endpoint);
+        h.capabilities.current.models = [];
+        assert.deepEqual(h.generation.listModels(), []);
+        assert.equal(h.generation.resolveProvider(binding, 'video', null).endpoint, p.endpoint);
+        assert.equal(h.config.providers[0].models.length, 0);
+    });
+
     const entry = (h, id) => h.capabilities.current.models.find(model => model.id === id);
     const mjProviders = [provider('images', 'image', 'mj_imagine')];
     const videoProviders = [provider('videos', 'video', 'seedance_v2.5')];

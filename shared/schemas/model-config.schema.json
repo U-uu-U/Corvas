@@ -10,13 +10,25 @@
         "revision": { "type": "integer", "minimum": 0 },
         "updatedAt": { "type": "string" },
         "source": { "type": "string" },
+        "catalogMode": { "enum": ["fallback", "remote"] },
+        "catalogScope": {
+            "type": "object", "additionalProperties": false,
+            "required": ["hosts", "kinds"],
+            "properties": {
+                "hosts": { "$ref": "#/definitions/priceHosts" },
+                "kinds": {
+                    "type": "array", "minItems": 1, "uniqueItems": true,
+                    "items": { "enum": ["image", "video", "text"] }
+                }
+            }
+        },
         "refreshIntervalMs": { "type": "integer", "minimum": 60000, "maximum": 86400000 },
         "kinds": { "$ref": "#/definitions/labels" },
         "fields": { "$ref": "#/definitions/fieldVocabulary" },
         "capabilities": { "$ref": "#/definitions/capabilityVocabulary" },
         "models": {
             "type": "array",
-            "minItems": 1,
+            "minItems": 0,
             "items": { "$ref": "#/definitions/model" }
         }
     },
@@ -168,6 +180,12 @@
                 "routeLabel": { "type": "string", "maxLength": 80 },
                 "routeGroup": { "type": "string", "maxLength": 100 },
                 "routeGroupLabel": { "type": "string", "maxLength": 100 },
+                "routeGroupDescription": { "type": "string", "maxLength": 500 },
+                "routeGroupOrder": { "type": "integer", "minimum": -100000, "maximum": 100000 },
+                "routeOrder": { "type": "integer", "minimum": -100000, "maximum": 100000 },
+                "routeGroupAlways": { "type": "boolean" },
+                "routeGroupScope": { "enum": ["provider", "catalog"] },
+                "visible": { "type": "boolean" },
                 "routeModelLabel": { "type": "string", "maxLength": 100 },
                 "recommended": { "type": "boolean" }
             }
@@ -209,6 +227,15 @@
                 "id": { "type": "string", "minLength": 1 },
                 "label": { "type": "string" },
                 "presentation": { "$ref": "#/definitions/presentation" },
+                "catalog": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["model", "hosts"],
+                    "properties": {
+                        "model": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^\\S+$" },
+                        "hosts": { "$ref": "#/definitions/priceHosts" },
+                        "enabled": { "type": "boolean" }
+                    }
+                },
                 "pricing": { "$ref": "#/definitions/pricing" },
                 "kind": { "enum": ["image", "video", "text"] },
                 "channel": { "type": "string" },

@@ -1,4 +1,4 @@
-const PRESENTATION_FIELDS = ['label', 'description', 'routeLabel', 'routeGroup', 'routeGroupLabel', 'routeModelLabel'];
+const PRESENTATION_FIELDS = ['label', 'description', 'routeLabel', 'routeGroup', 'routeGroupLabel', 'routeGroupDescription', 'routeModelLabel'];
 const PRICE_UNITS = { request: '次', image: '张', second: '秒' };
 
 // Display metadata never changes the wire model, endpoint or account binding.
@@ -11,7 +11,16 @@ export function getModelPresentation(entry, provider = {}) {
             if (field !== 'label' || value) result[field] = value;
         }
     }
-    if (typeof presentation?.recommended === 'boolean') result.recommended = presentation.recommended;
+    for (const field of ['recommended', 'routeGroupAlways', 'visible']) {
+        if (typeof presentation?.[field] === 'boolean') result[field] = presentation[field];
+    }
+    for (const field of ['routeGroupOrder', 'routeOrder']) {
+        const value = presentation?.[field];
+        if (Number.isInteger(value) && value >= -100000 && value <= 100000) result[field] = value;
+    }
+    if (['provider', 'catalog'].includes(presentation?.routeGroupScope)) {
+        result.routeGroupScope = presentation.routeGroupScope;
+    }
 
     const pricing = entry?.pricing;
     let host = '';

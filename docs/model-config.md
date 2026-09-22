@@ -1,5 +1,31 @@
 # 模型能力 CONFIG（客户端）
 
+## 源码版远程目录试验
+
+后台默认进入操作模式，左侧展示与画布相同的独立模型和渠道组，右侧编辑当前条目。支持新增/复制/删除、建组/改名/移组、组内和组间排序、显隐、清空与撤销重做；表单和 JSON 模式共用同一份待发布配置。目录条目使用 `catalog: { model, hosts, enabled }` 明确声明实际模型 ID、精确 API 主机名和启用状态，不从正则猜模型 ID，也不保存 Key。
+
+`catalogMode: "remote"` 下，画布枚举 CONFIG 的目录条目，匹配已保存账号的 API 主机名及能力类型。可选的 `catalogScope: { hosts: [...], kinds: ["video"] }` 限定接管范围，范围外的文字、图片及自定义 API 保留既有模型枚举；未指定 scope 时为源码试验的全量远程模式。模型虚拟 ID 由账号 ID 与 wire model 确定，不随排序改变；托管账号的本地 `providers[].models` 不参与枚举。模型名称、分组、参数控件使用远端条目，跳过本地逐型号的 profile/group 兜底。空 `models: []` 仍保留 scope，不会恢复托管账号的内置模型；新任务不能调用已删除或 `catalog.enabled:false` 的条目，原有任务恢复保留账号绑定。旧账号 ID 按原来保存的 model 精确解析，不自动切到列表第一条。
+
+源码试验入口为 `electron scripts/config-catalog-dev.cjs`，需先启动 `127.0.0.1:15321` 的 Vite。该入口单独使用 `%APPDATA%/flow-canvas-config-lab`，复制本机已有的加密 API 账号并清空试验资料中的模型名单，保留日常资料。默认读取 `https://artconfig.ravenhash.org/config/preview`，本地联调时用 `FLOW_CANVAS_CONFIG_URL=http://127.0.0.1:18087/config` 覆盖；MCP 使用 `18766`。源码模式从空目录开始，每 10 秒刷新，只缓存同源远程目录，断网保留最近成功快照。环境开关 `FLOW_CANVAS_REMOTE_CATALOG=1` 不影响已打包安装版。
+
+远端 `/admin?channel=preview` 是源码预览的发布入口，`/admin` 管理正式配置。两个通道分别保存生效指针，共用版本记录；清空、发布和回滚源码预览不会修改正式 `/config`。旧安装版继续读取正式配置，等客户端升级后再决定是否切换目录模式。
+
+旧配置迁移脚本：`node scripts/prepare-remote-catalog.mjs --source <source.json> --output <publication.json>`。输出独立待发布文件，不改客户端默认 JSON 或 CSV；复制原能力与价格，为已有渠道补精确映射，拆分 2.0 Fast/Mini/Pro，保持山海和已停用渠道下架。文字模型未确认服务器绑定，不自动补造。已存在的 `catalog` 声明完整保留。
+
+隔离验证：设置 `FLOW_CONFIG_REMOTE_SMOKE=1` 后运行 `npm run test:model-config:smoke`。验证本地名单为空时，从远程空目录添加新模型、排序、删除、再次清空，整个过程不重载画布。后台真实发布和桌面/移动布局验证为 `configserver/admin-catalog-smoke.mjs`。均不调用付费生成。
+
+## 2026-09-22 远程展示与聊天刷新
+
+画布和侧栏通过 `resolveVideoModelProfile` 读取同一份生效 CONFIG。合并顺序是本地能力/分组兜底，然后由 CONFIG 明确声明的字段覆盖，避免本地名称和分组盖过已发布配置。默认 JSON 已同步现有推荐/备用渠道展示。
+
+`presentation` 现支持 `routeGroupDescription`、`routeGroupOrder`、`routeOrder`、`routeGroupAlways`、`routeGroupScope` 和 `visible`。排序值越小越靠前；`routeGroupScope: provider` 按账号分组，`catalog` 允许跨账号合组；`routeGroup: ""` 明确解除分组。省略字段保留兜底，明确的 `0`、`false`、空字符串保留其含义。组下小字继续显示“当前使用：xxx”，不会被组说明替换。
+
+`visible: false` 只隐藏画布、侧栏和 Agent 的候选模型，不修改用户账户、Key、已有节点绑定、历史任务或中转站计费/启用状态。真正停用新任务仍由中转站和提交守卫负责。CONFIG 不会自动创建供应商账号，也不会仅凭一个新条目扩展已保存账户的 `models` 清单。
+
+外部聊天通过 MCP 调用 `flow_canvas.model_config.get` 读取画布实际生效配置，通过 `flow_canvas.model_config.refresh` 从当前配置源立即拉取并应用。刷新结果包含生效 revision、来源、时间和错误状态；失败保留旧配置，并在 MCP 错误详情中保留状态。`flow_canvas.config.update` 仍只负责 MCP 服务设置。线上发布后调用 refresh 即可更新已展开菜单和当前模型按钮；也保留原有自动刷新。
+
+本次为客户端及 CONFIG 服务代码升级，旧安装版需要更新一次才认识新增展示字段和刷新工具。CONFIG 服务的 schema/管理表单也需同步升级；更新服务代码与发布现行 CONFIG 是两个独立操作，不能用旧种子表覆盖已发布数据。
+
 目标：把「每个模型能做什么、不能做什么、边界是多少」从散落在代码里的特判，收敛成一份
 **可从服务器更新的 JSON**，并让 UI 用它做两件事——
 
@@ -56,7 +82,7 @@ node scripts/sync-model-config.mjs --scaffold # 为表格里新增的行打印�
 - 应用内部使用默认更新源（服务端运维可切换配置内容）；
 - 显式清空 → 关闭远端更新，只用本地配置（状态卡会写「已关闭（仅用本地配置）」）。
 
-- **刷新周期**：默认 1 小时（`refreshIntervalMs`，可被服务端覆盖，客户端夹在 5 分钟 ~ 24 小时）。
+- **刷新周期**：桌面运行时固定每 10 秒检查远端更新，主进程心跳支持后台窗口。独立加载器默认 1 小时（`refreshIntervalMs`，可被服务端覆盖，客户端夹在 5 分钟 ~ 24 小时）。
 - **自动刷新**：应用启动时检查更新，之后按配置周期静默拉取；用户界面不暴露地址、版本和刷新操作。
 - **到期检查**：每 60 秒醒来判断一次是否到期，窗口重新获得焦点时也检查一次
   （Electron 会降频隐藏窗口的长定时器，用 1 小时的 `setInterval` 会漂移）。
@@ -251,7 +277,7 @@ CONFIG 变化（首次拉取成功 / 自动刷新 / 回退默认）会更新共�
 
 **改模型能力（不改客户端代码）**：登录 `https://artconfig.ravenhash.org/admin` → 在编辑器里改
 → 「校验」→「保存并应用」。服务端立刻生成一个带时间戳的新版本（`20260911T230012-r7.json`）并
-把 `current` 指针指过去，客户端在 1 小时内自动拿到。老版本自动留档；
+把 `current` 指针指过去，新版桌面客户端约 10 秒内自动拿到，旧版按原刷新周期同步。老版本自动留档；
 任意历史版本可一键「应用为现行」回滚。服务端的版本/备份/回滚语义见 `configserver/README.md`。
 
 **新增一条线路（改代码）**：先加到 `shared/model-channels.source.csv`，跑

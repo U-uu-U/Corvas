@@ -4,34 +4,47 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
+const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
 
 (async () => {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-mcp-ui-'));
     let app;
+    let page;
+    let client;
+    let originalClipboard;
     let providerCalls = 0;
     const provider = http.createServer(async (req, res) => {
         const chunks = [];
         for await (const chunk of req) chunks.push(chunk);
         const body = JSON.parse(Buffer.concat(chunks));
         providerCalls++;
-        const observed = body.messages.some(m => m.role === 'tool');
-        const tool = body.tools.find(t => t.function.description.includes('Read test scene'));
-        const message = observed ? { role: 'assistant', content: 'Read three scene objects.' }
-            : { role: 'assistant', content: '', tool_calls: [{ id: 'scene-call', type: 'function',
-                function: { name: tool.function.name, arguments: JSON.stringify({ label: 'Desktop integration' }) } }] };
+        assert.ok(body.tools.every(tool => !tool.function.name.startsWith('external_mcp_')
+            && tool.function.name !== 'flow_canvas.rhino.cleanup'));
+        const message = { role: 'assistant', content: 'External scene tasks are handled in Codex.' };
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ choices: [{ message, finish_reason: observed ? 'stop' : 'tool_calls' }] }));
+        res.end(JSON.stringify({ choices: [{ message, finish_reason: 'stop' }] }));
     });
     await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
+    const probe = http.createServer();
+    await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
+    const bridgePort = probe.address().port;
+    await new Promise(resolve => probe.close(resolve));
     try {
         await fs.mkdir(path.join(profile, 'data'));
         await fs.writeFile(path.join(profile, 'data/board.json'), JSON.stringify({ version: 1, activeGroupId: 'mcp-smoke', items: [],
             connections: [], folderGroups: [{ id: 'mcp-smoke', name: 'MCP test', savedItems: [], connections: [], folders: [], boardRevision: 0 }],
-            mcp: { enabled: false }, viewport: { x: 0, y: 0, scale: 1 } }));
+            mcp: { enabled: true, port: bridgePort }, viewport: { x: 0, y: 0, scale: 1 } }));
         const env = { ...process.env, FLOW_MCP_SMOKE_PROFILE: profile };
         delete env.ELECTRON_RUN_AS_NODE;
-        app = await electron.launch({ executablePath: require('electron'), args: [path.join(__dirname, 'mcp-client-smoke-entry.cjs')], env });
-        const page = await app.firstWindow();
+        app = await electron.launch({ executablePath: require('electron'), args: ['--disable-gpu', path.join(__dirname, 'external-handoff-smoke-entry.cjs')], env });
+        for (let attempt = 0; attempt < 100; attempt++) {
+            page = app.windows().find(window => /dist[\\/]index\.html/.test(window.url()));
+            if (page) break;
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        assert.ok(page, 'The main window must open');
+        originalClipboard = await app.evaluate(({ clipboard }) => clipboard.readText());
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         await page.waitForSelector('#agentSettingsBtn');
@@ -61,11 +74,51 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         } while (Date.now() < deadline);
         assert.equal(result.status, 'completed', result.error);
         assert.equal(result.projectId, 'mcp-smoke'); assert.equal(result.conversationId, 'mcp-smoke');
-        assert.equal(providerCalls, 2);
-        assert.equal(Object.values(result.externalCalls)[0].status, 'completed');
-        assert.match(JSON.stringify(Object.values(result.externalCalls)[0].result), /objectCount/);
+        assert.equal(providerCalls, 1);
+        assert.equal(Object.keys(result.externalCalls || {}).length, 0);
         await fs.mkdir(path.join(__dirname, '../output/playwright'), { recursive: true });
         await root.screenshot({ path: path.join(__dirname, '../output/playwright/mcp-settings-connected.png') });
+        await page.locator('#agentToggleBtn').hover();
+        await page.locator('#corvasAppLauncher [data-app=blender]').click();
+        const panel = page.locator('#blenderWorkbenchPanel');
+        await page.waitForFunction(() => document.querySelector('#blenderWorkbenchPanel').dataset.state === 'connected');
+        await panel.locator('[data-action=inspect]').click();
+        await page.waitForFunction(() => document.querySelector('#blenderWorkbenchPanel .external-handoff-task strong')?.textContent === '待 Codex 接手');
+        assert.ok(await page.locator('body').evaluate(body => body.classList.contains('blender-mode') && !body.classList.contains('agent-mode')));
+        const created = await page.evaluate(() => window.flowCanvas.handoff.list({ projectId: 'mcp-smoke', target: 'blender' }));
+        assert.equal(created.tasks.length, 1);
+        const task = created.tasks[0];
+        await panel.locator('[data-handoff-action=copy]').click();
+        const clipboard = await app.evaluate(({ clipboard }) => clipboard.readText());
+        assert.ok(clipboard.includes(task.id) && clipboard.includes('mcp-smoke'));
+        client = new Client({ name: 'codex-handoff-smoke', version: '1.0' });
+        await client.connect(new StdioClientTransport({ command: process.execPath,
+            args: [path.join(__dirname, '../mcp/flow-canvas-mcp.mjs')],
+            env: { ...process.env, FLOW_CANVAS_BRIDGE_URL: `http://127.0.0.1:${bridgePort}` }, stderr: 'pipe' }));
+        const handoff = async (action, input) => client.callTool({ name: `flow_canvas.handoff.${action}`, arguments: input });
+        const scope = { projectId: 'mcp-smoke', taskId: task.id };
+        const owner = { ...scope, clientId: 'codex-smoke' };
+        await handoff('claim', owner);
+        const discovered = JSON.parse((await handoff('tools', scope)).content[0].text);
+        const tool = discovered.tools.find(tool => tool.name === 'scene.inspect');
+        assert.ok(tool, 'Connected software tool must be exposed to the external client');
+        const call = { ...owner, serverId: tool.serverId, toolName: tool.name, binding: tool.binding,
+            requestId: 'scene-inspect-1', arguments: { label: 'External Codex' } };
+        const called = await handoff('call', call);
+        assert.match(called.content.map(block => block.text || '').join('\n'), /objectCount/);
+        assert.equal(JSON.parse((await handoff('call', call)).content[0].text).reused, true);
+        await handoff('update', { ...owner, status: 'completed', summary: '已读取 3 个场景对象' });
+        await page.waitForFunction(() => document.querySelector('#blenderWorkbenchPanel .external-handoff-task strong')?.textContent === '完成');
+        assert.equal(providerCalls, 1, 'External calls must not invoke the internal text model');
+        for (const [label, width] of [['desktop', 1280], ['compact', 900]]) {
+            await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()
+                .find(window => window.webContents.getURL().includes('index.html')).setSize(width, 800), width);
+            assert.ok(await panel.locator('.external-handoff').evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+            await panel.screenshot({ path: path.join(__dirname, `../output/playwright/external-handoff-${label}.png`) });
+        }
+        await client.close(); client = null;
+        await page.locator('#agentSettingsBtn').click();
+        await page.locator('#agentApiSettingsTab').click();
         await root.locator('[data-action=edit]').click();
         assert.equal(await root.locator('[name=env]').inputValue(), '');
         await root.locator('[name=name]').fill('Blender / Rhino');
@@ -91,11 +144,20 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await root.locator('[data-action=remove]').click();
         await page.waitForFunction(() => !document.querySelector('#mcpClientSettings [data-id]'));
         assert.deepEqual(errors, []);
-        console.log('MCP desktop smoke passed: add/connect/discover/Agent tool loop/edit/secret preservation/disable/HTTP form/error/delete');
+        console.log('MCP desktop smoke passed: internal Agent isolation; Blender UI handoff; real stdio external discovery/call/replay/status; settings edit/secret preservation/disable/error/delete.');
+    } catch (error) {
+        if (page && !page.isClosed()) {
+            console.error('MCP UI status:', await page.locator('#mcpClientSettings [role=status]').textContent().catch(() => 'unavailable'));
+            await page.screenshot({ path: path.join(__dirname, '../output/playwright/external-handoff-failure.png') }).catch(() => {});
+        }
+        throw error;
     } finally {
+        await client?.close();
+        if (app && originalClipboard !== undefined) await app.evaluate(({ clipboard }, value) => clipboard.writeText(value), originalClipboard).catch(() => {});
         await app?.close();
         provider.closeAllConnections();
         await new Promise(resolve => provider.close(resolve));
-        await fs.rm(profile, { recursive: true, force: true });
+        assert.ok(profile.startsWith(path.join(os.tmpdir(), 'flow-mcp-ui-')));
+        await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
 })().catch(error => { console.error(error); process.exitCode = 1; });

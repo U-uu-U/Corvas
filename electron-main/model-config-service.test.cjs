@@ -5,6 +5,7 @@ const path = require('node:path');
 const {
     fetchModelConfig,
     createEffectiveModelConfigReader,
+    createModelConfigSnapshotReader,
     isAllowedModelConfigUrl,
     validateModelConfig
 } = require('./model-config-service.cjs');
@@ -167,7 +168,7 @@ test('unavailable or invalid live stores never silently revert Agent to builtin 
     await assert.rejects(read(), { code: 'MODEL_CONFIG_UNAVAILABLE' });
     snapshot = { config: validConfig };
     assert.equal((await read()).revision, 7);
-    snapshot = { config: { schemaVersion: 1, models: [] } };
+    snapshot = { config: { schemaVersion: 1, models: null } };
     await assert.rejects(read(), { code: 'MODEL_CONFIG_UNAVAILABLE' });
     window = null;
     await assert.rejects(read(), { code: 'MODEL_CONFIG_UNAVAILABLE' });
@@ -179,4 +180,28 @@ test('a renderer replaced during snapshot acquisition cannot supply a stale CONF
         return { config: validConfig };
     } } };
     await assert.rejects(createEffectiveModelConfigReader({ getMainWindow: () => current })(), { code: 'MODEL_CONFIG_UNAVAILABLE' });
+});
+
+test('refresh reads back the applied revision and reports retained CONFIG on fetch failure', async t => {
+    const { createModelConfigStore } = await import('../src/model-config.js');
+    let response = { ok: true, raw: validConfig };
+    const store = createModelConfigStore({ storage: null, windowRef: null, loadRemote: async () => response });
+    t.after(() => store.stop());
+    const snapshot = () => ({ config: store.getConfig(), status: store.getStatus() });
+    const window = { isDestroyed: () => false, webContents: { executeJavaScript: code =>
+        require('node:vm').runInNewContext(code, {
+            __flowCanvasGetModelConfigSnapshot: snapshot,
+            __flowCanvasRefreshModelConfig: async () => ({ ...await store.refresh({ force: true }), ...snapshot() })
+        }) } };
+    const read = createModelConfigSnapshotReader({ getMainWindow: () => window });
+    const first = await read({ refresh: true });
+    assert.equal(first.ok, true);
+    assert.equal(first.config.revision, 7);
+    assert.equal(first.status.origin, 'remote');
+    response = { ok: false, error: 'offline' };
+    const failed = await read({ refresh: true });
+    assert.equal(failed.ok, false);
+    assert.equal(failed.error, 'offline');
+    assert.equal(failed.config.revision, 7);
+    assert.equal((await read()).status.revision, 7);
 });

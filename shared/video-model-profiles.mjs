@@ -1,8 +1,33 @@
 import { describeModelPresentation } from './model-presentation.mjs';
 
 const RAVENHASH_VIDEO_HOSTS = new Set(['art.ravenhash.org', 'cart.ravenhash.org']);
+const STARFRAME_VIDEO_HOSTS = new Set(['api.xzapi.vip', ...RAVENHASH_VIDEO_HOSTS]);
 
 export const VIDEO_MODEL_PROFILES = [
+    {
+        matchModel: /^oc-model-qbdmeb$/i,
+        label: 'dola（9图15秒）', routeLabel: 'dola',
+        ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+        resolutions: ['720p'], durations: [5, 10, 15], durationControl: 'select',
+        supportsWebSearch: false, supportsCameraFixed: false, supportsGeneratedAudio: false, supportsWatermark: false,
+        referenceLimits: { image: 10, video: 0, audio: 0 }, defaultRatio: '16:9', defaultResolution: '720p', defaultDuration: 15
+    },
+    {
+        matchModel: /^oc-model-1iq31f$/i,
+        label: 'sd-2.0（官渠）-极稳', routeLabel: 'SD2.0 官渠',
+        ratios: ['16:9', '9:16'], resolutions: ['480p', '720p', '1080p'],
+        durations: Array.from({ length: 11 }, (_, index) => index + 5), durationControl: 'slider',
+        supportsWebSearch: false, supportsCameraFixed: false, supportsGeneratedAudio: false, supportsWatermark: false,
+        referenceLimits: { image: 9, video: 0, audio: 0 }, defaultRatio: '16:9', defaultResolution: '720p', defaultDuration: 10
+    },
+    {
+        matchModel: /^oc-model-(?:bkb50q|c6ws7e)$/i,
+        label: 'S-2.0 933',
+        ratios: ['16:9', '9:16'], resolutions: ['720p'],
+        durations: Array.from({ length: 12 }, (_, index) => index + 4), durationControl: 'slider',
+        supportsWebSearch: false, supportsCameraFixed: false, supportsGeneratedAudio: false, supportsWatermark: false,
+        defaultRatio: '16:9', defaultResolution: '720p', defaultDuration: 10
+    },
     {
         matchModel: /^seedance-2\.5-pro$/i,
         label: 'Seedance 2.5 Pro',
@@ -34,6 +59,25 @@ export const VIDEO_MODEL_PROFILES = [
         supportsGeneratedAudio: false,
         supportsWatermark: false,
         referenceLimits: { image: 30, video: 10, audio: 10 },
+        defaultRatio: '16:9',
+        resolveAdaptiveRatio: false,
+        defaultResolution: '720p',
+        defaultDuration: 4
+    },
+    {
+        matchModel: /^ch1401-sd-2\.5-720p$/i,
+        label: 'Seedance 2.5 720p（卡人脸）',
+        routeLabel: 'StarFrame CH1401',
+        faceRestriction: true,
+        ratios: ['16:9'],
+        resolutions: ['720p'],
+        durations: Array.from({ length: 27 }, (_, index) => index + 4),
+        durationControl: 'slider',
+        supportsWebSearch: false,
+        supportsCameraFixed: false,
+        supportsGeneratedAudio: false,
+        supportsWatermark: false,
+        referenceLimits: { image: 30, video: 0, audio: 0 },
         defaultRatio: '16:9',
         resolveAdaptiveRatio: false,
         defaultResolution: '720p',
@@ -196,13 +240,25 @@ export function getVideoModelProfile(provider) {
     try { host = new URL(provider.endpoint).hostname; } catch (_) { /* Unconfigured endpoint. */ }
     const cartPrice = {
         'seedance-2.5-pro': [1.25, 'second'],
+        'ch0107-sd-2.5-720p': [1.25, 'second'],
         'sd2.5': [6.86, 'request'],
         'sd2.5-route1': [6.86, 'request'],
         'seedance_v2.5': [5.72, 'request'],
         'seedance_v2.0-933': [7.43, 'request'],
         'seedance_v2.5-101010': [8, 'request'],
-        'seedance_v2.5-301010': [11.43, 'request']
+        'seedance_v2.5-301010': [11.43, 'request'],
+        'ch1401-sd-2.5-720p': [5.72, 'request']
     }[model.toLowerCase()];
+    const shanhaiPrice = {
+        'oc-model-qbdmeb': [4, 'request'],
+        'oc-model-1iq31f': [5, 'second'],
+        'oc-model-bkb50q': [7, 'request'],
+        'oc-model-c6ws7e': [7, 'request']
+    }[model.toLowerCase()];
+    if (host === 'shanhai.vnshu.cn' && shanhaiPrice) {
+        return { ...profile, price: { amount: shanhaiPrice[0], currency: 'CNY', unit: shanhaiPrice[1], kind: 'sale',
+            source: 'shanhai configured sale', updatedAt: '2026-09-22T00:00:00Z' } };
+    }
     if (host === 'cart.ravenhash.org' && cartPrice) {
         const base = getVideoModelProfile({ ...provider, endpoint: 'https://art.ravenhash.org/v1' });
         return { ...base, price: { amount: cartPrice[0], currency: 'CNY', unit: cartPrice[1], kind: 'sale',
@@ -212,9 +268,13 @@ export function getVideoModelProfile(provider) {
         return { ...profile, price: { amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
             source: 'ravenhash configured sale', updatedAt: '2026-09-20T00:00:00Z' } };
     }
-    if (/^ch0107-sd-2\.5-720p$/i.test(model) && host === 'api.xzapi.vip') return { ...profile, price: {
-        amount: 1.06, currency: 'CNY', unit: 'second', kind: 'sale',
-        source: 'user configured sale', updatedAt: '2026-09-20T12:00:00Z'
+    const starFramePrice = {
+        'ch0107-sd-2.5-720p': [1.06, 'second'],
+        'ch1401-sd-2.5-720p': [5, 'request']
+    }[model.toLowerCase()];
+    if (starFramePrice && STARFRAME_VIDEO_HOSTS.has(host)) return { ...profile, price: {
+        amount: starFramePrice[0], currency: 'CNY', unit: starFramePrice[1], kind: 'sale',
+        source: 'user configured sale', updatedAt: '2026-09-22T00:00:00Z'
     } };
     const fixedSeedance = profile.routeGroup === 'seedance25-fixed';
     if (fixedSeedance) {
@@ -248,6 +308,33 @@ export function getVideoModelGroup(provider) {
     let host = '';
     try { host = new URL(provider?.endpoint).hostname.toLowerCase(); } catch { return {}; }
     const model = String(provider?.model || '').toLowerCase();
+    const shanhaiLabels = {
+        'oc-model-qbdmeb': 'dola（9图15秒）',
+        'oc-model-1iq31f': 'sd-2.0（官渠）-极稳',
+        'oc-model-bkb50q': 'S-2.0 官转933',
+        'oc-model-c6ws7e': 'S-2.0 满血933（不卡人脸）'
+    };
+    if (host === 'shanhai.vnshu.cn' && shanhaiLabels[model]) {
+        return { label: shanhaiLabels[model], routeLabel: shanhaiLabels[model], routeModelLabel: provider.model,
+            routeGroup: 'shanhai-backup-2', routeGroupLabel: '备用分组2',
+            routeGroupScope: 'catalog', routeGroupOrder: 30,
+            routeOrder: ['oc-model-qbdmeb', 'oc-model-1iq31f', 'oc-model-bkb50q', 'oc-model-c6ws7e'].indexOf(model),
+            routeGroupAlways: true, recommended: false };
+    }
+    if (STARFRAME_VIDEO_HOSTS.has(host) && model === 'ch0107-sd-2.5-720p') {
+        const label = '2.5pro 备用（满参）';
+        return { label, routeLabel: label, routeModelLabel: provider.model,
+            routeGroup: 'seedance25-backup', routeGroupLabel: 'Seedance 2.5 备用渠道',
+            routeGroupScope: 'catalog', routeGroupOrder: 20, routeOrder: 1,
+            routeGroupAlways: true, recommended: false };
+    }
+    if (STARFRAME_VIDEO_HOSTS.has(host) && model === 'ch1401-sd-2.5-720p') {
+        const label = '2.5pro 备用（卡人脸）';
+        return { label, routeLabel: label, routeModelLabel: provider.model,
+            routeGroup: 'seedance25-backup', routeGroupLabel: 'Seedance 2.5 备用渠道',
+            routeGroupScope: 'catalog', routeGroupOrder: 20, routeOrder: 2,
+            routeGroupAlways: true, recommended: false };
+    }
     const variant = /^artsdance2-0-(fast|mini|pro)-intl-260701$/.exec(model)?.[1];
     if (RAVENHASH_VIDEO_HOSTS.has(host) && variant) {
         const label = `Seedance 2.0 ${variant[0].toUpperCase()}${variant.slice(1)}`;
@@ -259,7 +346,7 @@ export function getVideoModelGroup(provider) {
     if (RAVENHASH_VIDEO_HOSTS.has(host) && model === 'sd2.5-route1') {
         return { routeGroup: 'seedance25-backup', routeGroupLabel: 'Seedance 2.5 备用渠道',
             routeLabel: 'Seedance 2.5 固定 30 秒（过人脸）', routeModelLabel: provider.model,
-            routeGroupOrder: 20, routeGroupAlways: true, recommended: false };
+            routeGroupScope: 'catalog', routeGroupOrder: 20, routeOrder: 0, routeGroupAlways: true, recommended: false };
     }
     const labels = {
         'seedance-2.5-pro': 'Seedance 2.5 Pro（满血满参）',

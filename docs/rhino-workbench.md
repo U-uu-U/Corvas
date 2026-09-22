@@ -1,13 +1,13 @@
 # Rhino 工作台
 
-右下角圆球悬停菜单中点击「Rhino」，打开连接侧栏并尝试启动或唤起 Rhino。连接成功后，Cordyceps 工具会出现在同一套 Agent MCP 客户端中，不需要再手动填写第二份配置。
+右下角圆球悬停菜单中点击「Rhino」，打开连接侧栏并尝试启动或唤起 Rhino。连接成功后，Codex 可通过 Corvas 的外部交接 MCP 调用 Cordyceps，不需要内置 Agent 或第二份软件连接配置。
 
 ## 操作
 
 - 「打开并连接」优先连接已经运行的 Cordyceps；服务未启动时，打开所选 Rhino，并通过连接脚本加载 Grasshopper 和 Cordyceps。
 - Windows 启动时先等待 Rhino 主窗口就绪，再通过 COM 执行连接脚本，避免 `/runscript` 参数中的引号转义导致脚本未执行。Rhino 明确拒绝尚未就绪的调用时延迟重试；仍在执行的脚本不会重复派发。
 - 「仅连接」只连接现有 MCP 服务，不启动软件或运行连接脚本。
-- 「预览当前模型」「整理四边面」切到 Agent，准备相应提示词并启用「Rhino 模型编辑」Skill，用户发送后才执行。已有输入内容会保留。
+- 「预览当前模型」「整理四边面」创建 Codex 交接任务，保留原项目与所选素材，不切到内置 Agent。侧栏可查看状态、复制交接指令、取消，或返回已关联的 Codex 对话。见 [MCP 外部软件连接](mcp-client.md)。
 - 在「连接设置」中选择 Rhino 版本或其他安装路径，可调整本机 MCP 地址。默认地址为 `http://127.0.0.1:26929/mcp`。
 - 如果软件启动提示或 COM 不可用阻止自动连接，可复制连接命令，在目标 Rhino 命令栏执行，然后点击「仅连接」。
 
@@ -21,9 +21,9 @@ Rhino 保持独立的软件窗口。关闭侧栏或退出 Corvas 不会关闭 Rh
 
 设置保存在应用数据目录的 `data/rhino-workbench.json`。MCP 连接复用现有加密配置和工具调用循环，默认给建模工具保留 300 秒调用超时。已有相同本机地址的 MCP 配置、凭据和自定义超时不会被覆盖。
 
-「Rhino 模型编辑」Skill 提供原 rhino-mesh-to-nurbs 流程的清理和 QuadRemesh 指引：先读取场景和选择，复制后清理并四边面重拓扑，保留原件与材质，按模型确定密度和对称轴。默认不转 NURBS、不清空 Grasshopper。该 Skill 定义在 `shared/rhino-model-skill.mjs`，供面板入口和混元模型自动传递共同使用。
+「Rhino 模型编辑」Skill 定义在 `shared/rhino-model-skill.mjs`，供混元固定整理流程使用，已从普通内部 Agent 的 Skill 选项移除。工作台自由建模任务由 Codex 读取真实场景后执行。
 
-混元窗口的新几何生成任务可按 Agent 的「自动 / 手动」模式发送到 Rhino，详见 [混元账号说明](hunyuan-accounts.md)。自动模式生成完成即下载、导入并启动整理；手动模式由外部 Codex 读取 MCP 状态，在对话内确认后调用 `workflow.confirm`。导入脚本记录新增网格 ID，整理任务不依赖当前选择。截图进入 Agent 工具结果，不代表已经创建了画布素材节点。
+混元窗口的新几何生成任务按独立工作流模式发送到 Rhino，详见 [混元账号说明](hunyuan-accounts.md)。Codex 通过 `workflow.list` 读取模式，按用户要求用 `workflow.configure` 设为 `auto/ask`。自动模式生成完成即下载、导入并启动整理；手动模式在外部对话确认后调用 `workflow.confirm`。导入脚本记录新增网格 ID，整理任务不依赖当前选择。截图进入 MCP 工具结果，不代表已经创建了画布素材节点。
 
 混元窗口与画布不再显示工作流浮层。当前预览模型（包括历史结果）由 Codex 通过 `workflow.sources/run` 读取并提交；状态、恢复及取消同样通过 MCP 处理，无需等待新的生成事件。
 
@@ -46,4 +46,4 @@ node --test electron-main/rhino-workbench.test.cjs
 node scripts/rhino-workbench-smoke.cjs
 ```
 
-桌面冒烟默认使用模拟 MCP 和模拟文字模型。设置 `FLOW_RHINO_SMOKE_LIVE=1` 可连接已经启动的本机 Cordyceps，只读取场景，文字模型仍为本地模拟服务，不产生付费调用。
+桌面冒烟默认使用模拟软件 MCP，通过外部交接入口读取场景并更新任务状态，不调用文字模型。真实软件联调需单独明确运行，不由默认检查触发。

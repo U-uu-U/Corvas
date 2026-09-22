@@ -13,6 +13,9 @@
 //     因为猜错线路而误拦，也不会放过所有线路都禁止的参数。
 import { IMAGE_RESOLUTION_TIERS, inferImageResolutionTier } from './image-node-settings.js';
 import { getModelPresentation } from '../shared/model-presentation.mjs';
+import { getVideoModelProfile, getVideoModelGroup, DEFAULT_VIDEO_MODEL_PROFILE } from '../shared/video-model-profiles.mjs';
+import { DEFAULT_MODEL_CONFIG } from './model-config-default.js';
+import { isCatalogManaged, findCatalogEntry } from '../shared/model-catalog.mjs';
 
 export const MODEL_CONFIG_ISSUE_CODES = Object.freeze({
     PROMPT_REQUIRED: 'PROMPT_REQUIRED',
@@ -152,6 +155,11 @@ export function matchModelConfigEntries(config, provider = {}) {
 }
 
 export function resolveModelConfigEntry(config, provider = {}) {
+    if (isCatalogManaged(config, provider)) {
+        const entry = findCatalogEntry(config, provider);
+        return { entry, candidates: entry ? [entry] : [], ambiguous: false,
+            matched: Boolean(entry), kind: entry?.kind || normalizeText(provider.kind || provider.capability) };
+    }
     const matches = matchModelConfigEntries(config, provider);
     if (!matches.length) {
         return { entry: null, candidates: [], ambiguous: false, matched: false, kind: normalizeText(provider.kind || provider.capability) };
@@ -530,6 +538,10 @@ function collectEntryIssues(config, entry, request) {
 export function validateModelRequest(options = {}) {
     const { config, provider = {}, fields = {}, features = {}, references = {}, prompt = '', promptResolved = true } = options;
     const resolution = resolveModelConfigEntry(config, provider);
+    if (isCatalogManaged(config, provider) && (!resolution.entry || resolution.entry.catalog.enabled === false)) {
+        return { ...resolution, ok: false, errors: [{ code: 'MODEL_NOT_IN_CATALOG', field: 'model',
+            message: `模型 ${normalizeText(provider.model) || '(未选择)'} 未在远程目录中启用，请刷新后选择模型` }], warnings: [] };
+    }
     if (!resolution.matched) {
         return {
             ok: true,
@@ -684,6 +696,24 @@ export function toImageProfileOverrides(config, entry) {
 }
 
 // Omitted metadata retains local defaults; explicit remote values replace them.
+export function resolveVideoModelProfile(config, provider) {
+    if (isCatalogManaged(config, { ...provider, kind: 'video' })) {
+        const { entry } = resolveModelConfigEntry(config, { ...provider, kind: 'video' });
+        if (!entry) return null;
+        return mergeVideoProfile({ ...DEFAULT_VIDEO_MODEL_PROFILE, label: entry.label || provider.model,
+            referenceLimits: { image: 0, video: 0, audio: 0 } }, toVideoProfileOverrides(config, entry, provider));
+    }
+    const base = getVideoModelProfile(provider);
+    if (!base) return null;
+    const scoped = { ...provider, kind: 'video' };
+    const { entry: builtin } = resolveModelConfigEntry(DEFAULT_MODEL_CONFIG, scoped);
+    const fallback = mergeVideoProfile({ ...base, ...getVideoModelGroup(provider) },
+        toVideoProfileOverrides(DEFAULT_MODEL_CONFIG, builtin, provider));
+    const { entry } = resolveModelConfigEntry(config, scoped);
+    return mergeVideoProfile(fallback,
+        toVideoProfileOverrides(config, entry, provider));
+}
+
 export function mergeVideoProfile(baseProfile, overrides) {
     if (!overrides) return baseProfile;
     if (!baseProfile) return overrides;

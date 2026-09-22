@@ -40,6 +40,17 @@ function readJson(filePath) {
 
 const AUDIT_LIMIT = 300;
 
+export function normalizeConfigChannel(channel = 'stable') {
+    if (channel === 'stable' || channel === 'preview') return channel;
+    throw new Error('配置通道必须是 stable 或 preview');
+}
+
+function channelFields(channel) {
+    return normalizeConfigChannel(channel) === 'preview'
+        ? { pointer: 'preview', appliedAt: 'previewAppliedAt' }
+        : { pointer: 'current', appliedAt: 'appliedAt' };
+}
+
 export function createConfigStore({ dataDir, seedPath = '', now = () => new Date(), logger = console } = {}) {
     if (!dataDir) throw new Error('createConfigStore 需要 dataDir');
     const configsDir = path.join(dataDir, 'configs');
@@ -47,10 +58,12 @@ export function createConfigStore({ dataDir, seedPath = '', now = () => new Date
 
     function readState() {
         const state = readJson(statePath);
-        if (!state || typeof state !== 'object') return { current: '', appliedAt: '', audit: [] };
+        if (!state || typeof state !== 'object') return { current: '', appliedAt: '', preview: '', previewAppliedAt: '', audit: [] };
         return {
             current: typeof state.current === 'string' ? state.current : '',
             appliedAt: typeof state.appliedAt === 'string' ? state.appliedAt : '',
+            preview: typeof state.preview === 'string' ? state.preview : '',
+            previewAppliedAt: typeof state.previewAppliedAt === 'string' ? state.previewAppliedAt : '',
             audit: Array.isArray(state.audit) ? state.audit.slice(0, AUDIT_LIMIT) : []
         };
     }
@@ -106,6 +119,11 @@ export function createConfigStore({ dataDir, seedPath = '', now = () => new Date
     function ensureSeed() {
         const state = readState();
         if (state.current && fs.existsSync(path.join(configsDir, state.current))) return { seeded: false, state };
+        // Shared revisions can include empty preview catalogs; never promote one during repair.
+        if (state.preview || state.audit.some(entry => entry.channel === 'preview')) {
+            logger.warn('[configserver] 正式配置指针失效；存在源码预览版本，请在管理面板明确恢复正式版本');
+            return { seeded: false, state };
+        }
         if (listNames().length) {
             const latest = listNames().at(-1);
             state.current = latest;
@@ -143,7 +161,7 @@ export function createConfigStore({ dataDir, seedPath = '', now = () => new Date
                 config = file.config;
                 size = Buffer.byteLength(file.text, 'utf8');
             } catch (_) {
-                return { name, broken: true, revision: null, modelCount: 0, size: 0, current: name === state.current };
+                return { name, broken: true, revision: null, modelCount: 0, size: 0, current: name === state.current, preview: name === state.preview };
             }
             return {
                 name,
@@ -154,16 +172,18 @@ export function createConfigStore({ dataDir, seedPath = '', now = () => new Date
                 modelCount: Array.isArray(config?.models) ? config.models.length : 0,
                 size,
                 mtimeMs: fs.statSync(versionPath(name)).mtimeMs,
-                current: name === state.current
+                current: name === state.current,
+                preview: name === state.preview
             };
         });
     }
 
-    function current() {
+    function current(channel = 'stable') {
+        const fields = channelFields(channel);
         const state = readState();
-        if (!state.current) return null;
+        if (!state[fields.pointer]) return null;
         try {
-            return { ...readConfigFile(state.current), appliedAt: state.appliedAt };
+            return { ...readConfigFile(state[fields.pointer]), appliedAt: state[fields.appliedAt] };
         } catch (_) {
             return null;
         }
@@ -175,7 +195,8 @@ export function createConfigStore({ dataDir, seedPath = '', now = () => new Date
      * @param {{ actor?: string, apply?: boolean, note?: string, source?: string }} options
      *   revision / updatedAt / source 由服务端盖章，避免管理员手改导致客户端版本号混乱。
      */
-    function save(config, { actor = 'admin', apply = true, note = '', source = 'server:artconfig.ravenhash.org' } = {}) {
+    function save(config, { actor = 'admin', apply = true, note = '', source = 'server:artconfig.ravenhash.org', channel = 'stable' } = {}) {
+        const fields = channelFields(channel);
         const date = now();
         const revision = maxRevision() + 1;
         const stamped = {
@@ -190,27 +211,28 @@ export function createConfigStore({ dataDir, seedPath = '', now = () => new Date
 
         const state = readState();
         if (apply) {
-            state.current = name;
-            state.appliedAt = date.toISOString();
+            state[fields.pointer] = name;
+            state[fields.appliedAt] = date.toISOString();
         }
-        writeState(audit(state, apply ? 'save+apply' : 'save', { name, revision, actor, note }));
-        return { name, revision, applied: apply, config: stamped };
+        writeState(audit(state, apply ? 'save+apply' : 'save', { name, revision, actor, note, channel }));
+        return { name, revision, applied: apply, config: stamped, channel };
     }
 
     // 「一键应用老的到现行」：只改指针，不碰文件内容。
-    function apply(name, { actor = 'admin', note = '' } = {}) {
+    function apply(name, { actor = 'admin', note = '', channel = 'stable' } = {}) {
+        const fields = channelFields(channel);
         const file = readConfigFile(name); // 顺带验证文件存在且是合法 JSON
         const state = readState();
-        const previous = state.current;
-        state.current = name;
-        state.appliedAt = now().toISOString();
-        writeState(audit(state, 'apply', { name, revision: file.config?.revision ?? null, actor, note, previous }));
-        return { name, previous, revision: Number(file.config?.revision ?? 0) };
+        const previous = state[fields.pointer];
+        state[fields.pointer] = name;
+        state[fields.appliedAt] = now().toISOString();
+        writeState(audit(state, 'apply', { name, revision: file.config?.revision ?? null, actor, note, previous, channel }));
+        return { name, previous, revision: Number(file.config?.revision ?? 0), channel };
     }
 
     function remove(name, { actor = 'admin' } = {}) {
         const state = readState();
-        if (name === state.current) throw new Error('不能删除当前正在生效的版本，请先切换到其它版本');
+        if (name === state.current || name === state.preview) throw new Error('不能删除当前正在生效的版本，请先切换正式配置或源码预览到其它版本');
         const filePath = versionPath(name);
         if (!fs.existsSync(filePath)) throw new Error('版本不存在');
         fs.unlinkSync(filePath);

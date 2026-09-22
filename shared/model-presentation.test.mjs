@@ -71,6 +71,37 @@ test('unknown price clears the old sale; explicit empty route fields ungroup a m
     assert.equal(validate(config), true, JSON.stringify(validate.errors));
 });
 
+test('remote grouping preserves explicit zero, false and provider scope over local defaults', () => {
+    const defaults = { routeGroupDescription: 'Default group', routeGroupOrder: 20, routeOrder: 5,
+        routeGroupAlways: true, routeGroupScope: 'catalog', visible: true };
+    const overrides = { routeGroupDescription: '', routeGroupOrder: 0, routeOrder: -10,
+        routeGroupAlways: false, routeGroupScope: 'provider', visible: false };
+    const projected = getModelPresentation({ presentation: overrides });
+    assert.deepEqual(projected, overrides);
+    assert.deepEqual(mergeVideoProfile(defaults, projected), { ...overrides, referenceLimits: {} });
+    assert.deepEqual(getModelPresentation({ presentation: {} }), {});
+    assert.deepEqual(getModelPresentation({ presentation: {
+        routeGroupOrder: '0', routeOrder: 1.5, routeGroupAlways: 'false', routeGroupScope: '', visible: 'false'
+    } }), {});
+});
+
+test('client and server schemas accept grouping metadata and reject invalid presentation types', () => {
+    const serverSchema = JSON.parse(fs.readFileSync(new URL('../configserver/schema/model-config.schema.json', import.meta.url), 'utf8'));
+    assert.deepEqual(serverSchema, schema);
+    const config = structuredClone(DEFAULT_MODEL_CONFIG);
+    const selected = entryFor(config);
+    selected.presentation = { routeGroupDescription: 'x'.repeat(500), routeGroupOrder: -100000,
+        routeOrder: 100000, routeGroupAlways: false, routeGroupScope: 'provider', visible: false };
+    assert.equal(validate(config), true, JSON.stringify(validate.errors));
+    const valid = structuredClone(selected.presentation);
+    for (const invalid of [{ routeGroupDescription: 'x'.repeat(501) }, { routeGroupOrder: -100001 },
+        { routeOrder: 100001 }, { routeOrder: 0.5 }, { routeOrder: '0' }, { routeGroupAlways: 'false' },
+        { routeGroupScope: 'all' }, { routeGroupScope: '' }, { visible: 0 }]) {
+        selected.presentation = { ...valid, ...invalid };
+        assert.equal(validate(config), false, JSON.stringify(invalid));
+    }
+});
+
 test('currency and billing units are explicit, zero is not an unknown price', () => {
     assert.equal(formatModelPrice(sale), '¥6.5/次');
     assert.equal(formatModelPrice({ ...sale, currency: 'USD' }), 'US$6.5/次');
@@ -146,7 +177,7 @@ test('refresh, failed validation, cache restart and rollback retain usable prese
     t.after(() => store.stop());
     assert.equal((await store.refresh({ force: true })).ok, true);
     assert.equal(profileFor(store.getConfig()).price.amount, 6.5);
-    const restarted = createModelConfigStore({ storage, url: '' });
+    const restarted = createModelConfigStore({ storage, url: 'https://config.test/config' });
     t.after(() => restarted.stop());
     restarted.start({ refreshOnStart: false });
     assert.equal(profileFor(restarted.getConfig()).description, 'Remote description');

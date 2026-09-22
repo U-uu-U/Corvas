@@ -60,6 +60,15 @@ contextBridge.exposeInMainWorld('flowCanvas', {
         test: request => ipcRenderer.invoke('mcp-client:test', request),
     },
 
+    handoff: {
+        create: request => ipcRenderer.invoke('handoff:create', request),
+        list: request => ipcRenderer.invoke('handoff:list', request),
+        get: request => ipcRenderer.invoke('handoff:get', request),
+        copy: request => ipcRenderer.invoke('handoff:copy', request),
+        open: request => ipcRenderer.invoke('handoff:open', request),
+        cancel: request => ipcRenderer.invoke('handoff:cancel', request),
+    },
+
     hunyuan: {
         list: () => ipcRenderer.invoke('hunyuan:list'),
         save: account => ipcRenderer.invoke('hunyuan:save', account),
@@ -184,7 +193,13 @@ contextBridge.exposeInMainWorld('flowCanvas', {
 
     // 模型能力 CONFIG：渲染层不直接发请求，拉取与 schema 校验都在主进程完成。
     modelConfig: {
+        runtime: ipcRenderer.sendSync('model-config:runtime'),
         fetch: (payload) => ipcRenderer.invoke('model-config:fetch', payload),
+        onRefreshTick: (callback) => {
+            const handler = () => callback();
+            ipcRenderer.on('model-config:tick', handler);
+            return () => ipcRenderer.removeListener('model-config:tick', handler);
+        },
     },
 
     // 网页图片摘取

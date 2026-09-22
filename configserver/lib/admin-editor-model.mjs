@@ -1,10 +1,23 @@
+import { applyCatalogFields } from './admin-catalog-model.mjs';
+
 export const DISPLAY_FIELDS = [
     { key: 'label', label: '显示名称', max: 100 },
     { key: 'description', label: '模型简介', max: 500, multiline: true },
     { key: 'routeLabel', label: '线路名称', max: 80 },
     { key: 'routeGroup', label: '线路分组 ID', max: 100 },
     { key: 'routeGroupLabel', label: '分组卡片标题', max: 100 },
+    { key: 'routeGroupDescription', label: '分组说明', max: 500, multiline: true },
     { key: 'routeModelLabel', label: '线路模型别名', max: 100 }
+];
+
+export const DISPLAY_ORDER_FIELDS = [
+    { key: 'routeGroupOrder', label: '分组排序' },
+    { key: 'routeOrder', label: '组内排序' }
+];
+const DISPLAY_BOOLEAN_FIELDS = [
+    { key: 'recommended', label: '推荐状态' },
+    { key: 'routeGroupAlways', label: '单模型保留分组' },
+    { key: 'visible', label: '模型可见性' }
 ];
 
 const PRICE_FIELDS = ['priceMode', 'hosts', 'amount', 'currency', 'unit', 'source'];
@@ -42,8 +55,8 @@ const trimmed = value => String(value ?? '').trim();
 
 export function parseEditorConfig(text) {
     const config = JSON.parse(text);
-    if (!object(config) || config.schemaVersion !== 1 || !Array.isArray(config.models) || !config.models.length) {
-        throw new Error('配置需要 schemaVersion: 1 和非空 models 数组');
+    if (!object(config) || config.schemaVersion !== 1 || !Array.isArray(config.models)) {
+        throw new Error('配置需要 schemaVersion: 1 和 models 数组');
     }
     const ids = new Set();
     for (const entry of config.models) {
@@ -98,8 +111,14 @@ export function readEditorValues(entry) {
     const display = entry.presentation || {};
     const price = entry.pricing || {};
     return {
+        catalogModel: entry.catalog?.model || '',
+        catalogHosts: Array.isArray(entry.catalog?.hosts) ? entry.catalog.hosts.join('\n') : '',
+        catalogEnabled: String(entry.catalog?.enabled !== false),
         ...Object.fromEntries(DISPLAY_FIELDS.map(({ key }) => [key, display[key] ?? ''])),
-        recommended: typeof display.recommended === 'boolean' ? String(display.recommended) : 'inherit',
+        ...Object.fromEntries(DISPLAY_ORDER_FIELDS.map(({ key }) => [key, display[key] === undefined ? '' : String(display[key])])),
+        ...Object.fromEntries(DISPLAY_BOOLEAN_FIELDS.map(({ key }) => [key,
+            typeof display[key] === 'boolean' ? String(display[key]) : 'inherit'])),
+        routeGroupScope: ['provider', 'catalog'].includes(display.routeGroupScope) ? display.routeGroupScope : 'inherit',
         priceMode: price.status || 'inherit',
         hosts: Array.isArray(price.hosts) ? price.hosts.join('\n') : '',
         amount: price.amount === undefined ? '' : String(price.amount),
@@ -240,7 +259,8 @@ function applyPricing(next, entry, values, now) {
 
 // Patch only touched controls. Unknown fields and untouched generation parameters stay intact.
 export function applyEditorValues(entry, values, touched, now = new Date().toISOString()) {
-    const next = structuredClone(entry);
+    const next = ['catalogModel', 'catalogHosts', 'catalogEnabled'].some(key => touched.has(key))
+        ? applyCatalogFields(entry, values) : structuredClone(entry);
     const display = { ...next.presentation };
     let displayChanged = false;
     for (const field of DISPLAY_FIELDS) {
@@ -251,10 +271,32 @@ export function applyEditorValues(entry, values, touched, now = new Date().toISO
         else display[field.key] = value;
         displayChanged = true;
     }
-    if (touched.has('recommended')) {
-        if (values.recommended === 'inherit') delete display.recommended;
-        else if (['true', 'false'].includes(values.recommended)) display.recommended = values.recommended === 'true';
-        else throw new Error('请选择有效的推荐状态');
+    for (const { key, label } of DISPLAY_ORDER_FIELDS) {
+        if (!touched.has(key)) continue;
+        const value = trimmed(values[key]);
+        if (!value) delete display[key];
+        else {
+            const order = Number(value);
+            if (!Number.isInteger(order) || order < -100000 || order > 100000) {
+                throw new Error(`${label}需要 -100000 到 100000 的整数`);
+            }
+            display[key] = order;
+        }
+        displayChanged = true;
+    }
+    for (const { key, label } of DISPLAY_BOOLEAN_FIELDS) {
+        if (!touched.has(key)) continue;
+        const value = trimmed(values[key]);
+        if (!value || value === 'inherit') delete display[key];
+        else if (['true', 'false'].includes(value)) display[key] = value === 'true';
+        else throw new Error(`请选择有效的${label}`);
+        displayChanged = true;
+    }
+    if (touched.has('routeGroupScope')) {
+        const scope = trimmed(values.routeGroupScope);
+        if (!scope || scope === 'inherit') delete display.routeGroupScope;
+        else if (['provider', 'catalog'].includes(scope)) display.routeGroupScope = scope;
+        else throw new Error('请选择有效的分组合并范围');
         displayChanged = true;
     }
     if (displayChanged) {

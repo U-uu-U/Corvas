@@ -7,6 +7,7 @@ const Ajv = require('ajv');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
 const { WORKFLOW_TOOL_DEFINITIONS, HUNYUAN_RHINO_WORKFLOW } = require('../shared/workflow-tools.cjs');
+const { HANDOFF_TOOL_DEFINITIONS } = require('../shared/handoff-tools.cjs');
 
 test('stdio MCP exposes and calls the shared board transaction tools', async (t) => {
     const bridgeRequests = [];
@@ -113,6 +114,45 @@ test('workflow schemas require scoped IDs and reject unsupported inputs', () => 
         ['download', 'connect', 'import', 'inspect', 'clean', 'quad', 'validate']);
 });
 
+test('model CONFIG tools read and refresh the renderer separately from MCP settings', async t => {
+    const requests = [];
+    const bridge = http.createServer(async (req, res) => {
+        const body = await readJson(req);
+        requests.push({ method: req.method, path: req.url, body });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, status: { revision: 123, origin: 'remote' } }));
+    });
+    await listen(bridge);
+    t.after(() => closeServer(bridge));
+    const client = spawnMcpClient(t, bridge);
+    const listed = await client.request('tools/list', {});
+    const tools = listed.result.tools.filter(tool => tool.name.startsWith('flow_canvas.model_config.'));
+    assert.deepEqual(tools.map(tool => tool.name), ['flow_canvas.model_config.get', 'flow_canvas.model_config.refresh']);
+    for (const tool of tools) {
+        const response = await client.request('tools/call', { name: tool.name, arguments: {} });
+        assert.equal(JSON.parse(response.result.content[0].text).status.revision, 123);
+    }
+    assert.deepEqual(requests.map(({ method, path }) => ({ method, path })), [
+        { method: 'GET', path: '/model-config' }, { method: 'POST', path: '/model-config/refresh' }
+    ]);
+});
+
+test('model CONFIG refresh errors retain the applied revision through stdio', async t => {
+    const status = { revision: 123, origin: 'cache', lastError: 'offline' };
+    const bridge = http.createServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'offline', code: 'MODEL_CONFIG_REFRESH_FAILED',
+            details: { status } }));
+    });
+    await listen(bridge);
+    t.after(() => closeServer(bridge));
+    const response = await spawnMcpClient(t, bridge).request('tools/call', {
+        name: 'flow_canvas.model_config.refresh', arguments: {}
+    });
+    assert.equal(response.error.data.code, 'MODEL_CONFIG_REFRESH_FAILED');
+    assert.deepEqual(response.error.data.details.status, status);
+});
+
 test('stdio MCP exposes workflows and forwards them directly to workflow routes', async t => {
     const requests = [];
     const bridge = http.createServer(async (req, res) => {
@@ -133,6 +173,7 @@ test('stdio MCP exposes workflows and forwards them directly to workflow routes'
     const inputs = {
         list: {},
         get: { workflowId: 'hunyuan-rhino-cleanup' },
+        configure: { mode: 'ask' },
         sources: { accountId: 'account-1' },
         run: { workflowId: 'hunyuan-rhino-cleanup', version: 1, projectId: null,
             requestId: 'request-1', source: { accountId: 'account-1', generationId: 'a'.repeat(32) } },
@@ -150,7 +191,7 @@ test('stdio MCP exposes workflows and forwards them directly to workflow routes'
     }
     const obsolete = await client.request('tools/call', { name: 'flow_canvas.rhino.cleanup', arguments: { stage: 'quad' } });
     assert.equal(obsolete.error.code, -32602);
-    assert.equal(requests.length, 9);
+    assert.equal(requests.length, WORKFLOW_TOOL_DEFINITIONS.length);
 });
 
 test('stdio MCP preserves workflow recovery errors', async t => {
@@ -167,6 +208,32 @@ test('stdio MCP preserves workflow recovery errors', async t => {
     assert.equal(response.error.code, -32000);
     assert.deepEqual(response.error.data, { status: 409, code: 'WORKFLOW_CONFLICT',
         details: { jobId: 'b'.repeat(32), recovery: 'Use the original request parameters' } });
+});
+
+test('stdio handoff tools bypass internal Agent and preserve native visual tool results', async t => {
+    const requests = [];
+    const image = { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' };
+    const bridge = http.createServer(async (req, res) => {
+        requests.push({ path: req.url, body: await readJson(req) });
+        const result = req.url.endsWith('.call') ? { taskId: 'handoff-1', requestId: 'call-1', status: 'completed',
+            result: { content: [{ type: 'text', text: 'Three scene objects' }, image] } } : { tasks: [] };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, result }));
+    });
+    await listen(bridge);
+    t.after(() => closeServer(bridge));
+    const client = spawnMcpClient(t, bridge);
+    const listed = await client.request('tools/list', {});
+    assert.deepEqual(listed.result.tools.filter(tool => tool.name.startsWith('flow_canvas.handoff.')), HANDOFF_TOOL_DEFINITIONS);
+    await client.request('tools/call', { name: 'flow_canvas.handoff.list', arguments: { projectId: 'project-1' } });
+    assert.equal(requests.at(-1).path, '/handoff/tools/flow_canvas.handoff.list');
+    const input = { projectId: 'project-1', taskId: 'handoff-1', clientId: 'codex-fixture',
+        serverId: 'blender-fixture', toolName: 'scene.inspect', binding: 'fixture-binding', requestId: 'call-1', arguments: {} };
+    const result = await client.request('tools/call', { name: 'flow_canvas.handoff.call', arguments: input });
+    assert.deepEqual(requests.at(-1), { path: '/handoff/tools/flow_canvas.handoff.call', body: input });
+    assert.deepEqual(result.result.content.slice(1), [{ type: 'text', text: 'Three scene objects' }, image]);
+    assert.equal(JSON.parse(result.result.content[0].text).taskId, 'handoff-1');
+    assert.ok(requests.every(request => !request.path.startsWith('/agent/')));
 });
 
 function spawnMcpClient(t, bridge) {

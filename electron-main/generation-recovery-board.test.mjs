@@ -38,7 +38,7 @@ for (const kind of ['image', 'video']) {
         assert.deepEqual(actual, expected);
         assert.deepEqual([actual.width, actual.height], kind === 'image' ? [264, 132] : [320, 160]);
         assert.deepEqual(actual.resultItems.map(item => item.candidateIndex), [1, 2, 3, 4]);
-        assert.deepEqual(actual.generation.references, [{ filePath: '/reference.png' }]);
+        assert.deepEqual(actual.generation.references, [{ filePath: '/reference.png', mediaType: 'image' }]);
         assert.equal(actual.runError, '');
         await h.bridge.attachRecoveredGeneration(h.request, h.result);
         assert.deepEqual(h.board.readProject('original').items[0], actual);
@@ -98,4 +98,38 @@ test('task-ID recovery preserves the raw draft and reference bindings on new nod
     assert.deepEqual(node.generation.promptDraftConfig, request.promptDraftConfig);
     assert.deepEqual(node.generation.referenceBindings, request.referenceBindings);
     assert.equal(node.generation.requestPrompt, 'expanded provider request');
+});
+
+test('video recovery retains original media identities and fills references missing from older bindings', async () => {
+    const { bridge, board, request, result } = setup();
+    await board.updateProject('original', project => { project.items[0].nodeType = 'video'; });
+    request.kind = 'video';
+    request.sourcePaths = ['/cache/picture-small.png'];
+    request.params = { videoSourcePaths: ['/motion.mp4'], audioSourcePaths: ['/narration.wav'] };
+    request.referenceBindings = [
+        { position: 1, typePosition: 1, mediaType: 'image', sourceNodeId: 'picture', sourceNodeIds: ['picture'], filePath: '/picture.png' },
+        { position: 2, typePosition: 1, mediaType: 'video', sourceNodeId: 'motion', sourceNodeIds: ['motion'], filePath: '/motion.mp4' }
+    ];
+    request.targetSignature = bridge.captureRecoveryTarget(request);
+    await bridge.attachRecoveredGeneration(request, result);
+    assert.deepEqual(board.readProject('original').items[0].generation.references, [
+        { filePath: '/picture.png', mediaType: 'image', itemId: 'picture', sourceNodeId: 'picture', sourceNodeIds: ['picture'] },
+        { filePath: '/motion.mp4', mediaType: 'video', itemId: 'motion', sourceNodeId: 'motion', sourceNodeIds: ['motion'] },
+        { filePath: '/narration.wav', mediaType: 'audio' }
+    ]);
+});
+
+test('legacy video recovery preserves image, video, and audio paths without reference bindings', async () => {
+    const { bridge, board, request, result } = setup();
+    await board.updateProject('original', project => { project.items[0].nodeType = 'video'; });
+    request.kind = 'video';
+    request.sourcePaths = ['/picture.png'];
+    request.params = { videoSourcePaths: ['/motion.mp4'], audioSourcePaths: ['/narration.wav'] };
+    request.targetSignature = bridge.captureRecoveryTarget(request);
+    await bridge.attachRecoveredGeneration(request, result);
+    assert.deepEqual(board.readProject('original').items[0].generation.references, [
+        { filePath: '/picture.png', mediaType: 'image' },
+        { filePath: '/motion.mp4', mediaType: 'video' },
+        { filePath: '/narration.wav', mediaType: 'audio' }
+    ]);
 });

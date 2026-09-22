@@ -7,8 +7,11 @@ const sharp = require('sharp');
 const { app, net } = require('electron');
 const { PlanService, DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
 const { WORKFLOW_TOOL_DEFINITIONS } = require('../shared/workflow-tools.cjs');
+const { HANDOFF_TOOL_DEFINITIONS } = require('../shared/handoff-tools.cjs');
+const { createModelConfigSnapshotReader } = require('./model-config-service.cjs');
 const { isGlobalAiOpcModel, buildGlobalAiOpcBody, GlobalAiOpcAssets, LIMITS: GLOBALAIOPC_LIMITS } = require('./globalaiopc-video.cjs');
-const { isStarFrameModel, buildStarFrameBody, starFrameContentUrl, starFrameDownloadRequest, STARFRAME_LIMITS } = require('./starframe-video.cjs');
+const { isStarFrameModel, buildStarFrameBody, starFrameContentUrl, starFrameDownloadRequest, starFrameLimits } = require('./starframe-video.cjs');
+const { isShanhaiEndpoint, isShanhaiModel, shanhaiReferenceLimits, generateShanhaiVideo, resumeShanhaiVideo } = require('./shanhai-video.cjs');
 const {
     appendMidjourneyParameters,
     buildImageEditMultipart,
@@ -120,6 +123,7 @@ const RAVENHASH_IMAGE_SIZE_OPTIONS = [
     '2160x3840'
 ];
 const BOARD_TOOL_REQUEST_TIMEOUT_MS = 20_000;
+const GENERATION_MODEL_CONFIG = Symbol('generation-model-config');
 
 function generationCanceledError() {
     const error = new Error('生成任务已中断');
@@ -165,6 +169,8 @@ const ROUTE_TO_TOOL = {
     'GET /health': 'flow_canvas.health',
     'GET /config': 'flow_canvas.config.get',
     'PATCH /config': 'flow_canvas.config.update',
+    'GET /model-config': 'flow_canvas.model_config.get',
+    'POST /model-config/refresh': 'flow_canvas.model_config.refresh',
     'GET /context': 'flow_canvas.context.get_active_group',
     'GET /plans': 'flow_canvas.plan.list',
     'POST /plans': 'flow_canvas.plan.create',
@@ -193,6 +199,7 @@ const MANAGEMENT_TOOL_NAMES = [
     'flow_canvas.config.update'
 ];
 const WORKFLOW_TOOL_NAMES = new Set(WORKFLOW_TOOL_DEFINITIONS.map(tool => tool.name));
+const HANDOFF_TOOL_NAMES = new Set(HANDOFF_TOOL_DEFINITIONS.map(tool => tool.name));
 const KNOWN_TOOL_NAMES = new Set([
     ...Object.values(ROUTE_TO_TOOL),
     ...DEFAULT_MCP_CONFIG.allowedTools
@@ -202,6 +209,7 @@ class FlowCanvasBridge {
     constructor({ store, getMainWindow, getDefaultSaveFolder, getFallbackSaveDir, notifyRenderer, notifyTaskSubmitted, notifyTaskCompleted, notifyVideoProgress, registerMediaFile, boardToolRequestTimeoutMs, recoveryDirectory }) {
         this.store = store;
         this.getMainWindow = getMainWindow;
+        this.readModelConfigSnapshot = createModelConfigSnapshotReader({ getMainWindow });
         this.getDefaultSaveFolder = getDefaultSaveFolder;
         this.getFallbackSaveDir = getFallbackSaveDir;
         this.notifyRenderer = notifyRenderer;
@@ -575,6 +583,16 @@ class FlowCanvasBridge {
     }
 
     _matchRoute(method, pathname) {
+        if (method === 'POST' && pathname.startsWith('/handoff/tools/')) {
+            const toolName = decodeURIComponent(pathname.slice('/handoff/tools/'.length));
+            if (!HANDOFF_TOOL_NAMES.has(toolName)) return null;
+            return { toolName, params: {}, handler: async (_, body) => {
+                if (!this.handoffExecutor) {
+                    throw createBridgeError('TOOL_UNAVAILABLE', 'External handoff service unavailable', { toolName });
+                }
+                return { result: await this.handoffExecutor(toolName, body) };
+            } };
+        }
         if (method === 'POST' && pathname.startsWith('/workflow/tools/')) {
             const toolName = decodeURIComponent(pathname.slice('/workflow/tools/'.length));
             if (!WORKFLOW_TOOL_NAMES.has(toolName)) return null;
@@ -587,7 +605,7 @@ class FlowCanvasBridge {
         }
         if (method === 'POST' && pathname.startsWith('/agent/tools/')) {
             const toolName = decodeURIComponent(pathname.slice('/agent/tools/'.length));
-            if (!KNOWN_TOOL_NAMES.has(toolName) || WORKFLOW_TOOL_NAMES.has(toolName)) return null;
+            if (!KNOWN_TOOL_NAMES.has(toolName) || WORKFLOW_TOOL_NAMES.has(toolName) || HANDOFF_TOOL_NAMES.has(toolName)) return null;
             return { toolName, params: {}, handler: async (_, body) => {
                 if (!this.agentExecutor) throw new Error('Agent runtime unavailable');
                 return { result: await this.agentExecutor(toolName, body) };
@@ -597,6 +615,8 @@ class FlowCanvasBridge {
             ['GET', /^\/health$/, ROUTE_TO_TOOL['GET /health'], () => this._health()],
             ['GET', /^\/config$/, ROUTE_TO_TOOL['GET /config'], () => this._getConfig()],
             ['PATCH', /^\/config$/, ROUTE_TO_TOOL['PATCH /config'], (_, body) => this._updateConfig(body)],
+            ['GET', /^\/model-config$/, ROUTE_TO_TOOL['GET /model-config'], () => this._modelConfig(false)],
+            ['POST', /^\/model-config\/refresh$/, ROUTE_TO_TOOL['POST /model-config/refresh'], () => this._modelConfig(true)],
             ['GET', /^\/context$/, ROUTE_TO_TOOL['GET /context'], () => this._context()],
             ['GET', /^\/plans$/, ROUTE_TO_TOOL['GET /plans'], () => this._listPlans()],
             ['POST', /^\/plans$/, ROUTE_TO_TOOL['POST /plans'], (_, body) => this._createPlan(body)],
@@ -668,6 +688,14 @@ class FlowCanvasBridge {
                 allowedTools: [...this.allowedTools]
             }
         };
+    }
+
+    async _modelConfig(refresh) {
+        const snapshot = await this.readModelConfigSnapshot({ refresh });
+        const success = !refresh || snapshot.ok === true;
+        return { ...snapshot, success, ...(!success ? {
+            code: 'MODEL_CONFIG_REFRESH_FAILED', details: { status: snapshot.status }
+        } : {}) };
     }
 
     _getConfig() {
@@ -808,6 +836,12 @@ class FlowCanvasBridge {
         if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
             throw new Error(`File does not exist: ${filePath}`);
         }
+        if (Object.hasOwn(body, 'projectId')) {
+            if (!this.projectItemAdder) throw createBridgeError('TOOL_UNAVAILABLE', 'Project board service unavailable');
+            const item = await this.projectItemAdder(body.projectId, project => addBoardItem(project, filePath, body));
+            this.registerMediaFile?.(filePath);
+            return { item, projectId: body.projectId };
+        }
         const { data } = this._loadWithPlanService();
         const item = addBoardItem(data, filePath, body);
         this._saveAndNotify(data, 'mcp:item-added');
@@ -884,11 +918,35 @@ class FlowCanvasBridge {
     async generateImageFromRenderer(body) {
         const existing = body?.restoreToProject && this.recoveryStore.get(body.clientTaskId);
         if (existing?.taskId || existing?.result?.filePath) return this.recoverGenerationFromRenderer({ ...body, kind: 'image' });
+        await this._generationCatalog(body, 'image');
         body = this._rememberGeneration('image', body);
         return this._runCancelableGeneration(body?.clientTaskId, async signal => {
             const result = await this._generateImageFromRenderer(body, signal);
             return this._attachRetriedGeneration('image', body, result, signal);
         });
+    }
+
+    async _generationCatalog(body, kind) {
+        const window = this.getMainWindow?.();
+        if (typeof window?.webContents?.executeJavaScript !== 'function') {
+            if (app && !app.isPackaged && process.env.FLOW_CANVAS_REMOTE_CATALOG === '1') {
+                throw createBridgeError('MODEL_CONFIG_UNAVAILABLE', '远程目录尚未就绪，请打开源码版画布');
+            }
+            return null;
+        }
+        const { config } = await this.readModelConfigSnapshot();
+        if (config.catalogMode === 'remote') {
+            const { findCatalogEntry, isCatalogManaged } = await import('../shared/model-catalog.mjs');
+            const provider = { ...body.providerConfig, kind,
+                model: body.providerConfig?.model || body.model,
+                endpoint: body.providerConfig?.endpoint || body.endpoint };
+            if (!isCatalogManaged(config, provider)) return config;
+            const entry = findCatalogEntry(config, provider);
+            if (!entry || entry.catalog.enabled === false) {
+                throw createBridgeError('MODEL_NOT_IN_CATALOG', '该模型未在远程目录中启用，请刷新后重新选择');
+            }
+        }
+        return config;
     }
 
     async _attachRetriedGeneration(kind, body, result, signal) {
@@ -1038,14 +1096,15 @@ class FlowCanvasBridge {
     async generateVideoFromRenderer(body) {
         const existing = body?.restoreToProject && this.recoveryStore.get(body.clientTaskId);
         if (existing?.taskId || existing?.result?.filePath) return this.recoverGenerationFromRenderer({ ...body, kind: 'video' });
+        const modelConfig = await this._generationCatalog(body, 'video');
         body = this._rememberGeneration('video', body);
         return this._runCancelableGeneration(body?.clientTaskId, async signal => {
-            const result = await this._generateVideoFromRenderer(body, signal);
+            const result = await this._generateVideoFromRenderer(body, signal, modelConfig);
             return this._attachRetriedGeneration('video', body, result, signal);
         });
     }
 
-    async _generateVideoFromRenderer(body, signal) {
+    async _generateVideoFromRenderer(body, signal, modelConfig) {
         throwIfGenerationCanceled(signal);
         const prompt = String(body?.prompt || '').trim();
         if (!prompt) throw new Error('\u89c6\u9891\u63d0\u793a\u8bcd\u4e0d\u80fd\u4e3a\u7a7a');
@@ -1057,12 +1116,15 @@ class FlowCanvasBridge {
         const sourceContext = collectImageSourceReferences(data, planService, body);
         const videoSourceContext = collectVideoSourceReferences(data, body.videoReferences);
         const audioSourceContext = collectAudioSourceReferences(data, body.audioReferences);
-        if ((isGlobalAiOpcModel(body?.providerConfig?.model || body?.model) || isStarFrameModel(body?.providerConfig?.model || body?.model))
+        if ((isGlobalAiOpcModel(body?.providerConfig?.model || body?.model)
+            || isStarFrameModel(body?.providerConfig?.model || body?.model)
+            || (isShanhaiEndpoint(body?.providerConfig?.endpoint) && isShanhaiModel(body?.providerConfig?.model || body?.model)))
             && [...sourceContext.missing, ...videoSourceContext.missing, ...audioSourceContext.missing].length) {
             throw new Error('参考素材不存在或格式不支持，请重新选择后再提交');
         }
         const result = await tryGenerateWithOpenAIVideo(prompt, targetDir, {
             ...body,
+            [GENERATION_MODEL_CONFIG]: modelConfig,
             signal,
             sourceReferences: sourceContext.references,
             videoReferences: videoSourceContext.references,
@@ -1313,10 +1375,9 @@ class FlowCanvasBridge {
         const providerConfig = body?.providerConfig || {};
         const apiKey = String(providerConfig.apiKey || process.env.FLOW_CANVAS_VIDEO_API_KEY || '').trim();
         const model = String(providerConfig.model || body?.model || process.env.FLOW_CANVAS_VIDEO_MODEL || '').trim();
-        const endpoint = buildVideoGenerationEndpoint(
-            providerConfig.endpoint || process.env.FLOW_CANVAS_VIDEO_ENDPOINT,
-            model
-        );
+        const rawEndpoint = providerConfig.endpoint || process.env.FLOW_CANVAS_VIDEO_ENDPOINT;
+        const isShanhai = isShanhaiEndpoint(rawEndpoint) && isShanhaiModel(model);
+        const endpoint = isShanhai ? String(rawEndpoint).trim() : buildVideoGenerationEndpoint(rawEndpoint, model);
         if (!apiKey) throw new Error('\u672a\u914d\u7f6e\u89c6\u9891 API Key');
         if (!endpoint) throw new Error('\u672a\u914d\u7f6e\u89c6\u9891 API \u5730\u5740');
 
@@ -1325,6 +1386,32 @@ class FlowCanvasBridge {
         if (!requestedTargetDir) throw new Error('\u6ca1\u6709\u53ef\u7528\u7684\u89c6\u9891\u4fdd\u5b58\u76ee\u5f55');
         const targetInfo = resolveWritableTargetDir(requestedTargetDir, this.getFallbackSaveDir?.());
         const targetDir = targetInfo.targetDir;
+        if (isShanhai) {
+            const completed = await resumeShanhaiVideo({ endpoint, providerConfig, apiKey, model, prompt,
+                taskId, targetDir, signal,
+                namingPrompt: (request, fallback) => namingPrompt(request, fallback),
+                onTaskSubmitted: event => this._rememberSubmitted(body, {
+                    clientTaskId: body.clientTaskId || null, remoteTaskId: event.taskId, targetDir, model,
+                    recovered: true, createdAt: new Date().toISOString()
+                }),
+                onDownloaded: result => this._rememberResult(body, result),
+                onProgress: progress => this.notifyVideoProgress?.({ clientTaskId: body.clientTaskId || null, ...progress })
+            });
+            throwIfGenerationCanceled(signal);
+            const resolvedTaskId = completed.taskId || taskId;
+            if (body.addToCanvas !== false) this.notifyTaskCompleted?.({ clientTaskId: body.clientTaskId, remoteTaskId: resolvedTaskId, filePath: completed.filePath });
+            return await this._commitBoardMutation(async () => {
+                const { data: latest } = this._loadWithPlanService();
+                let item = null;
+                if (body.addToCanvas !== false) item = addBoardItem(latest, completed.filePath, {
+                    x: body.x, y: body.y, width: body.canvasWidth, height: body.canvasHeight,
+                    generation: generationRecordFromRequest('video', { ...body, providerConfig: { ...providerConfig, model } }, prompt, [], { taskId: resolvedTaskId })
+                });
+                if (item) this._saveAndNotify(latest, 'mcp:video-recovered');
+                return { item, filePath: completed.filePath, provider: 'shanhai-video', taskId: resolvedTaskId,
+                    video: { url: completed.url }, targetDir, requestedTargetDir, targetDirFallback: targetInfo.fallbackReason };
+            });
+        }
         const completed = await pollOpenAiVideoTask(
             endpoint,
             apiKey,
@@ -1418,6 +1505,14 @@ class FlowCanvasBridge {
 
 function generationRecordFromRequest(kind, body = {}, prompt = '', references = [], result = {}) {
     const providerConfig = body.providerConfig || {};
+    const savedReferences = references.length ? references : [
+        ...(body.sourceReferences || (body.sourcePaths || []).map(filePath => ({ filePath, mediaType: 'image' }))),
+        ...(body.videoReferences || (body.params?.videoSourcePaths || []).map(filePath => ({ filePath, mediaType: 'video' }))),
+        ...(body.audioReferences || (body.params?.audioSourcePaths || []).map(filePath => ({ filePath, mediaType: 'audio' })))
+    ];
+    const bindings = Array.isArray(body.referenceBindings) ? body.referenceBindings : [];
+    const positions = [...new Set([...savedReferences.map((_, index) => index + 1),
+        ...bindings.map(entry => entry.position).filter(position => Number.isInteger(position) && position > 0)])].sort((a, b) => a - b);
     const model = String(providerConfig.model || body.model || '').trim();
     const baseConfig = {
         prompt: String(prompt || ''),
@@ -1464,10 +1559,15 @@ function generationRecordFromRequest(kind, body = {}, prompt = '', references = 
         model,
         providerId: providerConfig.id || null,
         sourceProviderId: providerConfig.sourceProviderId || providerConfig.id || null,
-        references: (Array.isArray(references) ? references : []).map(reference => ({
-            itemId: reference?.itemId || reference?.id || null,
-            filePath: reference?.filePath || ''
-        })),
+        references: positions.map(position => {
+            const reference = savedReferences[position - 1];
+            const binding = bindings.find(entry => entry.position === position);
+            return {
+                itemId: binding?.sourceNodeId || reference?.sourceNodeId || reference?.itemId || reference?.id || null,
+                filePath: binding?.filePath || reference?.filePath || '',
+                ...(binding?.mediaType || reference?.mediaType ? { mediaType: binding?.mediaType || reference.mediaType } : {})
+            };
+        }),
         taskId: result?.taskId || null,
         generatedAt: Date.now(),
         directWorkspace: true
@@ -2852,6 +2952,42 @@ async function uploadTemporaryReferences(
     return urls;
 }
 
+async function uploadShanhaiAudioReferences(entries, endpoint, apiKey, signal, onProgress) {
+    if (!entries.length) return [];
+    const base = new URL(String(endpoint || '').trim());
+    base.pathname = '/api/v1/uploads/audio'; base.search = ''; base.hash = '';
+    const urls = [];
+    for (let index = 0; index < entries.length; index += 1) {
+        throwIfGenerationCanceled(signal);
+        const reference = entries[index];
+        const filePath = String(reference?.filePath || '');
+        const extension = path.extname(filePath).toLowerCase();
+        if (!['.mp3', '.wav'].includes(extension)) throw new Error('Shanhai 音频参考仅支持 MP3 或 WAV');
+        const stat = await fs.promises.stat(filePath);
+        if (stat.size > 25 * 1024 * 1024) throw new Error('Shanhai 音频参考不能超过 25 MB');
+        const buffer = await fs.promises.readFile(filePath);
+        const mimeType = extension === '.wav' ? 'audio/wav' : 'audio/mpeg';
+        const form = new FormData();
+        form.append('file', new Blob([buffer], { type: mimeType }), path.basename(filePath));
+        onProgress?.({ stage: 'upload', mediaType: '参考音频', current: index + 1, total: entries.length });
+        let response;
+        try {
+            response = await net.fetch(base.toString(), { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: form, signal });
+        } catch (error) {
+            throw remoteConnectionError('上传山海音频参考', base.toString(), error);
+        }
+        const text = await response.text();
+        if (!response.ok) throw new Error('山海音频参考上传失败，请检查 API Key 和文件格式');
+        let payload;
+        try { payload = JSON.parse(text); } catch (_) { throw new Error('山海音频上传返回了无效响应'); }
+        let url;
+        try { url = new URL(String(payload?.url || '').trim()); } catch (_) { url = null; }
+        if (!url || url.protocol !== 'https:' || url.username || url.password) throw new Error('山海音频上传未返回有效 HTTPS 地址');
+        urls.push(url.toString());
+    }
+    return urls;
+}
+
 async function uploadVideoReferencesOrUseOriginals(
     entries,
     labelPrefix,
@@ -3374,21 +3510,21 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         const providerConfig = options.providerConfig || {};
         const apiKey = String(providerConfig.apiKey || process.env.FLOW_CANVAS_VIDEO_API_KEY || '').trim();
         const model = String(providerConfig.model || options.model || process.env.FLOW_CANVAS_VIDEO_MODEL || 'doubao-seedance-2-0').trim();
-        const endpoint = buildVideoGenerationEndpoint(
-            providerConfig.endpoint || process.env.FLOW_CANVAS_VIDEO_ENDPOINT,
-            model
-        );
+        const rawEndpoint = providerConfig.endpoint || process.env.FLOW_CANVAS_VIDEO_ENDPOINT;
+        const isShanhai = isShanhaiEndpoint(rawEndpoint) && isShanhaiModel(model);
+        const endpoint = isShanhai ? String(rawEndpoint).trim() : buildVideoGenerationEndpoint(rawEndpoint, model);
         if (!apiKey) return { success: false, error: '\u672a\u914d\u7f6e\u89c6\u9891 API Key' };
         if (!endpoint) return { success: false, error: '\u672a\u914d\u7f6e\u89c6\u9891 API \u5730\u5740' };
 
         const { assertVideoGenerationAvailable } = await import('../shared/video-generation-availability.mjs');
-        assertVideoGenerationAvailable({ model, endpoint });
+        assertVideoGenerationAvailable({ model, endpoint }, options[GENERATION_MODEL_CONFIG]);
 
         const isMiniMaxH3 = isMiniMaxH3Model(model);
         const isSeedance = isSeedanceVideoModel(model);
         const isGlobalAiOpc = isGlobalAiOpcModel(model);
         const isStarFrame = isStarFrameModel(model);
-        const referenceLimits = isStarFrame ? STARFRAME_LIMITS : isGlobalAiOpc ? GLOBALAIOPC_LIMITS : isSeedance ? seedanceReferenceLimits(model) : { image: 9, video: 3, audio: 3 };
+        const referenceLimits = isShanhai ? shanhaiReferenceLimits(model)
+            : isStarFrame ? starFrameLimits(model) : isGlobalAiOpc ? GLOBALAIOPC_LIMITS : isSeedance ? seedanceReferenceLimits(model) : { image: 9, video: 3, audio: 3 };
         const body = { model, prompt };
         const resolution = String(options.resolution || '').trim();
         let ratio = String(options.ratio || '').trim();
@@ -3408,7 +3544,9 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             resolution: resolution || '720p', seed: options.seed ?? -1, generateAudio: options.generateAudio ?? true };
         const starFrameParams = { model, prompt, clientTaskId: options.clientTaskId, duration: options.duration ?? 4,
             resolution: resolution || '720p', aspectRatio: ratio || undefined };
-        if (isStarFrame) {
+        if (isShanhai) {
+            // Shanhai uses its own /generations contract; the final body is built after public reference URLs are ready.
+        } else if (isStarFrame) {
             Object.assign(body, buildStarFrameBody(starFrameParams));
         } else if (isGlobalAiOpc) {
             Object.assign(body, buildGlobalAiOpcBody(globalAiOpcParams));
@@ -3470,7 +3608,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 }
             }
         }
-        const uploadReferences = isGlobalAiOpc || isStarFrame ? uploadTemporaryReferences : uploadVideoReferencesOrUseOriginals;
+        const uploadReferences = isShanhai || isGlobalAiOpc || isStarFrame ? uploadTemporaryReferences : uploadVideoReferencesOrUseOriginals;
         const imageUrls = await uploadReferences(
             images.map(image => image.url),
             '参考图片',
@@ -3485,14 +3623,26 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             options.onProgress
         );
         throwIfGenerationCanceled(options.signal);
-        const referenceAudioUrls = await uploadReferences(
-            audioUrls,
-            '参考音频',
-            uploadProviders,
-            options.onProgress
-        );
+        const referenceAudioUrls = isShanhai
+            ? await uploadShanhaiAudioReferences(options.audioReferences || [], endpoint, apiKey, options.signal, options.onProgress)
+            : await uploadReferences(audioUrls, '参考音频', uploadProviders, options.onProgress);
         throwIfGenerationCanceled(options.signal);
-        if (isStarFrame) {
+        if (isShanhai) {
+            if (referenceAudioUrls.length && !imageUrls.length && !referenceVideoUrls.length) {
+                throw new Error('Shanhai 音频参考必须同时提供至少一张参考图或一段参考视频');
+            }
+            return await generateShanhaiVideo({
+                endpoint, providerConfig, apiKey, model, prompt,
+                duration: Number.isInteger(duration) ? duration : undefined,
+                ratio: ratio || '16:9', resolution: resolution || '720p',
+                imageUrls, videoUrls: referenceVideoUrls, audioUrls: referenceAudioUrls,
+                targetDir, signal: options.signal, net, fetchImpl: options.fetchImpl,
+                namingPrompt, clientTaskId: options.clientTaskId,
+                onTaskSubmitted: event => options.onTaskSubmitted?.({ ...event, model }),
+                onDownloaded: options.onDownloaded,
+                onProgress: options.onProgress
+            });
+        } else if (isStarFrame) {
             Object.assign(body, buildStarFrameBody({ ...starFrameParams, referenceImages: imageUrls,
                 referenceVideos: referenceVideoUrls, referenceAudios: referenceAudioUrls }));
         } else if (isGlobalAiOpc) {
@@ -3964,3 +4114,4 @@ module.exports = FlowCanvasBridge;
 module.exports.pollOpenAiImageTask = pollOpenAiImageTask;
 module.exports.pollOpenAiVideoTask = pollOpenAiVideoTask;
 module.exports.downloadVideoWithAutoRefresh = downloadVideoWithAutoRefresh;
+module.exports.tryGenerateWithOpenAIVideo = tryGenerateWithOpenAIVideo;

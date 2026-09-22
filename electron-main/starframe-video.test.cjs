@@ -18,6 +18,18 @@ test('StarFrame uses references mode with singular and plural fields instead of 
         { referenceVideos: Array(11).fill(media) }, { referenceAudios: Array(11).fill(media) }]) assert.throws(() => buildStarFrameBody({ ...base, ...invalid }));
 });
 
+test('CH1401 keeps its model ID and rejects unsupported audio/video references', () => {
+    const media = 'https://media.test/asset';
+    const body = buildStarFrameBody({ model: 'ch1401-sd-2.5-720p', clientTaskId: 'request-1401', prompt: 'test', duration: 4,
+        referenceImages: [media] });
+    assert.equal(body.model, 'ch1401-sd-2.5-720p');
+    assert.deepEqual(body.references, { image: media });
+    assert.throws(() => buildStarFrameBody({ model: 'ch1401-sd-2.5-720p', clientTaskId: 'request-1401', prompt: 'test',
+        referenceVideos: [media] }), /最多支持 0 个参考视频/);
+    assert.throws(() => buildStarFrameBody({ model: 'ch1401-sd-2.5-720p', clientTaskId: 'request-1401', prompt: 'test',
+        referenceAudios: [media] }), /最多支持 0 个参考音频/);
+});
+
 test('client IDs remain stable and the native content URL cannot redirect API credentials to another task or host', () => {
     const endpoint = 'https://api.xzapi.vip/v1/videos';
     for (const base of ['https://api.xzapi.vip', 'https://api.xzapi.vip/v1', endpoint]) assert.equal(buildVideoGenerationEndpoint(base, STARFRAME_MODEL), endpoint);
@@ -47,4 +59,19 @@ test('verified signed storage URLs download without a key while other metadata u
         assert.deepEqual(starFrameDownloadRequest(endpoint, 'task_1', { status: 'completed', metadata: { url } }),
             { url: `${endpoint}/task_1/content`, requiresAuth: true });
     }
+});
+
+test('owned relays use the video generation route and preserve signed URLs in normalized results', () => {
+    const signed = 'https://starframe-sh.tos-s3-cn-shanghai.volces.com/videos/result.mp4?X-Amz-Signature=fixture';
+    for (const host of ['art.ravenhash.org', 'cart.ravenhash.org']) {
+        const endpoint = `https://${host}/v1/video/generations`;
+        for (const path of ['', '/v1', '/v1/videos', '/v1/video/generations']) {
+            assert.equal(buildVideoGenerationEndpoint(`https://${host}${path}`, STARFRAME_MODEL), endpoint);
+        }
+        assert.deepEqual(starFrameDownloadRequest(endpoint, 'task-1', { id: 'task-1', status: 'completed', data: [{ url: signed }] }),
+            { url: signed, requiresAuth: false });
+    }
+    const direct = 'https://api.xzapi.vip/v1/videos';
+    assert.deepEqual(starFrameDownloadRequest(direct, 'task-1', { status: 'completed', data: [{ url: signed }] }),
+        { url: direct + '/task-1/content', requiresAuth: true });
 });

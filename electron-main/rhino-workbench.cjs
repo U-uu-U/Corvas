@@ -112,7 +112,7 @@ class RhinoWorkbench {
         await this.mcpClient.connect(server.id);
         const connected = this.mcpClient.list().servers.find(entry => entry.id === server.id);
         if (!connected?.tools.some(tool => tool.name === 'rhino_scene')) throw new Error('该服务没有提供 Rhino 场景工具，请检查 MCP 地址');
-        this.update('connected', '已连接，可以在 Agent 中预览和编辑模型。');
+        this.update('connected', '已连接，可创建 Codex 模型任务。');
     }
     open({ connectOnly = false } = {}) {
         if (this.disposed) throw new Error('Rhino 连接服务已关闭');

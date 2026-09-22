@@ -886,8 +886,11 @@ NODE_TYPES['video'] = {
                         ratio: ratio || config.ratio || '',
                         model: provider?.model || config.model || ''
                     },
-                    references: sourceReferences.map(reference => ({
-                        itemId: reference.itemId || null,
+                    references: bound.bindings.map(reference => ({
+                        itemId: reference.sourceNodeId || null,
+                        sourceNodeId: reference.sourceNodeId || null,
+                        sourceNodeIds: [...reference.sourceNodeIds],
+                        mediaType: reference.mediaType,
                         filePath: reference.filePath || ''
                     })),
                     taskId: result?.taskId || null,

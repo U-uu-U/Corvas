@@ -2094,10 +2094,18 @@ export class CanvasManager {
             return true;
         };
 
-        const historyReferences = (Array.isArray(record?.references) ? record.references : []).flatMap((reference, index) => {
-            const binding = record?.referenceBindings?.find(entry => entry.position === index + 1);
+        const references = Array.isArray(record?.references) ? record.references : [];
+        const bindings = Array.isArray(record?.referenceBindings) ? record.referenceBindings : [];
+        // Older video records saved only image upload paths, but their bindings
+        // already contain the original image, video and audio source identities.
+        const positions = [...new Set([...references.map((_, index) => index + 1),
+            ...bindings.map(binding => binding.position).filter(position => Number.isInteger(position) && position > 0)])]
+            .sort((a, b) => a - b);
+        const historyReferences = positions.flatMap(position => {
+            const reference = references[position - 1];
+            const binding = bindings.find(entry => entry.position === position);
             if (!binding) return [reference];
-            const sourceIds = binding.sourceNodeIds?.length ? binding.sourceNodeIds : [binding.sourceNodeId || reference.itemId];
+            const sourceIds = binding.sourceNodeIds?.length ? binding.sourceNodeIds : [binding.sourceNodeId || reference?.itemId];
             return sourceIds.map(itemId => ({ itemId, filePath: binding.filePath, stable: Boolean(itemId) }));
         });
         historyReferences.forEach(reference => {
@@ -7549,7 +7557,7 @@ export class CanvasManager {
                 button.type = 'button';
                 button.className = 'op-model-option';
                 const isSelected = provider.id === data.config?.providerId
-                    || (provider.sourceProviderId === data.config?.sourceProviderId && provider.model === data.config?.model);
+                    || (provider.sourceProviderId === (data.config?.sourceProviderId || data.config?.providerId) && provider.model === data.config?.model);
                 button.classList.toggle('selected', isSelected);
                 const model = document.createElement('strong');
                 model.textContent = provider.model || '未命名模型';
@@ -9334,7 +9342,7 @@ export class CanvasManager {
         const providers = this.options.getGenerationProviders?.(data.nodeType) || [];
         const selected = providers.find(provider =>
             provider.id === data.config?.providerId
-            || (provider.sourceProviderId === data.config?.sourceProviderId && provider.model === data.config?.model)
+            || (provider.sourceProviderId === (data.config?.sourceProviderId || data.config?.providerId) && provider.model === data.config?.model)
         );
         const modelLabel = selected?.modelLabel && selected.modelLabel !== '未收录模型' ? selected.modelLabel : selected?.model;
         label.textContent = [selected?.routeLabel, modelLabel || data.config?.model].filter(Boolean).join(' · ')
@@ -9427,7 +9435,7 @@ export class CanvasManager {
             for (const provider of providers) {
                 const sourceId = provider.sourceProviderId;
                 const key = sourceId && provider.routeGroup && provider.routeLabel
-                    ? JSON.stringify([sourceId, provider.routeGroup]) : null;
+                    ? JSON.stringify([provider.routeGroupScope === 'catalog' ? 'catalog' : sourceId, provider.routeGroup]) : null;
                 let row = key && groups.get(key);
                 if (!row) {
                     row = [];
@@ -9448,7 +9456,9 @@ export class CanvasManager {
                 empty.className = 'generation-composer-popover-empty';
                 empty.textContent = providers.length
                     ? '没有匹配的模型'
-                    : `请先在设置中添加${data.nodeType === 'video' ? '视频' : '图片'} API`;
+                    : this.options.getModelConfigStatus?.().catalogMode === 'remote'
+                        ? '远程目录暂无可用模型'
+                        : `请先在设置中添加${data.nodeType === 'video' ? '视频' : '图片'} API`;
                 list.appendChild(empty);
                 return;
             }
@@ -9462,7 +9472,7 @@ export class CanvasManager {
                     const groupLabel = row[0].routeGroupLabel || row[0].modelLabel || row[0].model;
                     group.setAttribute('aria-label', `${groupLabel}线路选择`);
                     const current = row.find(provider => provider.id === data.config?.providerId
-                        || (provider.sourceProviderId === data.config?.sourceProviderId && provider.model === data.config?.model));
+                        || (provider.sourceProviderId === (data.config?.sourceProviderId || data.config?.providerId) && provider.model === data.config?.model));
                     const trigger = document.createElement('button');
                     trigger.type = 'button';
                     trigger.className = 'generation-composer-route-trigger';
@@ -9564,7 +9574,7 @@ export class CanvasManager {
                 }
                 row.forEach(provider => {
                     const selected = provider.id === data.config?.providerId
-                        || (provider.sourceProviderId === data.config?.sourceProviderId && provider.model === data.config?.model);
+                        || (provider.sourceProviderId === (data.config?.sourceProviderId || data.config?.providerId) && provider.model === data.config?.model);
                     const button = document.createElement('button');
                     button.type = 'button';
                     button.className = 'generation-composer-model-option';

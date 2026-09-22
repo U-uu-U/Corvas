@@ -5,6 +5,7 @@ const { AgentRunStore, redact } = require('./agent-run-store.cjs');
 const { AgentMedia } = require('./agent-media.cjs');
 const { callAgentProvider } = require('./agent-provider.cjs');
 const { createEffectiveModelConfigReader } = require('./model-config-service.cjs');
+const { ExternalHandoffService } = require('./external-handoff.cjs');
 
 async function createAgentServices({ store, bridge, apiConfigStore, dataDir, getSaveDir, getMainWindow, BrowserWindow, net, safeStorage }) {
     const { AgentBoardService } = await import('./agent-board-service.mjs');
@@ -56,7 +57,10 @@ async function createAgentServices({ store, bridge, apiConfigStore, dataDir, get
     } });
     const { McpClientManager } = require('./mcp-client.cjs');
     const mcpClient = new McpClientManager({ directory: dataDir, safeStorage });
-    const runtime = new AgentRuntime({ runStore: new AgentRunStore(path.join(dataDir, 'agent-runs')), board, mcpClient,
+    const handoff = new ExternalHandoffService({ directory: dataDir, board, mcpClient });
+    bridge.handoffExecutor = (name, input) => handoff.execute(name, input);
+    bridge.projectItemAdder = async (projectId, add) => (await board.updateProject(projectId, add)).value;
+    const runtime = new AgentRuntime({ runStore: new AgentRunStore(path.join(dataDir, 'agent-runs')), board,
         boardDefinitions: BOARD_TOOL_DEFINITIONS,
         resolveProvider: (binding, kind) => generation.resolveProvider(binding, kind),
         callProvider: request => callAgentProvider({ ...request, fetchImpl: (...args) => net.fetch(...args) }),
@@ -139,7 +143,7 @@ async function createAgentServices({ store, bridge, apiConfigStore, dataDir, get
         }
         return result;
     };
-    return { board, runtime, generation, media, mcpClient,
+    return { board, runtime, generation, media, mcpClient, handoff,
         saveRenderer(payload) {
             const result = board.mergeRendererSave(payload);
             if (!result.ok) {
@@ -152,6 +156,7 @@ async function createAgentServices({ store, bridge, apiConfigStore, dataDir, get
         async close() {
             for (const controller of runtime.controllers.values()) controller.abort();
             if (decoder && !decoder.isDestroyed()) decoder.destroy();
+            await handoff.close?.();
             await mcpClient.close();
         }
     };
