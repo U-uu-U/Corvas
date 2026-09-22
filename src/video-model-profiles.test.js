@@ -87,6 +87,30 @@ test('StarFrame keeps host-specific per-second sales with or without a remote ca
     assert.equal(canUseTextProvider({ model: provider.model }), false);
 });
 
+test('Shanhai backup group exposes the four selected models and user prices only on its exact host', () => {
+    const cases = [
+        ['oc-model-qbdmeb', 4, 'request', [5, 10, 15]],
+        ['oc-model-1iq31f', 5, 'second', Array.from({ length: 11 }, (_, index) => index + 5)],
+        ['oc-model-bkb50q', 7, 'request', Array.from({ length: 12 }, (_, index) => index + 4)],
+        ['oc-model-c6ws7e', 7, 'request', Array.from({ length: 12 }, (_, index) => index + 4)]
+    ];
+    for (const [model, amount, unit, durations] of cases) {
+        const provider = { model, endpoint: 'https://shanhai.vnshu.cn/api/v1' };
+        const profile = getVideoModelProfile(provider);
+        const { entry, ambiguous } = resolveModelConfigEntry(DEFAULT_MODEL_CONFIG, { ...provider, kind: 'video' });
+        assert.equal(ambiguous, false);
+        assert.equal(profile.price.amount, amount);
+        assert.equal(profile.price.unit, unit);
+        assert.deepEqual(profile.durations, durations);
+        assert.deepEqual(toVideoProfileOverrides(DEFAULT_MODEL_CONFIG, entry, provider).durations, durations);
+        assert.equal(getVideoModelGroup(provider).routeGroupLabel, '备用分组2');
+        assert.equal(getVideoModelGroup(provider).routeGroup, 'shanhai-backup-2');
+        assert.equal(resolveModelConfigEntry(DEFAULT_MODEL_CONFIG,
+            { ...provider, endpoint: 'https://shanhai.vnshu.cn.evil.test/api/v1', kind: 'video' }).entry, null);
+        assert.deepEqual(getVideoModelGroup({ ...provider, endpoint: 'https://shanhai.vnshu.cn.evil.test/api/v1' }), {});
+    }
+});
+
 test('StarFrame joins the shared Seedance 2.5 backup group only on supported exact hosts and model', () => {
     const provider = { model: 'ch0107-sd-2.5-720p', endpoint: 'https://api.xzapi.vip/v1' };
     const group = getVideoModelGroup(provider);

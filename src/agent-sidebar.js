@@ -76,7 +76,9 @@ import {
 const DEFAULT_TEMPLATES = {
     'ravenhash-text': { name: 'RavenHash Text', capability: 'text', type: 'openai', endpoint: 'https://ai.ravenhash.org/v1', model: '' },
     ravenhash: { name: 'RavenHash Image', capability: 'image', type: 'openai', endpoint: 'https://ai.ravenhash.org/v1', model: 'gpt-image-2' },
-    'ravenhash-video': { name: 'RavenHash Video', capability: 'video', type: 'openai', endpoint: 'https://art.ravenhash.org/v1', model: 'doubao-seedance-2-0' }
+    'ravenhash-video': { name: 'RavenHash Video', capability: 'video', type: 'openai', endpoint: 'https://art.ravenhash.org/v1', model: 'doubao-seedance-2-0' },
+    shanhai: { name: 'Shanhai Video', capability: 'video', type: 'openai', endpoint: 'https://shanhai.vnshu.cn/api/v1', model: 'oc-model-qbdmeb',
+        models: ['oc-model-qbdmeb', 'oc-model-1iq31f', 'oc-model-bkb50q', 'oc-model-c6ws7e'] }
 };
 
 function normalizeRavenHashEndpoint(endpoint) {
@@ -4446,7 +4448,7 @@ export class AgentSidebar {
         if (this.formType) this.formType.value = tpl.type;
         if (this.formEndpoint) this.formEndpoint.value = tpl.endpoint;
         if (this.formModel) this.formModel.value = tpl.model;
-        this._resetModelSlots();
+        this._resetModelSlots(Array.isArray(tpl.models) ? tpl.models.slice(1) : []);
         this._resetFetchedModels();
     }
 
