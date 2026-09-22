@@ -1,0 +1,38 @@
+services:
+  shanhai-adapter:
+    # Reuse the Python runtime already verified on both relay hosts. Pinning
+    # the digest prevents an unattended image change during a restart.
+    image: sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31
+    pull_policy: never
+    container_name: ${CONTAINER_NAME:-shanhai-video-adapter}
+    working_dir: /app
+    command: [python, -B, adapter.py]
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    mem_limit: 256m
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      UPSTREAM: ${UPSTREAM:-https://shanhai.vnshu.cn/api/v1}
+      PUBLIC_MEDIA: ${PUBLIC_MEDIA:-https://art.ravenhash.org/fc-media/files}
+      MEDIA_DIR: /media
+      STATE_DB: /state/tasks.sqlite
+      PORT: "3011"
+    volumes:
+      - ./adapter.py:/app/adapter.py:ro
+      - ./state:/state
+      - ${MEDIA_HOST_DIR:-/opt/flow-canvas-upload/data}:/media
+    networks:
+      - relay-network
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3011/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  relay-network:
+    name: ${NETWORK_NAME:-tokensbyte-network}
+    external: true
