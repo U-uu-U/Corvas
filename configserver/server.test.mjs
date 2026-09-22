@@ -28,6 +28,7 @@ async function startServer(options = {}) {
     });
     return {
         instance,
+        dataDir,
         base: instance.url,
         cleanup: async () => {
             await instance.close();
@@ -45,7 +46,7 @@ async function login(base) {
     const response = await fetch(`${base}/admin/login`, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ password: PASSWORD }),
+        body: new URLSearchParams({ username: 'admin', password: PASSWORD }),
         redirect: 'manual'
     });
     assert.equal(response.status, 303);
@@ -118,12 +119,19 @@ test('管理面板必须登录：未登录跳登录页，密码错误不发会�
 
         const loginPage = await fetch(`${server.base}/admin/login`);
         assert.equal(loginPage.status, 200);
-        assert.match(await loginPage.text(), /name="password"/);
+        const markup = await loginPage.text();
+        assert.match(markup, /name="username"[^>]*value="admin"[^>]*autocomplete="username"/);
+        assert.match(markup, /name="password"[^>]*autocomplete="current-password"/);
 
-        const wrong = await postForm(server.base, '/admin/login', { password: 'not-the-password' });
+        const wrong = await postForm(server.base, '/admin/login', { username: 'admin', password: 'not-the-password' });
         assert.equal(wrong.status, 303);
         assert.match(wrong.headers.get('location'), /error=1/);
         assert.equal(wrong.headers.get('set-cookie'), null, '密码错误不能发会话 cookie');
+        for (const username of ['other', '']) {
+            const rejected = await postForm(server.base, '/admin/login', { username, password: PASSWORD });
+            assert.match(rejected.headers.get('location'), /error=1/);
+            assert.equal(rejected.headers.get('set-cookie'), null, '错误或缺失的账号不能发会话');
+        }
 
         const success = await login(server.base);
         assert.match(success.location, /\/admin$/);
@@ -136,7 +144,7 @@ test('管理面板必须登录：未登录跳登录页，密码错误不发会�
 test('会话 cookie 的安全属性：HttpOnly + SameSite=Strict', async () => {
     const server = await startServer();
     try {
-        const response = await postForm(server.base, '/admin/login', { password: PASSWORD });
+        const response = await postForm(server.base, '/admin/login', { username: 'admin', password: PASSWORD });
         const header = response.headers.get('set-cookie') || '';
         assert.match(header, /HttpOnly/);
         assert.match(header, /SameSite=Strict/);
@@ -338,6 +346,208 @@ test('表单脚本需要登录，且从 /admin 页面使用绝对路由', async 
     }
 });
 
+test('upstream sources require login and stay outside the public CONFIG', async () => {
+    const server = await startServer();
+    try {
+        const before = await fetch(`${server.base}/config`).then(response => response.text());
+        const anonymous = await fetch(`${server.base}/admin/model-sources`, { redirect: 'manual' });
+        assert.equal(anonymous.status, 303);
+        const { cookie } = await login(server.base);
+        const response = await fetch(`${server.base}/admin/model-sources`, { headers: { cookie } });
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('cache-control'), 'no-store');
+        const sources = await response.json();
+        assert.ok(sources.entries.some(entry => entry.name === 'StarFrame' && entry.url === 'https://api.xzapi.vip'));
+        assert.ok(sources.entries.every(entry => Object.keys(entry).every(key => ['ids', 'models', 'hosts', 'name', 'url'].includes(key))));
+        const after = await fetch(`${server.base}/config`).then(response => response.text());
+        assert.equal(after, before);
+        assert.ok(!after.includes('"admin-model-sources"'));
+        const publicFile = await fetch(`${server.base}/seed/admin-model-sources.json`);
+        assert.equal(publicFile.status, 404);
+    } finally {
+        await server.cleanup();
+    }
+});
+
+function modelPriceFixture() {
+    return {
+        checkedAt: '2026-09-23T08:00:00.000Z',
+        sites: [{
+            host: 'art.ravenhash.org', label: 'Old site', checkedAt: '2026-09-23T08:00:00.000Z',
+            currency: 'CNY', exchangeToCny: 1,
+            models: [{ model: 'seedance-2.5-pro', ids: ['legacy-pro'], status: 'configured', active: true,
+                currency: 'CNY', prices: [{ label: '720p', amount: 1.25, unit: 'second' }], reason: '' }]
+        }]
+    };
+}
+
+function mockModelPricesSeed(t, read) {
+    const originalRead = fs.readFileSync;
+    const seedPath = path.join(HERE, 'seed', 'admin-model-prices.json');
+    t.mock.method(fs, 'readFileSync', function (file, ...args) {
+        if (String(file) === seedPath) return read();
+        return originalRead.call(this, file, ...args);
+    });
+}
+
+test('model prices require login, project display fields only, and leave public CONFIG unchanged', async t => {
+    const expected = modelPriceFixture();
+    const fixture = modelPriceFixture();
+    fixture.privateEvidence = 'root-secret';
+    fixture.sites[0].credentials = { key: 'site-secret' };
+    fixture.sites[0].models[0].rawBilling = { token: 'model-secret' };
+    fixture.sites[0].models[0].prices[0].raw = 'price-secret';
+    mockModelPricesSeed(t, () => JSON.stringify(fixture));
+    const server = await startServer();
+    try {
+        const before = await fetch(`${server.base}/config`).then(response => response.text());
+        const versions = server.instance.store.listNames();
+        const anonymous = await fetch(`${server.base}/admin/model-prices`, { redirect: 'manual' });
+        assert.equal(anonymous.status, 303);
+        assert.equal(anonymous.headers.get('location'), '/admin/login');
+        assert.equal(anonymous.headers.get('cache-control'), 'no-store');
+        const anonymousJson = await fetch(`${server.base}/admin/model-prices`, { headers: { accept: 'application/json' } });
+        assert.equal(anonymousJson.status, 401);
+        assert.equal(anonymousJson.headers.get('cache-control'), 'no-store');
+        const { cookie } = await login(server.base);
+        const response = await fetch(`${server.base}/admin/model-prices`, { headers: { cookie } });
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('cache-control'), 'no-store');
+        assert.match(response.headers.get('content-type'), /application\/json/);
+        assert.deepEqual(await response.json(), expected);
+        assert.equal(await fetch(`${server.base}/config`).then(result => result.text()), before);
+        assert.deepEqual(server.instance.store.listNames(), versions);
+        assert.equal(fs.existsSync(path.join(server.dataDir, 'admin-model-prices.json')), false);
+        assert.equal((await fetch(`${server.base}/seed/admin-model-prices.json`)).status, 404);
+        assert.equal((await postForm(server.base, '/admin/model-prices', { amount: '0' }, { cookie })).status, 404);
+    } finally {
+        await server.cleanup();
+    }
+});
+
+test('model prices prefer the data directory override to the bundled seed', async t => {
+    mockModelPricesSeed(t, () => { throw new Error('Seed must not be read when an override exists'); });
+    const server = await startServer();
+    try {
+        const fixture = modelPriceFixture();
+        fixture.sites[0].host = 'cart.ravenhash.org';
+        fixture.sites[0].label = 'New site';
+        delete fixture.sites[0].models[0].ids;
+        fixture.sites[0].models[0].prices[0].amount = 0;
+        fs.writeFileSync(path.join(server.dataDir, 'admin-model-prices.json'), JSON.stringify(fixture));
+        const { cookie } = await login(server.base);
+        const response = await fetch(`${server.base}/admin/model-prices`, { headers: { cookie } });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), fixture);
+    } finally {
+        await server.cleanup();
+    }
+});
+
+test('missing model price data returns a generic non-cacheable JSON error', async t => {
+    mockModelPricesSeed(t, () => { throw new Error('ENOENT: private server path'); });
+    const server = await startServer();
+    try {
+        const { cookie } = await login(server.base);
+        const response = await fetch(`${server.base}/admin/model-prices`, { headers: { cookie } });
+        assert.equal(response.status, 500);
+        assert.equal(response.headers.get('cache-control'), 'no-store');
+        assert.deepEqual(await response.json(), { error: '无法读取中转站价格资料' });
+    } finally {
+        await server.cleanup();
+    }
+});
+
+test('malformed model price overrides fail closed without falling back to the seed', async t => {
+    mockModelPricesSeed(t, () => JSON.stringify(modelPriceFixture()));
+    const server = await startServer();
+    try {
+        const { cookie } = await login(server.base);
+        const invalid = [
+            ['broken JSON', '{ invalid'],
+            ['null root', 'null'],
+            ['missing sites', JSON.stringify({ checkedAt: '2026-09-23T08:00:00.000Z' })],
+            ...[
+                ['invalid timestamp', fixture => { fixture.checkedAt = 'unknown'; }],
+                ['sites must be an array', fixture => { fixture.sites = {}; }],
+                ['unknown site', fixture => { fixture.sites[0].host = 'untrusted.example'; }],
+                ['duplicate site', fixture => { fixture.sites.push(fixture.sites[0]); }],
+                ['invalid exchange rate', fixture => { fixture.sites[0].exchangeToCny = 0; }],
+                ['models must be an array', fixture => { fixture.sites[0].models = {}; }],
+                ['invalid model', fixture => { fixture.sites[0].models[0] = null; }],
+                ['duplicate model', fixture => { fixture.sites[0].models.push(fixture.sites[0].models[0]); }],
+                ['invalid active', fixture => { fixture.sites[0].models[0].active = 'yes'; }],
+                ['invalid ids', fixture => { fixture.sites[0].models[0].ids = [42]; }],
+                ['invalid reason', fixture => { fixture.sites[0].models[0].reason = { key: 'secret' }; }],
+                ['invalid currency', fixture => { fixture.sites[0].models[0].currency = { key: 'secret' }; }],
+                ['prices must be an array', fixture => { fixture.sites[0].models[0].prices = {}; }],
+                ['invalid amount', fixture => { fixture.sites[0].models[0].prices[0].amount = '1.25'; }],
+                ['negative amount', fixture => { fixture.sites[0].models[0].prices[0].amount = -1; }],
+                ['invalid label', fixture => { fixture.sites[0].models[0].prices[0].label = { key: 'secret' }; }]
+            ].map(([label, mutate]) => {
+                const fixture = modelPriceFixture();
+                mutate(fixture);
+                return [label, JSON.stringify(fixture)];
+            })
+        ];
+        for (const [label, content] of invalid) {
+            fs.writeFileSync(path.join(server.dataDir, 'admin-model-prices.json'), content);
+            const response = await fetch(`${server.base}/admin/model-prices`, { headers: { cookie } });
+            assert.equal(response.status, 500, label);
+            assert.equal(response.headers.get('cache-control'), 'no-store', label);
+            assert.deepEqual(await response.json(), { error: '无法读取中转站价格资料' }, label);
+        }
+    } finally {
+        await server.cleanup();
+    }
+});
+
+test('model cost endpoint is admin-only and does not change public CONFIG', async () => {
+    const server = await startServer();
+    try {
+        const before = await fetch(`${server.base}/config`).then(response => response.text());
+        assert.equal((await fetch(`${server.base}/admin/model-costs`, { headers: { accept: 'application/json' } })).status, 401);
+        const { cookie } = await login(server.base);
+        const response = await fetch(`${server.base}/admin/model-costs`, { headers: { cookie } });
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('cache-control'), 'no-store');
+        const data = await response.json();
+        assert.ok(data.entries.some(record => record.supplier === 'StarFrame'));
+        assert.ok(data.entries.every(record => !Object.hasOwn(record, 'evidence')));
+        assert.equal(await fetch(`${server.base}/config`).then(response => response.text()), before);
+        assert.equal((await fetch(`${server.base}/seed/admin-model-costs.json`)).status, 404);
+        assert.equal((await fetch(`${server.base}/admin/assets/admin-model-costs.mjs`, { headers: { cookie } })).status, 404);
+    } finally { await server.cleanup(); }
+});
+
+test('balance endpoints require admin and CSRF while credentials remain private', async () => {
+    let forced = false;
+    let threshold = null;
+    const server = await startServer({ balances: {
+        list: async (options = {}) => { forced = !!options.force; return { accounts: [] }; },
+        setThreshold: (id, value) => { threshold = { id, value }; return { success: true }; }
+    } });
+    try {
+        assert.equal((await fetch(`${server.base}/admin/balances`, { headers: { accept: 'application/json' } })).status, 401);
+        const { cookie } = await login(server.base);
+        const { html, csrf } = await openAdmin(server.base, cookie);
+        assert.ok(html.includes('上游余额'));
+        const response = await fetch(`${server.base}/admin/balances`, { headers: { cookie } });
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('cache-control'), 'no-store');
+        const url = `${server.base}/admin/balances/refresh`;
+        assert.equal((await fetch(url, { method: 'POST', headers: { cookie }, body: '{}' })).status, 403);
+        const headers = { cookie, 'x-csrf-token': csrf, 'content-type': 'application/json', origin: server.base };
+        assert.equal((await fetch(url, { method: 'POST', headers, body: '{}' })).status, 200);
+        assert.equal(forced, true);
+        const saved = await fetch(`${server.base}/admin/balances/threshold`, { method: 'POST', headers, body: JSON.stringify({ id: 'zhubo-art', threshold: 30 }) });
+        assert.equal(saved.status, 200);
+        assert.deepEqual(threshold, { id: 'zhubo-art', value: 30 });
+        assert.equal((await fetch(url, { method: 'POST', headers: { ...headers, origin: 'https://other.example' }, body: '{}' })).status, 403);
+        assert.equal((await fetch(`${server.base}/admin/assets/admin-balances.mjs`, { headers: { cookie } })).status, 404);
+    } finally { await server.cleanup(); }
+});
+
 test('管理面板渲染时长与参考素材控件，保存后 /config 下发新边界', async () => {
     const { readEditorValues, applyEditorValues } = await import('./lib/admin-editor-model.mjs');
     const server = await startServer();
@@ -409,7 +619,7 @@ test('未登录源码预览入口在登录成功及失败时保留通道，拒�
         assert.match(loginHtml, /name="channel" value="preview"/);
         assert.match(loginHtml, /模型配置服务 · 源码预览/);
         assert.match(loginHtml, /href="\/config\/preview"/);
-        const wrong = await postForm(server.base, '/admin/login', { password: 'incorrect', channel: 'preview' });
+        const wrong = await postForm(server.base, '/admin/login', { username: 'admin', password: 'incorrect', channel: 'preview' });
         assert.equal(wrong.status, 303);
         const retry = new URL(wrong.headers.get('location'), server.base);
         assert.equal(retry.pathname, '/admin/login');
@@ -418,13 +628,13 @@ test('未登录源码预览入口在登录成功及失败时保留通道，拒�
         assert.equal(wrong.headers.get('set-cookie'), null);
         const retryHtml = await fetch(retry).then(response => response.text());
         assert.match(retryHtml, /name="channel" value="preview"/);
-        const success = await postForm(server.base, '/admin/login', { password: PASSWORD, channel: 'preview', next: 'https://invalid.example/' });
+        const success = await postForm(server.base, '/admin/login', { username: 'admin', password: PASSWORD, channel: 'preview', next: 'https://invalid.example/' });
         assert.equal(success.status, 303);
         assert.equal(success.headers.get('location'), '/admin?channel=preview');
         const admin = await fetch(`${server.base}${success.headers.get('location')}`, { headers: { cookie: sessionCookie(success) } });
         assert.match(await admin.text(), /href="\/admin\?channel=preview" aria-current="page"/);
 
-        const arbitrary = await postForm(server.base, '/admin/login', { password: PASSWORD,
+        const arbitrary = await postForm(server.base, '/admin/login', { username: 'admin', password: PASSWORD,
             channel: 'https://invalid.example/', next: 'https://invalid.example/' });
         assert.equal(arbitrary.headers.get('location'), '/admin');
         const otherRoute = await fetch(`${server.base}/admin/download?channel=preview`, { redirect: 'manual' });

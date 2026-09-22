@@ -1,0 +1,899 @@
+{
+    "checkedAt": "2026-09-22T16:56:56.625184+00:00",
+    "sites": [
+        {
+            "host": "art.ravenhash.org",
+            "label": "老站",
+            "checkedAt": "2026-09-22T16:56:56.625184+00:00",
+            "currency": "USD",
+            "exchangeToCny": 6.75,
+            "models": [
+                {
+                    "model": "minimax-h3",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "480p",
+                            "amount": 0.04995,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "786p",
+                            "amount": 0.1215,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "1080p",
+                            "amount": 0.20249999999999999,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "2k超分",
+                            "amount": 0.20249999999999999,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "4k超分",
+                            "amount": 0.24975,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "768p",
+                            "amount": 0.1215,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "2k",
+                            "amount": 0.20249999999999999,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "4k",
+                            "amount": 0.24975,
+                            "unit": "second"
+                        }
+                    ],
+                    "ids": [
+                        "ravenhash-video.minimax-h3",
+                        "minimax-video.minimax-h3-seconds"
+                    ]
+                },
+                {
+                    "model": "seedance_v2.5",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 5,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "sd2.5",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 6,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "seedance_v2.0-933",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 6.5,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "sd2.5-route1",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 6,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "artsdance2-0-mini-intl-260701",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "720p 无参考视频",
+                            "amount": 21.2625,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 有参考视频",
+                            "amount": 12.7575,
+                            "unit": "million_tokens"
+                        }
+                    ],
+                    "reason": "全站9折，账户优惠另计"
+                },
+                {
+                    "model": "artsdance2-0-pro-intl-260701",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "720p 无参考视频",
+                            "amount": 42.525,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 有参考视频",
+                            "amount": 26.1225,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "1080p 无参考视频",
+                            "amount": 46.7775,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "1080p 有参考视频",
+                            "amount": 28.552500000000002,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "4k 无参考视频",
+                            "amount": 24.3,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "4k 有参考视频",
+                            "amount": 14.58,
+                            "unit": "million_tokens"
+                        }
+                    ],
+                    "reason": "全站9折，账户优惠另计"
+                },
+                {
+                    "model": "artsdance2-0-fast-intl-260701",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "720p 无参考视频",
+                            "amount": 34.019999999999996,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 有参考视频",
+                            "amount": 20.0475,
+                            "unit": "million_tokens"
+                        }
+                    ],
+                    "reason": "全站9折，账户优惠另计"
+                },
+                {
+                    "model": "doubao-seedance-2-0-260128",
+                    "status": "known",
+                    "active": false,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "1080p 无参考视频",
+                            "amount": 344.25,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "1080p 有参考视频",
+                            "amount": 209.25,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "480p 无参考视频",
+                            "amount": 310.5,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "480p 有参考视频",
+                            "amount": 189,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "4k 无参考视频",
+                            "amount": 175.5,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "4k 有参考视频",
+                            "amount": 108,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 无参考视频",
+                            "amount": 310.5,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 有参考视频",
+                            "amount": 189,
+                            "unit": "million_tokens"
+                        }
+                    ]
+                },
+                {
+                    "model": "doubao-seedance-2-0-fast",
+                    "status": "known",
+                    "active": false,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "480p 无参考视频",
+                            "amount": 249.75,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "480p 有参考视频",
+                            "amount": 148.5,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 无参考视频",
+                            "amount": 249.75,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 有参考视频",
+                            "amount": 148.5,
+                            "unit": "million_tokens"
+                        }
+                    ]
+                },
+                {
+                    "model": "doubao-seedance-2-5-260628",
+                    "status": "known",
+                    "active": false,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "480p 无参考视频",
+                            "amount": 472.5,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "480p 有参考视频",
+                            "amount": 283.5,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 无参考视频",
+                            "amount": 472.5,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 有参考视频",
+                            "amount": 283.5,
+                            "unit": "million_tokens"
+                        }
+                    ]
+                },
+                {
+                    "model": "seedance_v2.5-101010",
+                    "status": "known",
+                    "active": false,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 7,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "seedance_v2.5-301010",
+                    "status": "known",
+                    "active": false,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 10,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "ch0107-sd-2.5-720p",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "720p",
+                            "amount": 1.06,
+                            "unit": "second"
+                        }
+                    ]
+                },
+                {
+                    "model": "oc-model-qbdmeb",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 4,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "oc-model-1iq31f",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "480p",
+                            "amount": 5,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "720p",
+                            "amount": 5,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "1080p",
+                            "amount": 5,
+                            "unit": "second"
+                        }
+                    ]
+                },
+                {
+                    "model": "oc-model-bkb50q",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 7,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "oc-model-c6ws7e",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 7,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "sd2-fast",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 4,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "seedance-2.5-pro-720",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 13,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "seedance-2.5-pro",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 9.8,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "ch1401-sd-2.5-720p",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 5.0,
+                            "unit": "request"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "host": "cart.ravenhash.org",
+            "label": "新站",
+            "checkedAt": "2026-09-22T16:56:56.625184+00:00",
+            "currency": "CNY",
+            "exchangeToCny": 1,
+            "models": [
+                {
+                    "model": "oc-model-1iq31f",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "480p",
+                            "amount": 5,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "720p",
+                            "amount": 5,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "1080p",
+                            "amount": 5,
+                            "unit": "second"
+                        }
+                    ]
+                },
+                {
+                    "model": "oc-model-bkb50q",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 7,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "minimax-h3",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "480p",
+                            "amount": 0.06,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "786p",
+                            "amount": 0.14,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "1080p",
+                            "amount": 0.24,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "2k超分",
+                            "amount": 0.24,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "4k超分",
+                            "amount": 0.29,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "768p",
+                            "amount": 0.14,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "2k",
+                            "amount": 0.24,
+                            "unit": "second"
+                        },
+                        {
+                            "label": "4k",
+                            "amount": 0.29,
+                            "unit": "second"
+                        }
+                    ],
+                    "ids": [
+                        "ravenhash-video.minimax-h3",
+                        "minimax-video.minimax-h3-seconds"
+                    ]
+                },
+                {
+                    "model": "seedance_v2.5",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 5.72,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "sd2.5-route1",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 6.86,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "oc-model-c6ws7e",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 7,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "artsdance2-0-mini-intl-260701",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "720p 无参考视频",
+                            "amount": 24.3,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 有参考视频",
+                            "amount": 14.58,
+                            "unit": "million_tokens"
+                        }
+                    ],
+                    "reason": "全站9折，账户优惠另计"
+                },
+                {
+                    "model": "artsdance2-0-pro-intl-260701",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "720p 无参考视频",
+                            "amount": 48.6,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 有参考视频",
+                            "amount": 29.862000000000002,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "1080p 无参考视频",
+                            "amount": 53.46,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "1080p 有参考视频",
+                            "amount": 32.634,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "4k 无参考视频",
+                            "amount": 27.774,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "4k 有参考视频",
+                            "amount": 16.668,
+                            "unit": "million_tokens"
+                        }
+                    ],
+                    "reason": "全站9折，账户优惠另计"
+                },
+                {
+                    "model": "doubao-seedance-2-0-260128",
+                    "status": "known",
+                    "active": false,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "1080p 无参考视频",
+                            "amount": 51,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "1080p 有参考视频",
+                            "amount": 31,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "480p 无参考视频",
+                            "amount": 46,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "480p 有参考视频",
+                            "amount": 28,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "4k 无参考视频",
+                            "amount": 26,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "4k 有参考视频",
+                            "amount": 16,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 无参考视频",
+                            "amount": 46,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 有参考视频",
+                            "amount": 28,
+                            "unit": "million_tokens"
+                        }
+                    ]
+                },
+                {
+                    "model": "doubao-seedance-2-0-fast",
+                    "status": "known",
+                    "active": false,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "480p 无参考视频",
+                            "amount": 37,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "480p 有参考视频",
+                            "amount": 22,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 无参考视频",
+                            "amount": 37,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 有参考视频",
+                            "amount": 22,
+                            "unit": "million_tokens"
+                        }
+                    ]
+                },
+                {
+                    "model": "doubao-seedance-2-5-260628",
+                    "status": "known",
+                    "active": false,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "480p 无参考视频",
+                            "amount": 70,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "480p 有参考视频",
+                            "amount": 42,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 无参考视频",
+                            "amount": 70,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 有参考视频",
+                            "amount": 42,
+                            "unit": "million_tokens"
+                        }
+                    ]
+                },
+                {
+                    "model": "seedance_v2.5-301010",
+                    "status": "known",
+                    "active": false,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 11.43,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "sd2.5",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 6.86,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "seedance_v2.0-933",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 7.43,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "artsdance2-0-fast-intl-260701",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "720p 无参考视频",
+                            "amount": 38.88,
+                            "unit": "million_tokens"
+                        },
+                        {
+                            "label": "720p 有参考视频",
+                            "amount": 22.914,
+                            "unit": "million_tokens"
+                        }
+                    ],
+                    "reason": "全站9折，账户优惠另计"
+                },
+                {
+                    "model": "seedance_v2.5-101010",
+                    "status": "known",
+                    "active": false,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 8,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "ch0107-sd-2.5-720p",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "720p",
+                            "amount": 1.25,
+                            "unit": "second"
+                        }
+                    ]
+                },
+                {
+                    "model": "oc-model-qbdmeb",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 4,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "sd2-fast",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 4,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "seedance-2.5-pro-720",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 13,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "seedance-2.5-pro",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 9.8,
+                            "unit": "request"
+                        }
+                    ]
+                },
+                {
+                    "model": "ch1401-sd-2.5-720p",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [
+                        {
+                            "label": "",
+                            "amount": 5.72,
+                            "unit": "request"
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

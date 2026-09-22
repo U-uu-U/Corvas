@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { addCatalogModel, applyCatalogFields, catalogGroups, catalogGroupKey, catalogModelPrice, catalogModelSummary, createCatalogGroup,
-    createCatalogHistory, deleteCatalogModel, moveCatalogModel, renameCatalogGroup, reorderCatalog,
+import { addCatalogModel, applyCatalogFields, catalogGroups, catalogGroupKey, catalogModelPrices, catalogModelSource, catalogModelSummary, createCatalogGroup,
+    createCatalogHistory, deleteCatalogModel, moveCatalogModel, renameCatalogGroup, reorderCatalog, setCatalogEnabled,
     toggleCatalogVisibility } from './lib/admin-catalog-model.mjs';
 import { applyEditorValues, readEditorValues } from './lib/admin-editor-model.mjs';
 import { prepareRemoteCatalog } from '../scripts/prepare-remote-catalog.mjs';
@@ -19,21 +19,33 @@ const base = () => ({ schemaVersion: 1, revision: 12, other: { retained: true },
         match: { model: ['^seedance[-.]backup.*$'] }, options: { duration: { type: 'range', min: 4, max: 30 } } }
 ] });
 
-test('model card prices use only the old relay sale and preserve currency, billing unit and zero', () => {
-    const pricing = { status: 'known', hosts: ['art.ravenhash.org'], amount: 6,
-        currency: 'CNY', unit: 'request', kind: 'sale' };
-    assert.equal(catalogModelPrice({ pricing }), '老站价格：¥6.00/次');
-    assert.equal(catalogModelPrice({ pricing: { ...pricing, amount: 1.06, unit: 'second' } }), '老站价格：¥1.06/秒');
-    assert.equal(catalogModelPrice({ pricing: { ...pricing, amount: 0, unit: 'image' } }), '老站价格：¥0.00/张');
-    assert.equal(catalogModelPrice({ pricing: { ...pricing, amount: 0.0074, currency: 'USD' } }), '老站价格：US$0.0074/次');
-    for (const hosts of [['cart.ravenhash.org'], ['api.xzapi.vip'], ['art.ravenhash.org.example'], []]) {
-        assert.equal(catalogModelPrice({ pricing: { ...pricing, hosts } }), '老站价格：未配置');
-    }
-    assert.equal(catalogModelPrice({ pricing: { ...pricing, status: 'unknown' } }), '老站价格：待确认');
-    for (const patch of [{ amount: '6' }, { amount: -1 }, { kind: 'cost' }, { unit: 'tokens' }]) {
-        assert.equal(catalogModelPrice({ pricing: { ...pricing, ...patch } }), '老站价格：待确认');
-    }
-    assert.equal(catalogModelPrice({}), '老站价格：未配置');
+test('model cards show independently verified site prices and billing units instead of CONFIG metadata', () => {
+    const entry = { id: 'legacy', catalog: { model: 'test-model' }, pricing: { amount: 999 } };
+    const record = { model: 'test-model', ids: ['legacy'], status: 'known', active: true, currency: 'CNY',
+        prices: [{ label: '', amount: 6, unit: 'request' }] };
+    const snapshot = { checkedAt: '2026-09-23T00:00:00Z', sites: [
+        { host: 'art.ravenhash.org', models: [record] },
+        { host: 'cart.ravenhash.org', models: [{ ...record, prices: [{ label: '720p', amount: 1.25, unit: 'second' }] }] }
+    ] };
+    const texts = entry => catalogModelPrices(entry, snapshot).map(line => line.text);
+    assert.deepEqual(texts(entry), ['老站价格：¥6.00/次', '新站价格：720p ¥1.25/秒']);
+    assert.deepEqual(texts({ id: 'legacy' }), texts(entry));
+    assert.deepEqual(texts({ ...entry, catalog: { model: 'other' } }), ['老站价格：未接入', '新站价格：未接入']);
+    assert.deepEqual(texts({ id: 'unknown' }), ['老站价格：待绑定模型', '新站价格：待绑定模型']);
+    assert.deepEqual(texts({ kind: 'image', catalog: { model: 'unverified-image' } }), ['老站价格：待核对', '新站价格：待核对']);
+    record.active = false;
+    record.prices[0].amount = 0;
+    assert.equal(texts(entry)[0], '老站价格：¥0.00/次（已下架）');
+    record.prices = [{ label: '720p 无参考视频', amount: 46.368, unit: 'million_tokens' }];
+    assert.equal(texts(entry)[0], '老站价格：720p 无参考视频 ¥46.37/百万 Token（已下架）');
+    record.status = 'missing_rule';
+    assert.equal(texts(entry)[0], '老站价格：未配置计费规则');
+    record.status = 'inactive_rule';
+    assert.equal(texts(entry)[0], '老站价格：计费规则已停用');
+    assert.equal(catalogModelPrices(entry, null)[0].text, '老站价格：读取中');
+    assert.equal(catalogModelPrices(entry, { error: true })[0].text, '老站价格：读取失败');
+    assert.equal(catalogModelPrices(entry, {})[0].text, '老站价格：待核对');
+    assert.match(catalogModelPrices(entry, snapshot)[0].title, /2026-09-23/);
 });
 
 test('group preview uses presentation without guessing a concrete ID from legacy patterns', () => {
@@ -46,6 +58,28 @@ test('group preview uses presentation without guessing a concrete ID from legacy
     assert.equal(readEditorValues(config.models[2]).catalogModel, '');
     assert.equal(readEditorValues(config.models[2]).catalogHosts, '');
     assert.equal(catalogGroups(config, { query: 'art.example.com' }).length, 2);
+});
+
+test('upstream labels follow verified relay bindings and reject stale bindings or credential URLs', () => {
+    const sources = JSON.parse(fs.readFileSync(new URL('./seed/admin-model-sources.json', import.meta.url), 'utf8'));
+    const entry = { id: 'ravenhash-video.seedance-2.5-pro-1',
+        catalog: { model: 'seedance-2.5-pro', hosts: ['art.ravenhash.org'] } };
+    assert.equal(catalogModelSource(entry, sources).name, '上游：Yueqi');
+    assert.equal(catalogModelSource({ ...entry, id: 'ravenhash-video.seedance-2.5-pro' }, sources).name, '上游：Yueqi');
+    assert.deepEqual(catalogModelSource({ id: 'ravenhash-video.sd2.5', catalog: { model: 'sd2.5', hosts: ['art.ravenhash.org'] } }, sources),
+        { name: '上游：主播视频', url: 'URL：https://video.zhubo.asia' });
+    assert.equal(catalogModelSource({ id: 'minimax-video.minimax-h3-seconds',
+        catalog: { model: 'minimax-h3', hosts: ['art.ravenhash.org'] } }, sources).url, 'URL：http://122.228.216.60:3000');
+    for (const patch of [{ id: 'new-id' }, { catalog: { model: 'other', hosts: ['art.ravenhash.org'] } },
+        { catalog: { model: 'seedance-2.5-pro', hosts: ['other.example'] } }]) {
+        assert.deepEqual(catalogModelSource({ ...entry, ...patch }, sources), { name: '上游：待确认', url: 'URL：待确认' });
+    }
+    assert.equal(catalogModelSource(entry, null).name, '上游：读取中');
+    assert.equal(catalogModelSource(entry, { error: true }).name, '上游：读取失败');
+    const record = sources.entries.find(source => source.ids.includes(entry.id));
+    for (const url of ['javascript:alert(1)', 'https://user:secret@example.com', 'https://example.com?key=secret', 'https://example.com/#secret']) {
+        assert.equal(catalogModelSource(entry, { entries: [{ ...record, url }] }).url, 'URL：待确认');
+    }
 });
 
 test('admin preview retains disabled groups while explicit hiding remains separate', () => {
@@ -121,6 +155,20 @@ test('cleared catalogs can be recreated and history restores complete prior JSON
     history.push({ ...empty, revision: 13 });
     assert.equal(history.canRedo, false);
     assert.deepEqual(config.models.length, 3);
+});
+
+test('card call switches preserve visibility and all unrelated model fields', () => {
+    const initial = base();
+    const disabled = setCatalogEnabled(initial, 'main', false);
+    assert.equal(disabled.models[1].catalog.enabled, false);
+    assert.deepEqual(disabled.models[1].presentation, initial.models[1].presentation);
+    assert.deepEqual(disabled.models[1].options, initial.models[1].options);
+    assert.deepEqual(disabled.models[1].pricing, initial.models[1].pricing);
+    assert.equal(initial.models[1].catalog.enabled, undefined);
+    assert.ok(catalogGroups(disabled, { includeHidden: false, includeDisabled: true }).flatMap(g => g.entries).some(m => m.id === 'main'));
+    const enabled = setCatalogEnabled(disabled, 'main', true);
+    assert.equal(enabled.models[1].catalog.enabled, true);
+    assert.throws(() => setCatalogEnabled(initial, 'backup', true), /补全/);
 });
 
 test('display toggles never enable or disable the catalog channel', () => {

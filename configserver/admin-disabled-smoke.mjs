@@ -55,16 +55,17 @@ try {
     };
     const setEnabled = async (id, enabled, standalone = false) => {
         await (standalone ? independentCard(id) : modelCard(id)).click();
-        await page.locator('[data-field="catalogEnabled"]').selectOption(String(enabled));
+        const toggle = page.locator(`${standalone ? '#catalogGroups' : '#catalogModels'} [data-call-model-id="${id}"]`);
+        if (await toggle.getAttribute('aria-checked') !== String(enabled)) await toggle.click();
         expectedModels.find(model => model.id === id).catalog.enabled = enabled;
         await assertSelected(id);
         await assertRetained();
     };
-    const assertDarkRed = async locator => {
+    const assertNeutral = async locator => {
         const color = await locator.evaluate(element => globalThis.getComputedStyle(element).backgroundColor);
         const [red, green, blue] = color.match(/[\d.]+/g).map(Number);
-        assert.ok(red > green * 1.2 && red > blue * 1.1 && red < 140,
-            `Disabled card should have a dark red background: ${color}`);
+        assert.ok(Math.max(red, green, blue) - Math.min(red, green, blue) < 20,
+            `Disabled card should keep the neutral background: ${color}`);
         assert.equal(await locator.isEnabled(), true, 'Disabled catalog cards must remain editable');
     };
     const assertLayout = async () => {
@@ -97,18 +98,18 @@ try {
     assert.ok((await groupCard.textContent()).includes('部分停用（1/2）'));
     assert.equal(await modelCard('group-main').getAttribute('data-disabled'), 'true');
     assert.ok((await modelCard('group-main').textContent()).includes('已停用'));
-    await assertDarkRed(modelCard('group-main'));
+    await assertNeutral(modelCard('group-main'));
 
     await setEnabled('group-backup', false);
     assert.equal(await groupCard.getAttribute('data-disabled'), 'true');
     assert.ok((await groupCard.locator('small').textContent()).includes('分组停用'));
     assert.equal(await page.locator('#catalogModels .catalog-tile').count(), 2);
-    await assertDarkRed(groupCard);
-    await assertDarkRed(modelCard('group-backup'));
+    await assertNeutral(groupCard);
+    await assertNeutral(modelCard('group-backup'));
     await setEnabled('standalone', false, true);
     assert.equal(await independentCard('standalone').getAttribute('data-disabled'), 'true');
     assert.ok((await independentCard('standalone').textContent()).includes('已停用'));
-    await assertDarkRed(independentCard('standalone'));
+    await assertNeutral(independentCard('standalone'));
 
     await page.locator('#catalogShowHidden').check();
     assert.equal(await independentCard('hidden').count(), 1);
@@ -140,7 +141,7 @@ try {
     await page.screenshot({ path: path.join(screenshots, 'config-disabled-desktop.png') });
     await page.setViewportSize({ width: 390, height: 844 });
     await assertLayout();
-    await assertDarkRed(groupCard);
+    await assertNeutral(groupCard);
     await page.screenshot({ path: path.join(screenshots, 'config-disabled-mobile.png') });
     await page.setViewportSize({ width: 1440, height: 1000 });
 
@@ -156,7 +157,7 @@ try {
     await publish();
     await assertRetained();
     assert.deepEqual(errors, []);
-    console.log('PASS disabled catalog: partial/full group and standalone retention, editable dark red cards, hidden filtering, publish/reload, restore, desktop/mobile layout, model field preservation.');
+    console.log('PASS disabled catalog: partial/full group and standalone retention, neutral cards, hidden filtering, publish/reload, restore, desktop/mobile layout, model field preservation.');
 } finally {
     await browser?.close();
     await server?.close();

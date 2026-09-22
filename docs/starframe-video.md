@@ -1,5 +1,15 @@
 # StarFrame API / XZAPI
 
+## 2026-09-23 CH1401
+
+`ch1401-sd-2.5-720p` 已接入 art/cart 两站，显示“2.5pro 备用（卡人脸）”，位于“Seedance 2.5 备用渠道”。老站 5.00 元/次，新站 5.72 元/次；720p、4-30 秒，最多 30 张图片参考，不支持视频或音频参考。
+
+复用现有 StarFrame channel 6、forward rule 50 和上游凭据。两站新模型 ID 均为 27、MID 为 `310013`；老站计费规则 38，新站 34。CH0107 的计费和映射保持不变。正式和预览 CONFIG 已有启用条目，无需新发目录版本或桌面安装包；管理页独立价格快照已补齐两站价格。
+
+`server/seedance-hm/deploy-starframe-variant.py` 已修正双站差价、TEXT JSON 编码、时区比较、并发保护及定向停用脚本。两站事务预演、实际写入和逐字段复核通过，供应商认证模型列表均包含 CH1401；老站使用本机既有 Key 请求 `/v1/models` 返回 200 并包含 CH1401。新站本机未保存 Key，因此只完成数据库、渠道、上游与转发验证，未提交收费生成任务。
+
+正式备份：老站 `/opt/tokensbyte-backups/starframe-ch1401-20260922T172042Z/`；新站 `/root/tkeapi-backups/starframe-ch1401-20260922T172049Z/`。备份包含私有整库数据、前后快照、迁移及只移除 CH1401 的停用 SQL。价格快照备份为 CONFIG 服务器 `/root/ch1401-admin-prices-20260922T172238Z.json`。
+
 供应商：`https://api.xzapi.vip`。模型：`ch0107-sd-2.5-720p`。Key 沿用 Corvas 加密凭据仓库保存。
 
 2026-09-21 已同步到 art/cart 两站，显示名称“2.5pro 备用（满参）”。新站售价 1.25 元/秒，老站 1.06 元/秒；两站使用 `/v1/video/generations` 提交/查询入口。直连供应商仍使用 `/v1/videos`。归一化结果的 `data[].url` 与原生 `metadata.url` 均可识别经校验的 StarFrame 签名存储链接。详情见 `docs/tkeapi-deployment.md`。

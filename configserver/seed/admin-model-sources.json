@@ -1,0 +1,68 @@
+{
+    "entries": [
+        {
+            "ids": ["ravenhash-video.seedance-2.0", "ravenhash-video.seedance-2.0-fast", "ravenhash-video.seedance-2.0-mini", "ravenhash-video.seedance-2.0-pro"],
+            "models": ["seedance-2.0", "doubao-seedance-2-0", "artsdance2-0-fast-intl-260701", "artsdance2-0-mini-intl-260701", "artsdance2-0-pro-intl-260701"],
+            "hosts": ["art.ravenhash.org", "cart.ravenhash.org", "ai.artsmcp.com"],
+            "name": "ArtsMCP",
+            "url": "https://ai.artsmcp.com",
+            "evidence": "art.ravenhash.org channels 1 + channel_configs preset, read-only verification 2026-09-22"
+        },
+        {
+            "ids": ["minimax-video.minimax-h3-seconds", "ravenhash-video.minimax-h3"],
+            "models": ["minimax-h3", "minimax-h3-per-second"],
+            "hosts": ["art.ravenhash.org", "cart.ravenhash.org"],
+            "name": "MiniMax H3 上游（122.228.216.60）",
+            "url": "http://122.228.216.60:3000",
+            "evidence": "art.ravenhash.org channel 2 + minimaxh3 preset + /opt/tokensbyte/h3-adapter/adapter.py UPSTREAM, read-only verification 2026-09-22"
+        },
+        {
+            "ids": ["ravenhash-video.sd2.5-route1"],
+            "models": ["sd2.5-route1"],
+            "hosts": ["art.ravenhash.org", "cart.ravenhash.org"],
+            "name": "968API",
+            "url": "https://ap.968968968.xyz",
+            "evidence": "art.ravenhash.org channel 4 + /opt/tokensbyte/seedance968-adapter/adapter.py UPSTREAM, read-only verification 2026-09-22"
+        },
+        {
+            "ids": ["ravenhash-video.sd2.5", "ravenhash-video.seedance-v2.5", "ravenhash-video.hm-seedance-933", "ravenhash-video.hm-seedance-101010", "ravenhash-video.hm-seedance-301010"],
+            "models": ["sd2.5", "sd2.5-route2", "sd2.5-haidiyue-face", "seedance_v2.5", "seedance_v2.0-933", "seedance_v2.5-101010", "seedance_v2.5-301010"],
+            "hosts": ["art.ravenhash.org", "cart.ravenhash.org", "video.zhubo.asia"],
+            "name": "主播视频",
+            "url": "https://video.zhubo.asia",
+            "evidence": "art.ravenhash.org channel 3, including decoded model bindings, read-only verification 2026-09-22"
+        },
+        {
+            "ids": ["starframe.ch0107-sd-2.5-720p", "starframe.ch1401-sd-2.5-720p"],
+            "models": ["ch0107-sd-2.5-720p", "ch1401-sd-2.5-720p"],
+            "hosts": ["art.ravenhash.org", "cart.ravenhash.org", "api.xzapi.vip"],
+            "name": "StarFrame",
+            "url": "https://api.xzapi.vip",
+            "evidence": "docs/starframe-video.md; server/seedance-hm/deploy-starframe-variant.py"
+        },
+        {
+            "ids": ["globalaiopc.sd-2.5-discount-v1"],
+            "models": ["sd_2.5_discount_v1"],
+            "hosts": ["art.ravenhash.org", "cart.ravenhash.org", "zcbservice.aizfw.cn"],
+            "name": "GlobalAiOpc",
+            "url": "https://zcbservice.aizfw.cn/kyyReactApiServer",
+            "evidence": "docs/globalaiopc-video.md"
+        },
+        {
+            "ids": ["shanhai-video.oc-model-qbdmeb", "shanhai-video.oc-model-1iq31f", "shanhai-video.oc-model-bkb50q", "shanhai-video.oc-model-c6ws7e"],
+            "models": ["oc-model-qbdmeb", "oc-model-1iq31f", "oc-model-bkb50q", "oc-model-c6ws7e"],
+            "hosts": ["art.ravenhash.org", "cart.ravenhash.org", "shanhai.vnshu.cn"],
+            "name": "山海",
+            "url": "https://shanhai.vnshu.cn/api/v1",
+            "evidence": "art.ravenhash.org channel 7 + shanhai-video-adapter UPSTREAM, read-only verification 2026-09-22"
+        },
+        {
+            "ids": ["ravenhash-video.sd2-fast", "ravenhash-video.seedance-2.5-pro", "ravenhash-video.seedance-2.5-pro-1", "ravenhash-video.seedance-2.5-pro-720"],
+            "models": ["sd2-fast", "seedance-2.5-pro/1", "seedance-2.5-pro", "seedance-2.5-pro-720"],
+            "hosts": ["art.ravenhash.org", "cart.ravenhash.org", "yueqi.icu"],
+            "name": "Yueqi",
+            "url": "https://yueqi.icu",
+            "evidence": "art.ravenhash.org channel 8 binds sd2-fast, seedance-2.5-pro, seedance-2.5-pro-720, read-only verification 2026-09-22"
+        }
+    ]
+}

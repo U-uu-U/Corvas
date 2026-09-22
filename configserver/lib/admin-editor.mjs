@@ -1,7 +1,7 @@
 import { parseEditorConfig, readEditorValues, applyEditorValues, REFERENCE_KINDS } from './admin-editor-model.mjs';
-import { addCatalogModel, catalogGroupKey, catalogGroups, catalogModelPrice, createCatalogGroup, createCatalogHistory,
-    deleteCatalogModel, modelName, moveCatalogModel, renameCatalogGroup, reorderCatalog, toggleCatalogVisibility } from './admin-catalog-model.mjs';
-import { renderCatalog } from './admin-catalog-view.mjs';
+import { addCatalogModel, catalogGroupKey, catalogGroups, createCatalogGroup, createCatalogHistory,
+    deleteCatalogModel, modelName, moveCatalogModel, renameCatalogGroup, reorderCatalog, setCatalogEnabled, toggleCatalogVisibility } from './admin-catalog-model.mjs';
+import { appendCatalogPrices, appendCatalogSource, renderCatalog } from './admin-catalog-view.mjs';
 
 export function initAdminEditor(document) {
     const window = document.defaultView;
@@ -20,6 +20,9 @@ export function initAdminEditor(document) {
     let selectedId = '';
     let mode = 'json';
     let history = null;
+    let catalogSources = null;
+    let catalogCosts = null;
+    let catalogPrices = null;
     const touched = new Set();
     let submitting = false;
     const selected = () => config?.models.find(entry => entry.id === selectedId);
@@ -114,10 +117,8 @@ export function initAdminEditor(document) {
             detail.textContent = [({ image: '图片', video: '视频', text: '文字' })[entry.kind] || entry.kind,
                 entry.presentation?.routeLabel, entry.id].filter(Boolean).join(' · ');
             button.append(label, detail);
-            const price = document.createElement('span');
-            price.className = 'catalog-price';
-            price.textContent = catalogModelPrice(entry);
-            button.append(price);
+            appendCatalogPrices(document, button, entry, catalogPrices, catalogCosts);
+            appendCatalogSource(document, button, entry, catalogSources);
             button.addEventListener('click', () => selectModel(entry.id));
             list.appendChild(button);
         }
@@ -128,19 +129,19 @@ export function initAdminEditor(document) {
             list.appendChild(empty);
         }
         list.scrollTop = scroll;
-        if (config) renderCatalog(document, config, selectedId, selectModel);
+        if (config) renderCatalog(document, config, selectedId, selectModel, catalogSources, catalogPrices, catalogCosts, toggleModelCall);
     };
     function selectModel(id) {
         if (!flushSelected()) return;
         const focused = document.activeElement;
-        const parentId = focused?.parentElement?.id;
+        const parentId = focused?.closest('#modelList,#catalogGroups,#catalogModels')?.id;
         const groupKey = focused?.dataset.catalogGroup;
         selectedId = id;
         renderEditor();
         renderList();
         if (parentId === 'modelList') [...list.children].find(button => button.dataset.modelId === id)?.focus({ preventScroll: true });
         else if (['catalogGroups', 'catalogModels'].includes(parentId)) {
-            [...document.getElementById(parentId).children].find(button => groupKey
+            [...document.getElementById(parentId).querySelectorAll('.catalog-tile')].find(button => groupKey
                 ? button.dataset.catalogGroup === groupKey : button.dataset.catalogModelId === id)?.focus({ preventScroll: true });
         }
     }
@@ -243,13 +244,14 @@ export function initAdminEditor(document) {
     for (const id of ['catalogGroups', 'catalogModels']) {
         document.getElementById(id).addEventListener('keydown', event => {
             if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
-            const buttons = [...event.currentTarget.querySelectorAll('button')];
+            if (document.activeElement?.classList.contains('catalog-call-switch')) return;
+            const buttons = [...event.currentTarget.querySelectorAll('.catalog-tile')];
             const index = buttons.indexOf(document.activeElement);
             const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
                 : Math.max(0, Math.min(buttons.length - 1, index + (event.key === 'ArrowUp' ? -1 : 1)));
             event.preventDefault();
             buttons[next]?.click();
-            [...document.getElementById(id).querySelectorAll('button')][next]?.focus();
+            [...document.getElementById(id).querySelectorAll('.catalog-tile')][next]?.focus();
         });
     }
     document.querySelectorAll('[data-editor-mode]').forEach(button => button.addEventListener('click', () => setMode(button.dataset.editorMode)));
@@ -277,6 +279,15 @@ export function initAdminEditor(document) {
         try { replaceConfig(action()); }
         catch (error) { showErrors([error.message]); setState('操作未完成', true); }
     };
+    function toggleModelCall(id, enabled) {
+        if (!flushSelected()) return;
+        const parentId = document.activeElement?.closest('#catalogGroups,#catalogModels')?.id;
+        try {
+            replaceConfig(setCatalogEnabled(config, id, enabled));
+            if (parentId) [...document.getElementById(parentId).querySelectorAll('.catalog-call-switch')]
+                .find(toggle => toggle.dataset.callModelId === id)?.focus({ preventScroll: true });
+        } catch (error) { showErrors([error.message]); setState('调用状态未修改', true); }
+    }
     document.getElementById('catalogMode').addEventListener('change', event => {
         const catalogMode = event.target.value;
         operate(() => ({ ...config, catalogMode }));
@@ -300,6 +311,7 @@ export function initAdminEditor(document) {
         if (!flushSelected()) return;
         const groups = catalogGroups(config, { kind: document.getElementById('catalogKind').value,
             query: document.getElementById('catalogSearch').value, includeHidden: document.getElementById('catalogShowHidden').checked,
+            includeDisabled: true,
             includeLegacy: config.catalogMode !== 'remote' || document.getElementById('catalogShowLegacy').checked });
         if (!groups.some(group => group.entries.some(entry => entry.id === selectedId))) {
             selectedId = groups[0]?.entries[0]?.id || '';
@@ -438,6 +450,39 @@ export function initAdminEditor(document) {
     document.getElementById('editorTabs').hidden = false;
     updateSaveLabel();
     setMode('operation');
+    window.fetch('/admin/model-costs', { credentials: 'same-origin', cache: 'no-store' })
+        .then(response => {
+            if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('Cost lookup failed');
+            return response.json();
+        })
+        .then(costs => {
+            if (!Array.isArray(costs.entries)) throw new Error('Invalid cost snapshot');
+            catalogCosts = costs;
+        })
+        .catch(() => { catalogCosts = { error: true }; })
+        .finally(() => { if (config) renderList(); });
+    window.fetch('/admin/model-prices', { credentials: 'same-origin', cache: 'no-store' })
+        .then(response => {
+            if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('Price lookup failed');
+            return response.json();
+        })
+        .then(prices => {
+            if (!Array.isArray(prices.sites)) throw new Error('Invalid price snapshot');
+            catalogPrices = prices;
+        })
+        .catch(() => { catalogPrices = { error: true }; })
+        .finally(() => { if (config) renderList(); });
+    window.fetch('/admin/model-sources', { credentials: 'same-origin', cache: 'no-store' })
+        .then(response => {
+            if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('Source lookup failed');
+            return response.json();
+        })
+        .then(sources => {
+            if (!Array.isArray(sources.entries)) throw new Error('Invalid source catalog');
+            catalogSources = sources;
+        })
+        .catch(() => { catalogSources = { error: true }; })
+        .finally(() => { if (config) renderList(); });
 }
 
 if (globalThis.document) initAdminEditor(globalThis.document);

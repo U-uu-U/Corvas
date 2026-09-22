@@ -94,8 +94,8 @@ export function modelEditorMarkup() {
             <div class="model-heading"><output id="selectedModelId" class="mono"></output><button type="button" id="restoreModelBtn">还原此模型</button></div>
             <fieldset id="modelFields" disabled>
               <div class="field-grid">
-                <label class="field"><span>模型 ID</span><input type="text" data-field="catalogModel" maxlength="200" autocomplete="off" spellcheck="false" placeholder="未设置"></label>
-                <label class="field"><span>目录状态</span><select data-field="catalogEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
+                <label class="field full"><span>模型 ID</span><input type="text" data-field="catalogModel" maxlength="200" autocomplete="off" spellcheck="false" placeholder="未设置"></label>
+                <input type="hidden" data-field="catalogEnabled">
                 <label class="field full"><span>API 主机名</span><textarea data-field="catalogHosts" rows="2" placeholder="art.ravenhash.org&#10;cart.ravenhash.org" spellcheck="false"></textarea></label>
               </div>
               <div class="form-section"><h3>模型展示</h3></div>

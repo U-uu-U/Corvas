@@ -7,17 +7,81 @@ export const modelVisible = entry => entry.presentation?.visible !== false && en
 export const catalogGroupKey = entry => entry.presentation?.routeGroup
     ? `${entry.kind}:${entry.presentation.routeGroup}` : `model:${entry.id}`;
 
-export function catalogModelPrice(entry) {
-    const pricing = entry?.pricing;
-    if (!Array.isArray(pricing?.hosts) || !pricing.hosts.some(host => typeof host === 'string'
-        && host.toLowerCase() === 'art.ravenhash.org')) return '老站价格：未配置';
-    if (pricing.status === 'unknown') return '老站价格：待确认';
-    const units = { request: '次', second: '秒', image: '张' };
-    if (pricing.status !== 'known' || pricing.kind !== 'sale' || !Number.isFinite(pricing.amount)
-        || pricing.amount < 0 || !['CNY', 'USD'].includes(pricing.currency)
-        || !Object.hasOwn(units, pricing.unit)) return '老站价格：待确认';
-    const amount = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(pricing.amount);
-    return `老站价格：${pricing.currency === 'CNY' ? '¥' : 'US$'}${amount}/${units[pricing.unit]}`;
+export function catalogModelPrices(entry, snapshot) {
+    const units = { request: '次', second: '秒', image: '张', million_tokens: '百万 Token' };
+    return [['art.ravenhash.org', '老站'], ['cart.ravenhash.org', '新站']].map(([host, label]) => {
+        const site = snapshot?.sites?.find(site => site.host === host);
+        const checkedAt = site?.checkedAt || snapshot?.checkedAt;
+        const title = checkedAt ? `中转站计费核对：${checkedAt}` : '';
+        const line = value => ({ host, text: `${label}价格：${value}`, title });
+        if (snapshot === null) return line('读取中');
+        if (snapshot?.error) return line('读取失败');
+        if (!Array.isArray(site?.models)) return line('待核对');
+        const record = entry.catalog?.model
+            ? site.models.find(model => model.model === entry.catalog.model)
+            : site.models.find(model => model.ids?.includes(entry.id));
+        if (!record) return line(entry.kind && entry.kind !== 'video' ? '待核对'
+            : entry.catalog?.model ? '未接入' : '待绑定模型');
+        if (record.status === 'missing_rule') return line('未配置计费规则');
+        if (record.status === 'inactive_rule') return line('计费规则已停用');
+        const prices = record.prices;
+        if (record.status !== 'known' || !['CNY', 'USD'].includes(record.currency)
+            || !Array.isArray(prices) || !prices.length
+            || prices.some(price => !Number.isFinite(price.amount) || price.amount < 0 || !Object.hasOwn(units, price.unit))) {
+            return line(record.reason || '待核对');
+        }
+        const currency = record.currency === 'CNY' ? '¥' : 'US$';
+        const formatted = prices.map(price => {
+            const amount = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(price.amount);
+            return `${price.label ? `${price.label} ` : ''}${currency}${amount}/${units[price.unit]}`;
+        }).join('；');
+        return line(`${formatted}${record.reason ? `；${record.reason}` : ''}${record.active === false ? '（已下架）' : ''}`);
+    });
+}
+
+export function catalogModelCost(entry, snapshot) {
+    const line = (text, title = '', status = 'unknown') => ({ text: `成本价：${text}`, title, status });
+    if (snapshot === null) return line('读取中');
+    if (snapshot?.error) return line('读取失败');
+    const record = snapshot?.entries?.find(record => record.ids?.includes(entry.id)
+        && (!entry.catalog || record.models?.includes(entry.catalog.model)));
+    if (!record) return line('待核对');
+    if (entry.catalog) {
+        let supplierHost;
+        try { supplierHost = new URL(record.sourceUrl).hostname; } catch { return line('待核对'); }
+        const allowed = new Set(['art.ravenhash.org', 'cart.ravenhash.org', supplierHost]);
+        if (!entry.catalog.hosts?.length || entry.catalog.hosts.some(host => !allowed.has(host))) return line('待核对上游绑定');
+    }
+    const title = `${record.supplier}\n核对：${snapshot.checkedAt}\n${record.sourceUrl}`;
+    if (record.status === 'unknown') return line(`待核对（${record.note}）`, title);
+    const units = { request: '次', second: '秒', image: '张', million_tokens: '百万 Token' };
+    if (!['reference', 'historical'].includes(record.status) || !['CNY', 'USD', 'CREDITS'].includes(record.currency)
+        || !Array.isArray(record.prices) || !record.prices.length
+        || record.prices.some(price => !Number.isFinite(price.amount) || price.amount < 0 || !Object.hasOwn(units, price.unit))) return line('待核对', title);
+    const formatted = record.prices.map(price => {
+        const amount = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(price.amount);
+        const value = record.currency === 'CREDITS' ? `${amount} 积分` : `${record.currency === 'CNY' ? '¥' : 'US$'}${amount}`;
+        return `${price.label ? `${price.label} ` : ''}${value}/${units[price.unit]}`;
+    }).join('；');
+    return line(`${record.status === 'historical' ? '历史报价 ' : '上游参考价 '}${formatted}（${record.note}）`, title, record.status);
+}
+
+export function catalogModelSource(entry, sources) {
+    const pending = sources === null ? '读取中' : sources?.error ? '读取失败' : '待确认';
+    const record = Array.isArray(sources?.entries) && sources.entries.find(source => {
+        if (!Array.isArray(source.ids) || !source.ids.includes(entry.id)) return false;
+        if (!entry.catalog) return true;
+        return source.models?.includes(entry.catalog.model) && Array.isArray(entry.catalog.hosts)
+            && entry.catalog.hosts.length > 0 && entry.catalog.hosts.every(host => source.hosts?.includes(host));
+    });
+    let url = '';
+    try {
+        const parsed = new URL(record?.url);
+        if (['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password
+            && !parsed.search && !parsed.hash) url = record.url;
+    } catch { /* Missing or invalid supplier addresses remain unconfirmed. */ }
+    return { name: `上游：${typeof record?.name === 'string' && record.name.trim() ? record.name : pending}`,
+        url: `URL：${url || pending}` };
 }
 
 export function catalogModelSummary(entry) {
@@ -201,6 +265,15 @@ export function toggleCatalogVisibility(config, id) {
     const entry = requireEntry(next, id);
     const visible = entry.presentation?.visible === false;
     entry.presentation = { ...entry.presentation, visible };
+    return next;
+}
+
+export function setCatalogEnabled(config, id, enabled) {
+    const next = copy(config);
+    const entry = requireEntry(next, id);
+    if (!entry.catalog) throw new Error('请先补全模型 ID 和 API 主机名');
+    if (typeof enabled !== 'boolean') throw new Error('调用状态需要启用或停用');
+    entry.catalog.enabled = enabled;
     return next;
 }
 

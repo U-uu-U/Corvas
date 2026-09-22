@@ -1,4 +1,4 @@
-import { catalogGroups, catalogGroupKey, catalogModelPrice, catalogModelSummary, modelName, modelVisible } from './admin-catalog-model.mjs';
+import { catalogGroups, catalogGroupKey, catalogModelCost, catalogModelPrices, catalogModelSource, catalogModelSummary, modelName, modelVisible } from './admin-catalog-model.mjs';
 const sprite = '/admin/assets/flow-icons.svg';
 const icon = (name, modifier = '') => `<svg class="catalog-icon ${modifier}" viewBox="0 0 24 24" aria-hidden="true"><use href="${sprite}#icon-${name}"></use></svg>`;
 
@@ -29,6 +29,14 @@ export const CATALOG_STYLE = `
 .catalog-groups, .catalog-models { min-width:0; display:flex; flex-direction:column; gap:6px; max-height:700px; overflow:auto; scrollbar-width:thin; }
 .catalog-tile { position:relative; display:flex; flex-shrink:0; gap:10px; align-items:center; width:100%; min-height:70px; text-align:left; background:#292a2d; border:1px solid transparent; border-radius:7px; padding:12px; color:#d1d3d7; }
 .catalog-tile .tile-copy { min-width:0; flex:1; }
+.catalog-item { position:relative; min-width:0; flex-shrink:0; }
+.catalog-item .catalog-tile { padding-top:40px; }
+.catalog-call-control { position:absolute; right:10px; top:9px; display:flex; gap:7px; align-items:center; font-size:11px; color:#b9c2bb; }
+.catalog-call-switch { position:relative; width:30px; height:18px; min-height:18px; border:1px solid #69717b; border-radius:9px; padding:0; background:#464a51; }
+.catalog-call-switch::after { content:''; position:absolute; width:12px; height:12px; left:2px; top:2px; border-radius:50%; background:#dce1e5; }
+.catalog-call-switch[aria-checked=true] { background:#397c61; border-color:#549b7c; }
+.catalog-call-switch[aria-checked=true]::after { left:14px; background:#eff8f1; }
+.catalog-call-switch:focus-visible { outline:2px solid #a3c8f0; outline-offset:3px; }
 .catalog-tile strong, .catalog-tile small { display:block; overflow-wrap:anywhere; white-space:normal; }
 .catalog-tile strong { font-size:13px; font-weight:600; line-height:1.5; }
 .catalog-tile small { color:#93969d; font-size:11px; line-height:1.55; margin-top:3px; }
@@ -39,11 +47,14 @@ export const CATALOG_STYLE = `
 .catalog-tile .tile-status { display:block; font-size:10px; color:#b7caad; margin-top:5px; }
 .catalog-tile .tile-status.warning { color:#deb978; }
 .catalog-price { display:block; margin-top:6px; color:#d6c58f; font-size:12px; line-height:1.5; font-variant-numeric:tabular-nums; white-space:normal; overflow-wrap:anywhere; }
-.catalog-tile[data-disabled=true] .catalog-price { color:#e1b6bd; }
-.catalog-tile[data-disabled=true] { background:#38272b; border-color:#69414a; color:#e6cad0; }
-.catalog-tile[data-disabled=true]:hover { background:#432d32; }
-.catalog-tile[data-disabled=true][aria-selected=true] { background:#4b3036; border-color:#ba7582; }
-.catalog-tile[data-disabled=true] small, .catalog-tile[data-disabled=true] .tile-status { color:#dca6b0; }
+.catalog-price + .catalog-price { margin-top:2px; }
+.catalog-price[data-site="cart.ravenhash.org"] { color:#a7c8b7; }
+.catalog-cost { display:block; margin-top:5px; color:#b3c5da; font-size:11px; line-height:1.55; white-space:normal; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.catalog-cost[data-status="historical"] { color:#c8b395; }
+.catalog-cost[data-status="unknown"] { color:#9da3ad; }
+.catalog-source { display:block; margin-top:3px; color:#a5a8ae; font-size:11px; line-height:1.55; white-space:normal; overflow-wrap:anywhere; }
+.catalog-source-url { margin-top:1px; }
+.catalog-tile[data-disabled=true] .tile-status { color:#a7aab0; }
 .catalog-empty { grid-column:1/-1; padding:30px 12px; text-align:center; color:#92959b; font-size:13px; }
 .catalog-pane h3 { font-size:12px; color:#a8aab1; margin:0 0 10px; font-weight:500; }
 .catalog-selection { font-size:12px; color:#b5b8be; overflow-wrap:anywhere; margin:12px 0 0; }
@@ -131,7 +142,35 @@ export function catalogDialogMarkup() {
     </dialog>`;
 }
 
-function tile(document, entry, { label, detail, selected, arrow = false, hidden = false, disabled = false, status = '', warning = false, onClick }) {
+export function appendCatalogSource(document, parent, entry, sources) {
+    const source = catalogModelSource(entry, sources);
+    for (const key of ['name', 'url']) {
+        const line = document.createElement('span');
+        line.className = `catalog-source catalog-source-${key}`;
+        line.textContent = source[key];
+        parent.append(line);
+    }
+}
+
+export function appendCatalogPrices(document, parent, entry, prices, costs) {
+    for (const record of catalogModelPrices(entry, prices)) {
+        const line = document.createElement('span');
+        line.className = 'catalog-price';
+        line.dataset.site = record.host;
+        line.textContent = record.text;
+        line.title = record.title;
+        parent.append(line);
+    }
+    const cost = catalogModelCost(entry, costs);
+    const line = document.createElement('span');
+    line.className = 'catalog-cost';
+    line.dataset.status = cost.status;
+    line.textContent = cost.text;
+    line.title = cost.title;
+    parent.append(line);
+}
+
+function tile(document, entry, { label, detail, selected, arrow = false, hidden = false, disabled = false, status = '', warning = false, onClick, onToggle, sources, prices, costs }) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'catalog-tile';
@@ -154,10 +193,8 @@ function tile(document, entry, { label, detail, selected, arrow = false, hidden 
         text.append(badge);
     }
     if (entry) {
-        const price = document.createElement('span');
-        price.className = 'catalog-price';
-        price.textContent = catalogModelPrice(entry);
-        text.append(price);
+        appendCatalogPrices(document, text, entry, prices, costs);
+        appendCatalogSource(document, text, entry, sources);
     }
     button.append(text);
     if (arrow) {
@@ -171,10 +208,30 @@ function tile(document, entry, { label, detail, selected, arrow = false, hidden 
         button.append(arrowIcon);
     }
     button.addEventListener('click', onClick);
+    if (entry?.catalog && onToggle) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'catalog-item';
+        const control = document.createElement('span');
+        control.className = 'catalog-call-control';
+        const text = document.createElement('span');
+        text.textContent = '允许调用';
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'catalog-call-switch';
+        toggle.dataset.callModelId = entry.id;
+        toggle.setAttribute('role', 'switch');
+        toggle.setAttribute('aria-checked', String(!disabled));
+        toggle.setAttribute('aria-label', `${modelName(entry)}允许调用`);
+        toggle.title = disabled ? '启用调用' : '停用调用';
+        toggle.addEventListener('click', () => onToggle(entry.id, disabled));
+        control.append(text, toggle);
+        wrapper.append(button, control);
+        return wrapper;
+    }
     return button;
 }
 
-export function renderCatalog(document, config, selectedId, onSelect) {
+export function renderCatalog(document, config, selectedId, onSelect, sources, prices, costs, onToggle) {
     document.getElementById('catalogMode').value = config.catalogMode === 'remote' ? 'remote' : 'fallback';
     const selected = config.models.find(entry => entry.id === selectedId);
     document.getElementById('catalogShowLegacyLabel').hidden = config.catalogMode !== 'remote';
@@ -194,7 +251,7 @@ export function renderCatalog(document, config, selectedId, onSelect) {
         hidden: entry.presentation?.visible === false, disabled: entry.catalog?.enabled === false, selected: selectedId === entry.id,
         status: entry.catalog?.enabled === false ? '已停用' : entry.presentation?.visible === false ? '已隐藏'
             : !entry.catalog ? '待补全模型 ID 与 API 主机' : selectedId === entry.id ? '当前' : '',
-        warning: !entry.catalog, onClick: () => onSelect(entry.id) });
+        warning: !entry.catalog, onClick: () => onSelect(entry.id), onToggle, sources, prices, costs });
     for (const group of groups) {
         if (!group.id) groupList.append(renderEntry(group.entries[0]));
         else {

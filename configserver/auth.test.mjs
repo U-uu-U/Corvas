@@ -38,6 +38,18 @@ test('登录成功发会话，登录失败不发；密码错误与限流报错�
     assert.equal(bad.retryAfter, undefined);
 });
 
+test('账号校验与密码失败共用限流，不发会话且不泄露错误原因', () => {
+    const auth = createAuth({ passwordRecord: hashPassword('s3cret-password'), logger: { warn() {} } });
+    for (let attempt = 0; attempt < AUTH_LIMITS.MAX_FAILURES; attempt++) {
+        const result = auth.login('s3cret-password', { ip: 'username-test', username: 'other' });
+        assert.equal(result.ok, false);
+        assert.equal(result.error, '账号或密码不正确');
+    }
+    assert.equal(auth.sessionCount(), 0);
+    assert.ok(auth.login('s3cret-password', { ip: 'username-test', username: 'admin' }).retryAfter > 0);
+    assert.equal(auth.login('s3cret-password', { ip: 'another-ip', username: 'admin' }).ok, true);
+});
+
 test('会话有 TTL 且滑动续期；退出后失效', () => {
     let clock = 1_000_000;
     const auth = createAuth({ passwordRecord: hashPassword('s3cret-password'), now: () => clock, logger: { warn() {} } });

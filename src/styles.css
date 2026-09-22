@@ -2767,6 +2767,12 @@ body.platform-win32 .agent-settings-btn {
     margin: 0;
 }
 
+.agent-model-field [hidden],
+.agent-additional-models[hidden],
+.agent-add-model-slot[hidden] {
+    display: none !important;
+}
+
 .agent-additional-models {
     display: grid;
     gap: 8px;

@@ -196,7 +196,7 @@ sudo ./deploy/stop.sh --uninstall --purge   # 连数据目录一起删（会要�
 | GET | `/` | 公开 | 落地页：现行版本摘要 + 入口 |
 | GET | `/admin` | 会话 | 管理面板；`?version=<文件名>` 可把某个历史版本载入编辑器 |
 | GET | `/admin/assets/admin-editor.mjs`、`/admin/assets/admin-editor-model.mjs` | 会话 | 表单编辑器模块，固定文件白名单 |
-| GET | `/admin/login` · POST 同名 | 公开 | 登录（表单 `password`），成功后种 HttpOnly + SameSite=Strict 会话 cookie |
+| GET | `/admin/login` · POST 同名 | 公开 | 登录（表单 `username=admin` 与 `password`），成功后种 HttpOnly + SameSite=Strict 会话 cookie |
 | POST | `/admin/logout` | 会话 | 退出（需 CSRF） |
 | POST | `/admin/save` | 会话 | 表单：`content`(JSON 文本)、`note`、`draft=1` 表示只存版本不切换现行 |
 | POST | `/admin/apply` | 会话 | 表单：`name` —— 一键把旧版本切回现行（只挪指针） |
@@ -260,7 +260,7 @@ curl -s https://artconfig.ravenhash.org/config | jq '.revision, (.models|length)
 tar czf flow-config-$(date +%F).tgz -C /var/lib/flow-config .
 
 # 回滚：登录面板 → 版本列表 → 目标版本「应用为现行」；或用 API
-#   curl -c cj -d 'password=...' https://artconfig.ravenhash.org/admin/login
+#   curl -c cj -d 'username=admin&password=...' https://artconfig.ravenhash.org/admin/login
 #   curl -b cj -d "csrf=$TOKEN&name=20260911T230012-r0.json" https://artconfig.ravenhash.org/admin/apply
 ```
 
