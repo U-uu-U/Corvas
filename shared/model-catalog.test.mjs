@@ -1,12 +1,66 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { expandCatalogProviders, findCatalogEntry, isRemoteCatalog, isCatalogManaged } from './model-catalog.mjs';
+import { expandCatalogProviders, findCatalogEntry, isRemoteCatalog, isCatalogManaged,
+    getCatalogProviderEntries, catalogProviderKinds } from './model-catalog.mjs';
 
 const account = { id: 'video-account', endpoint: 'https://art.example.test/v1', apiKey: 'test-art-key',
     capability: 'video', model: 'local-old', models: ['local-old', 'local-extra'] };
 const entry = (id = 'remote-a', overrides = {}) => ({ id, kind: 'video', priority: 0,
     catalog: { model: id, hosts: ['art.example.test'] }, ...overrides });
 const remote = (...models) => ({ catalogMode: 'remote', models });
+
+test('new remote accounts use URL and capability without a local model list or global scope change', () => {
+    const config = { ...remote(entry('remote-video'), entry('remote-image', { kind: 'image' }),
+        entry('other-host', { kind: 'image', catalog: { model: 'other-host', hosts: ['other.test'] } })),
+    catalogScope: { hosts: ['art.example.test'], kinds: ['video'] } };
+    const imageAccount = { ...account, capability: 'image', modelCatalog: 'remote', model: 'remote-image', models: [] };
+    const oldImageAccount = { ...imageAccount, id: 'old-image', modelCatalog: undefined, model: 'custom-image', models: ['custom-image'] };
+    const oldTextAccount = { ...oldImageAccount, id: 'old-text', capability: 'text', model: 'custom-text', models: ['custom-text'] };
+    const before = structuredClone(config);
+
+    assert.deepEqual(getCatalogProviderEntries(config, { endpoint: imageAccount.endpoint, capability: 'image' })
+        .map(model => model.id), ['remote-image']);
+    const expanded = expandCatalogProviders(config, [imageAccount, oldImageAccount, oldTextAccount]);
+    assert.deepEqual(expanded.map(model => [model.id, model.model]), [
+        ['video-account::model:remote-image', 'remote-image'], ['old-image', 'custom-image'], ['old-text', 'custom-text']
+    ]);
+    assert.equal(findCatalogEntry(config, expanded[0]).id, 'remote-image');
+    assert.deepEqual(config, before);
+    config.models.push(entry('new-image', { kind: 'image' }));
+    assert.deepEqual(expandCatalogProviders(config, [imageAccount]).map(model => model.model), ['remote-image', 'new-image']);
+    config.models = [];
+    assert.deepEqual(expandCatalogProviders(config, [imageAccount]), []);
+    assert.equal(isCatalogManaged(config, imageAccount), true);
+});
+
+test('explicit remote accounts never restore local models when remote config is unavailable', () => {
+    const provider = { ...account, modelCatalog: 'remote' };
+    for (const config of [undefined, {}, { models: [entry('local-old')] },
+        { catalogMode: 'legacy', models: [entry('local-old')] }, remote()]) {
+        assert.equal(isCatalogManaged(config, provider), true);
+        assert.deepEqual(getCatalogProviderEntries(config, provider), []);
+        assert.deepEqual(expandCatalogProviders(config, [provider]), []);
+        assert.equal(findCatalogEntry(config, provider), null);
+    }
+});
+
+test('form catalog helpers share exact host, kind, priority and visibility rules with expansion', () => {
+    const low = entry('low', { catalog: { model: 'same', hosts: ['art.example.test'] }, priority: 1 });
+    const high = entry('high', { catalog: { model: 'same', hosts: ['art.example.test'], enabled: false }, priority: 2 });
+    const hidden = entry('hidden', { presentation: { visible: false } });
+    const config = remote(low, high, hidden, entry('image', { kind: 'image' }), entry('visible'));
+    assert.deepEqual(getCatalogProviderEntries(config, account).map(model => model.id), ['visible']);
+    assert.deepEqual(getCatalogProviderEntries(config, account, { includeHidden: true }).map(model => model.id),
+        ['high', 'hidden', 'visible']);
+    assert.deepEqual(catalogProviderKinds(config, 'https://ART.EXAMPLE.TEST:8443/v1'), ['video', 'image']);
+    assert.deepEqual(catalogProviderKinds(remote(high, hidden), account.endpoint), ['video']);
+    for (const endpoint of ['https://art.example.test.evil.test/v1', 'https://sub.art.example.test/v1',
+        'https://user@art.example.test/v1', 'file:///art.example.test', '']) {
+        assert.deepEqual(getCatalogProviderEntries(config, { ...account, endpoint }), []);
+        assert.deepEqual(catalogProviderKinds(config, endpoint), []);
+    }
+    assert.deepEqual(catalogProviderKinds({ models: config.models }, account.endpoint), []);
+});
 
 test('scoped catalogs retain text, image and custom accounts while an empty managed directory stays empty', () => {
     const config = { ...remote(), catalogScope: { hosts: ['art.example.test'], kinds: ['video'] } };

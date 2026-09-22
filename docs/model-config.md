@@ -1,5 +1,13 @@
 # 模型能力 CONFIG（客户端）
 
+## API 账号直接使用远端目录
+
+API 设置按 URL 的精确主机名和模型用途匹配远端 `catalog`。匹配后立即显示默认模型下拉框，不调用供应商 `/models`，也不显示拉取按钮和手工模型位；地址只对应一种用途时自动选择。保存远端账号时持久化 `modelCatalog: "remote"`、默认 `model` 与加密凭据，`models` 保持空数组，后续新增、停用与改名跟随 CONFIG。
+
+显式选择远端目录的新图片账号可使用已有精确目录，不要求扩大正式 `catalogScope`，原文字或自定义 API 仍保留手工配置。已保存默认模型被移除时显示不可用，不静默换成第一项；空目录或配置暂不可用不会恢复本地模型。编辑 Key、目录重排及刷新保留原默认绑定。目录服务请求不携带用户 API Key。
+
+定向测试：`src/agent-api-catalog.test.js`、`shared/model-catalog.test.mjs`；真实 Electron 流程：`node scripts/api-catalog-smoke.cjs`。测试使用隔离账号和本地 CONFIG，不调用付费生成。
+
 ## 源码版远程目录试验
 
 后台默认进入操作模式，左侧展示与画布相同的独立模型和渠道组，右侧编辑当前条目。支持新增/复制/删除、建组/改名/移组、组内和组间排序、显隐、清空与撤销重做；表单和 JSON 模式共用同一份待发布配置。目录条目使用 `catalog: { model, hosts, enabled }` 明确声明实际模型 ID、精确 API 主机名和启用状态，不从正则猜模型 ID，也不保存 Key。

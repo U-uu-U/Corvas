@@ -56,6 +56,7 @@ function accountKind(config, provider, hostname) {
 }
 
 export function isCatalogManaged(config, provider) {
+    if (provider?.modelCatalog === 'remote') return true;
     if (!isRemoteCatalog(config)) return false;
     if (!Object.hasOwn(config, 'catalogScope')) return true;
     if (!provider) return false;
@@ -66,8 +67,33 @@ export function isCatalogManaged(config, provider) {
     return Array.isArray(scope.kinds) && scope.kinds.includes(accountKind(config, provider, hostname));
 }
 
+export function getCatalogProviderEntries(config, provider, { includeHidden = false } = {}) {
+    if (!isRemoteCatalog(config) || !provider) return [];
+    const hostname = endpointHostname(provider.endpoint);
+    if (!hostname) return [];
+    const selected = new Map();
+    for (const entry of Array.isArray(config.models) ? config.models : []) {
+        if (!matchesAccount(entry, provider, hostname)) continue;
+        const model = catalogModel(entry);
+        const previous = selected.get(model);
+        if (!previous || entryPriority(entry) > entryPriority(previous)) selected.set(model, entry);
+    }
+    // Select the winning entry before filtering so disabled routes cannot revive lower-priority entries.
+    return [...selected.values()].filter(entry => includeHidden
+        || (entry.catalog.enabled !== false && entry.presentation?.visible !== false));
+}
+
+export function catalogProviderKinds(config, endpoint) {
+    if (!isRemoteCatalog(config)) return [];
+    const hostname = endpointHostname(endpoint);
+    if (!hostname) return [];
+    return [...new Set((Array.isArray(config.models) ? config.models : [])
+        .filter(entry => matchesAccount(entry, {}, hostname))
+        .map(entry => entry.kind))];
+}
+
 export function findCatalogEntry(config, provider) {
-    if (!isCatalogManaged(config, provider) || !provider) return null;
+    if (!isRemoteCatalog(config) || !isCatalogManaged(config, provider) || !provider) return null;
     const hostname = endpointHostname(provider.endpoint);
     const model = typeof provider.model === 'string' ? provider.model.trim() : '';
     if (!hostname || !model) return null;
@@ -95,37 +121,25 @@ function expandLegacyProviders(providers) {
 
 export function expandCatalogProviders(config, providers, { includeHidden = false } = {}) {
     const accounts = Array.isArray(providers) ? providers : [];
-    if (!isRemoteCatalog(config)) return expandLegacyProviders(accounts);
-    const entries = Array.isArray(config.models) ? config.models : [];
 
     return accounts.flatMap(provider => {
         if (!provider || !provider.id) return [];
         if (!isCatalogManaged(config, provider)) return expandLegacyProviders([provider]);
+        if (!isRemoteCatalog(config)) return [];
         const hostname = endpointHostname(provider.endpoint);
         if (!hostname) return [];
-        const selected = new Map();
         const kind = config.catalogScope ? accountKind(config, provider, hostname) : null;
-
-        for (const entry of entries) {
-            if (!matchesAccount(entry, provider, hostname)) continue;
-            if (kind && entry.kind !== kind) continue;
+        const entries = getCatalogProviderEntries(config, kind ? { ...provider, kind } : provider, { includeHidden });
+        return entries.map(entry => {
             const model = catalogModel(entry);
-            const priority = entryPriority(entry);
-            const previous = selected.get(model);
-            if (!previous || priority > previous.priority) selected.set(model, { entry, priority });
-        }
-
-        return [...selected].flatMap(([model, { entry }]) => {
-            // Recovery may retain disabled entries for existing jobs; new selections exclude them.
-            if (!includeHidden && (entry.catalog.enabled === false || entry.presentation?.visible === false)) return [];
-            return [{
+            return {
                 ...provider,
                 id: `${provider.id}::model:${encodeURIComponent(model)}`,
                 sourceProviderId: provider.sourceProviderId || provider.id,
                 model,
                 capability: provider.capability || entry.kind,
                 catalogEntryId: entry.id
-            }];
+            };
         });
     });
 }
