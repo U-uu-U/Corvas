@@ -8,6 +8,12 @@ API 设置按 URL 的精确主机名和模型用途匹配远端 `catalog`。匹�
 
 定向测试：`src/agent-api-catalog.test.js`、`shared/model-catalog.test.mjs`；真实 Electron 流程：`node scripts/api-catalog-smoke.cjs`。测试使用隔离账号和本地 CONFIG，不调用付费生成。
 
+## 新站 URL 与账号绑定
+
+`cart.ravenhash.org` 是独立的新站端点，保存时可从裸域名补全为 `https://cart.ravenhash.org/v1`，不会替换为老站。新增 `RavenHash 新站` 快捷模板；其他模板保留用户已手填的地址，编辑已有账号也保留地址。账号卡片显示实际站点，原节点通过账号 ID 读取最新端点。
+
+修复 beta.8 中两处容易误用老站的路径：获取 Key 按精确主机匹配（原包含判断把 `cart` 误当作 `art`），以及手填新站后点击通用 Video 模板覆盖地址。新站 Key 获取链接由主进程明确允许打开 `https://cart.ravenhash.org/`。切换站点仍需使用该站创建的 Key；不会自动搬迁凭据或合并两站账号。
+
 ## 源码版远程目录试验
 
 后台默认进入操作模式，左侧展示与画布相同的独立模型和渠道组，右侧编辑当前条目。支持新增/复制/删除、建组/改名/移组、组内和组间排序、显隐、清空与撤销重做；表单和 JSON 模式共用同一份待发布配置。目录条目使用 `catalog: { model, hosts, enabled }` 明确声明实际模型 ID、精确 API 主机名和启用状态，不从正则猜模型 ID，也不保存 Key。

@@ -2142,7 +2142,8 @@ ipcMain.handle('shell:openFile', async (event, filePath) => {
 
 const RAVENHASH_URLS = Object.freeze({
     ai: 'https://ai.ravenhash.org/',
-    art: 'https://art.ravenhash.org/'
+    art: 'https://art.ravenhash.org/',
+    cart: 'https://cart.ravenhash.org/'
 });
 
 ipcMain.handle('shell:openRavenHash', async (_, site) => {

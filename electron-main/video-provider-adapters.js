@@ -18,8 +18,17 @@ function isSeedanceVideoModel(model) {
     return isSeedance25Model(model) || /^seedance_v2\.0-933$/i.test(String(model || '').trim());
 }
 
-function seedanceReferenceLimits(model) {
+function isYueqiPro720Model(model, endpoint) {
+    if (String(model || '').trim().toLowerCase() !== 'seedance-2.5-pro-720') return false;
+    try {
+        return ['art.ravenhash.org', 'cart.ravenhash.org', 'yueqi.icu']
+            .includes(new URL(String(endpoint || '').trim()).hostname.toLowerCase());
+    } catch { return false; }
+}
+
+function seedanceReferenceLimits(model, endpoint) {
     const id = String(model || '').trim().toLowerCase();
+    if (isYueqiPro720Model(model, endpoint)) return { image: 30, video: 10, audio: 10 };
     if (id === 'seedance-2.5-pro') return { image: 30, video: 10, audio: 10 };
     if (id === 'seedance_v2.0-933') return { image: 9, video: 3, audio: 3 };
     if (id === 'seedance_v2.5-101010') return { image: 10, video: 10, audio: 10 };
@@ -27,8 +36,8 @@ function seedanceReferenceLimits(model) {
     return { image: isSeedance25BackupModel(model) ? 9 : 10, video: 0, audio: 0 };
 }
 
-function seedance25ReferenceImageLimit(model) {
-    return seedanceReferenceLimits(model).image;
+function seedance25ReferenceImageLimit(model, endpoint) {
+    return seedanceReferenceLimits(model, endpoint).image;
 }
 
 function resolveSeedance25AspectRatio(selectedRatio, width, height) {
@@ -187,6 +196,7 @@ function getVideoPayloadError(payload = {}) {
 }
 
 function buildSeedance25RequestBody({
+    endpoint,
     model,
     prompt,
     duration,
@@ -197,19 +207,21 @@ function buildSeedance25RequestBody({
     referenceAudios = []
     } = {}) {
     const label = /^seedance_v2\.0-933$/i.test(String(model || '').trim()) ? 'Seedance 2.0' : 'Seedance 2.5';
-    const maxDuration = label === 'Seedance 2.0' ? 15 : 30;
+    const isYueqiPro720 = isYueqiPro720Model(model, endpoint);
+    const minDuration = isYueqiPro720 ? 1 : 4;
+    const maxDuration = isYueqiPro720 ? 60 : label === 'Seedance 2.0' ? 15 : 30;
     const promptValue = String(prompt || '').trim();
     if (!promptValue) throw new Error(`${label} 提示词不能为空`);
 
     const durationValue = duration === undefined || duration === null || duration === ''
-        ? maxDuration
+        ? (isYueqiPro720 ? 10 : maxDuration)
         : Number(duration);
     if (isSeedance25BackupModel(model)) {
         if (durationValue !== 30) {
             throw new Error('Seedance 2.5 备用路线仅支持固定 30 秒视频');
         }
-    } else if (!Number.isInteger(durationValue) || durationValue < 4 || durationValue > maxDuration) {
-        throw new Error(`${label} 时长仅支持 4 到 ${maxDuration} 秒的整数`);
+    } else if (!Number.isInteger(durationValue) || durationValue < minDuration || durationValue > maxDuration) {
+        throw new Error(`${label} 时长仅支持 ${minDuration} 到 ${maxDuration} 秒的整数`);
     }
 
     const images = Array.isArray(referenceImages)
@@ -218,7 +230,7 @@ function buildSeedance25RequestBody({
             .map(image => String(image || '').trim())
             .filter(Boolean)
         : [];
-    const referenceImageLimit = seedance25ReferenceImageLimit(model);
+    const referenceImageLimit = seedance25ReferenceImageLimit(model, endpoint);
     if (images.length > referenceImageLimit) {
         throw new Error(`${label} 最多支持 ${referenceImageLimit} 张参考图片`);
     }
@@ -226,7 +238,7 @@ function buildSeedance25RequestBody({
         .map(value => String(typeof value === 'string' ? value : value?.url || '').trim()).filter(Boolean);
     const videos = urls(referenceVideos);
     const audios = urls(referenceAudios);
-    const limits = seedanceReferenceLimits(model);
+    const limits = seedanceReferenceLimits(model, endpoint);
     if (videos.length > limits.video) throw new Error(`${label} 最多支持 ${limits.video} 个参考视频`);
     if (audios.length > limits.audio) throw new Error(`${label} 最多支持 ${limits.audio} 段参考音频`);
 
@@ -236,6 +248,9 @@ function buildSeedance25RequestBody({
         throw new Error(`${label} 不支持画幅比例 ${ratioValue}`);
     }
 
+    if (isYueqiPro720 && resolution && resolution !== '720p') {
+        throw new Error('Seedance 2.5 Pro 720 仅支持 720p');
+    }
     const body = {
         model: String(model || '').trim(),
         prompt: promptValue,
@@ -340,6 +355,7 @@ function buildVideoGenerationEndpoint(endpoint, model) {
         try {
             const url = new URL(String(endpoint || '').trim());
             const isDirectUpstream = url.hostname.toLowerCase() === 'video.zhubo.asia'
+                || (url.hostname.toLowerCase() === 'yueqi.icu' && isYueqiPro720Model(model, endpoint))
                 || /\/v1\/videos\/?$/i.test(url.pathname);
             return isDirectUpstream
                 ? buildUnifiedVideoEndpoint(endpoint)

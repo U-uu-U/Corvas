@@ -3524,7 +3524,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         const isGlobalAiOpc = isGlobalAiOpcModel(model);
         const isStarFrame = isStarFrameModel(model);
         const referenceLimits = isShanhai ? shanhaiReferenceLimits(model)
-            : isStarFrame ? starFrameLimits(model) : isGlobalAiOpc ? GLOBALAIOPC_LIMITS : isSeedance ? seedanceReferenceLimits(model) : { image: 9, video: 3, audio: 3 };
+            : isStarFrame ? starFrameLimits(model) : isGlobalAiOpc ? GLOBALAIOPC_LIMITS : isSeedance ? seedanceReferenceLimits(model, endpoint) : { image: 9, video: 3, audio: 3 };
         const body = { model, prompt };
         const resolution = String(options.resolution || '').trim();
         let ratio = String(options.ratio || '').trim();

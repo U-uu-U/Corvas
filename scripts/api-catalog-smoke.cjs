@@ -88,15 +88,15 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
             }
             assert.equal(await page.locator('#agentFetchedModelSelect').isVisible(), true);
         };
-        const save = async name => {
+        const save = async (name, endpoint) => {
             await page.locator('#agentFormSaveBtn').click();
             await form.waitFor({ state: 'hidden' });
             for (let attempt = 0; attempt < 50; attempt++) {
                 const provider = (await saved()).providers.find(provider => provider.name === name);
-                if (provider) return provider;
+                if (provider && (!endpoint || provider.endpoint === endpoint)) return provider;
                 await new Promise(resolve => setTimeout(resolve, 100));
             }
-            throw new Error(`Saved provider missing: ${name}`);
+            throw new Error(`Saved provider missing or endpoint not persisted: ${name}`);
         };
         const edit = async name => {
             await page.locator('.agent-provider-card').filter({ has: page.getByText(name, { exact: true }) })
@@ -129,6 +129,12 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
         };
 
         await openSettings();
+        await page.locator('#agentAddApiBtn').click();
+        await page.locator('[data-template="ravenhash-video-cart"]').click();
+        assert.equal(await page.locator('#agentFormEndpoint').inputValue(), 'https://cart.ravenhash.org/v1',
+            'The Cart quick template must select the new station explicitly');
+        await assertManaged('video');
+        await page.locator('#agentApiFormClose').click();
         await fill('Art remote', 'https://art.ravenhash.org/v1');
         await assertManaged('video');
         assert.deepEqual((await choices()).map(option => option.value), ['sd2.5-route1', 'sd2.5-route2']);
@@ -136,14 +142,25 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
         await snapshot('desktop', 1440);
         await snapshot('compact', 820);
         const art = await save('Art remote');
+        assert.equal(art.endpoint, 'https://art.ravenhash.org/v1');
         assert.equal(art.modelCatalog, 'remote');
         assert.deepEqual(art.models, []);
         assert.equal(art.model, 'sd2.5-route2');
         assert.ok((await saved()).globalConfig.videoProviderId.includes(art.id));
 
         await fill('Cart remote', 'https://cart.ravenhash.org/v1');
+        await page.locator('[data-template="ravenhash-video"]').click();
+        assert.equal(await page.locator('#agentFormEndpoint').inputValue(), 'https://cart.ravenhash.org/v1',
+            'Selecting the video template must preserve the manually entered Cart endpoint');
+        await page.locator('#agentFormName').fill('Cart remote');
         await assertManaged('video');
-        const cart = await save('Cart remote');
+        await page.locator('#agentGetApiBtn').click();
+        assert.deepEqual(await app.evaluate(() => globalThis.apiCatalogSmoke.openedSites), ['cart'],
+            'Get API on a Cart account must route to the Cart site without opening a real browser');
+        assert.deepEqual(await app.evaluate(() => globalThis.apiCatalogSmoke.openedUrls), ['https://cart.ravenhash.org/'],
+            'The main process must map the Cart site to the exact new-station URL');
+        const cart = await save('Cart remote', 'https://cart.ravenhash.org/v1');
+        assert.equal(cart.endpoint, 'https://cart.ravenhash.org/v1');
         assert.equal(cart.modelCatalog, 'remote');
         assert.deepEqual(cart.models, []);
         assert.equal(cart.model, 'sd2.5-route1');
@@ -155,6 +172,22 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
         await page.locator('[data-model]').click();
 
         await openSettings();
+        await edit('Art remote');
+        await page.locator('#agentFormEndpoint').fill('cart.ravenhash.org');
+        await assertManaged('video');
+        await page.locator('#agentFetchedModelSelect').selectOption('sd2.5-route2');
+        const migratedArt = await save('Art remote', 'https://cart.ravenhash.org/v1');
+        assert.equal(migratedArt.id, art.id, 'Changing station must edit the original account');
+        assert.equal((await saved()).providers.filter(provider => provider.name === 'Art remote').length, 1);
+        await page.reload();
+        await page.waitForFunction(() => window.__flowCanvasGetModelConfigSnapshot?.().status.origin === 'remote');
+        assert.equal((await saved()).providers.find(provider => provider.id === art.id).endpoint, 'https://cart.ravenhash.org/v1',
+            'The migrated account must keep the Cart endpoint after reload');
+        await openSettings();
+        await edit('Art remote');
+        assert.equal(await page.locator('#agentFormEndpoint').inputValue(), 'https://cart.ravenhash.org/v1',
+            'Reopening the migrated account must not restore the old station URL');
+        await page.locator('#agentApiFormClose').click();
         await fill('Image remote', 'https://ai.ravenhash.org/v1');
         await assertManaged('image');
         const image = await save('Image remote');
@@ -212,13 +245,13 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
         assert.equal(JSON.stringify(requests).includes(fixtureKey), false, 'CONFIG server must never receive API keys');
         assert.ok(requests.every(request => !request.headers.authorization && !request.headers['x-api-key']));
         assert.deepEqual(errors, []);
-        console.log('PASS API catalog desktop smoke: art/cart direct save; remote image outside scope; live rename/add/disable/clear; custom text; no model-list calls or CONFIG key leakage; desktop and compact layout.');
+        console.log('PASS API catalog desktop smoke: art/cart exact URL save; Cart template preservation and Get API route; Art-to-Cart edit/reload; remote image outside scope; live rename/add/disable/clear; custom text; no model-list calls or CONFIG key leakage; desktop and compact layout.');
     } catch (error) {
         if (page && !page.isClosed()) {
             console.error('CONFIG status:', await page.evaluate(() => window.__flowCanvasGetModelConfigSnapshot?.().status));
             console.error('Fixture requests:', requests.length);
             console.error('Saved providers:', await page.evaluate(async () => (await window.flowCanvas.apiConfig.load()).config.providers
-                .map(({ name, model, modelCatalog }) => ({ name, model, modelCatalog }))));
+                .map(({ name, model, modelCatalog, endpoint }) => ({ name, model, modelCatalog, endpoint }))));
             await page.screenshot({ path: path.join(artifactDir, 'api-catalog-failure.png') }).catch(() => {});
         }
         throw error;

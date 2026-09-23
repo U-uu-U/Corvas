@@ -30,6 +30,51 @@ test('Seedance route alias retains fixed duration while preserving the relay mod
     assert.throws(() => buildSeedance25RequestBody({ model: 'sd2.5-route1', prompt: 'test', duration: 10 }), /30/);
 });
 
+test('Yueqi Pro 720 accepts its full declared duration and reference range only on supported hosts', () => {
+    const { seedanceReferenceLimits } = require('./video-provider-adapters');
+    const model = 'seedance-2.5-pro-720';
+    const refs = (count, extension) => Array.from({ length: count }, (_, i) => `https://example.test/${i}.${extension}`);
+    for (const host of ['art.ravenhash.org', 'cart.ravenhash.org', 'yueqi.icu']) {
+        const endpoint = `https://${host}/v1`;
+        const input = { endpoint, model, prompt: 'fixture', duration: 30, resolution: '720p', aspectRatio: '16:9',
+            referenceImages: refs(30, 'png'), referenceVideos: refs(10, 'mp4'), referenceAudios: refs(10, 'mp3') };
+        assert.deepEqual(seedanceReferenceLimits(model, endpoint), { image: 30, video: 10, audio: 10 });
+        assert.equal(seedance25ReferenceImageLimit(model, endpoint), 30);
+        assert.deepEqual(buildSeedance25RequestBody(input), { model, prompt: 'fixture', seconds: 30, resolution: '720p',
+            ratio: '16:9', image_urls: input.referenceImages, video_urls: input.referenceVideos, audio_urls: input.referenceAudios });
+        for (const duration of [1, 30, 60]) {
+            assert.equal(buildSeedance25RequestBody({ ...input, duration }).seconds, duration);
+        }
+        assert.equal(buildSeedance25RequestBody({ ...input, duration: undefined }).seconds, 10);
+        for (const duration of [0, 61, 4.5]) assert.throws(() => buildSeedance25RequestBody({ ...input, duration }));
+        for (const resolution of ['480p', '1080p']) assert.throws(() => buildSeedance25RequestBody({ ...input, resolution }), /720p/);
+        for (const field of ['referenceImages', 'referenceVideos', 'referenceAudios']) {
+            assert.throws(() => buildSeedance25RequestBody({ ...input, [field]: [...input[field], input[field][0]] }), /最多支持/);
+        }
+        assert.equal(buildVideoGenerationEndpoint(endpoint, model), host === 'yueqi.icu'
+            ? 'https://yueqi.icu/v1/videos' : `https://${host}/v1/video/generations`);
+    }
+});
+
+test('Yueqi Pro 720 exception does not expand unknown hosts or other Seedance models', () => {
+    const { seedanceReferenceLimits } = require('./video-provider-adapters');
+    for (const endpoint of [undefined, '', 'invalid', 'https://video.zhubo.asia/v1', 'https://other.test/v1',
+        'https://art.ravenhash.org.other.test/v1', 'https://yueqi.icu.other.test/v1']) {
+        const input = { model: 'seedance-2.5-pro-720', endpoint, prompt: 'fixture' };
+        assert.deepEqual(seedanceReferenceLimits(input.model, endpoint), { image: 10, video: 0, audio: 0 });
+        for (const duration of [1, 60]) assert.throws(() => buildSeedance25RequestBody({ ...input, duration }));
+        assert.throws(() => buildSeedance25RequestBody({ ...input, duration: 30, referenceVideos: ['https://example.test/ref.mp4'] }));
+    }
+    for (const model of ['seedance_v2.5', 'seedance-2.5-pro-480', 'seedance-2.5-pro-720-extra']) {
+        const input = { model, endpoint: 'https://art.ravenhash.org/v1', prompt: 'fixture' };
+        assert.deepEqual(seedanceReferenceLimits(model, input.endpoint), { image: 10, video: 0, audio: 0 });
+        assert.throws(() => buildSeedance25RequestBody({ ...input, duration: 60 }));
+        assert.throws(() => buildSeedance25RequestBody({ ...input, referenceVideos: ['https://example.test/ref.mp4'] }));
+    }
+    assert.throws(() => buildSeedance25RequestBody({ model: 'seedance-2.5-pro', endpoint: 'https://yueqi.icu/v1',
+        prompt: 'fixture', duration: 60 }));
+});
+
 const {
     appendMidjourneyParameters,
     buildMidjourneyCompatibilityPrompt,
