@@ -204,3 +204,52 @@ test('an explicit text template is not changed to image when CONFIG refreshes', 
     assert.equal(sidebar.formModel.hidden, false);
     assert.equal(sidebar.fetchModelsBtn.hidden, false);
 });
+
+test('RavenHash key links match exact hosts and never mistake cart for art', async t => {
+    const { sidebar } = harness(t);
+    const opened = [];
+    globalThis.window.flowCanvas.shell = { openRavenHash: async site => opened.push(site) };
+    for (const [endpoint, expected] of [
+        ['https://cart.ravenhash.org/v1', 'cart'], ['cart.ravenhash.org', 'cart'],
+        ['https://CART.RAVENHASH.ORG/', 'cart'], ['https://art.ravenhash.org/v1', 'art'],
+        ['https://ai.ravenhash.org/v1', 'ai'], ['https://cart.ravenhash.org.example/v1', 'ai'],
+        ['https://example.test/art.ravenhash.org', 'ai'], ['https://cart.ravenhash.org@example.test', 'ai']
+    ]) {
+        sidebar.formEndpoint.value = endpoint;
+        await sidebar._openProviderKeySite();
+        assert.equal(opened.at(-1), expected, endpoint);
+    }
+});
+
+test('manual new-site URL survives the video template and bare host saves as the new-site API', t => {
+    const { sidebar, state } = harness(t);
+    sidebar.formEndpoint.value = 'cart.ravenhash.org/';
+    sidebar.formEndpointEdited = true;
+    sidebar._applyTemplate('ravenhash-video');
+    assert.equal(sidebar.formEndpoint.value, 'cart.ravenhash.org/');
+    sidebar._saveForm();
+    assert.equal(state.saved, 1);
+    assert.equal(sidebar.providers[0].endpoint, 'https://cart.ravenhash.org/v1');
+    assert.equal(sidebar._getVideoProvider().endpoint, 'https://cart.ravenhash.org/v1');
+});
+
+test('new-site template selects cart explicitly and old account edits retain their identity after a URL change', t => {
+    const { sidebar, state } = harness(t);
+    const provider = { id: 'saved-video', name: 'Video', capability: 'video', type: 'openai',
+        endpoint: 'https://art.ravenhash.org/v1', apiKey: 'old-key', model: 'second', models: [], modelCatalog: 'remote' };
+    sidebar.providers = [provider];
+    sidebar.globalConfig.videoProviderId = provider.id;
+    sidebar._showForm(provider);
+    sidebar._applyTemplate('ravenhash-video-cart');
+    assert.equal(sidebar.formEndpoint.value, 'https://cart.ravenhash.org/v1');
+    sidebar.formKey.value = 'new-site-key';
+    sidebar._saveForm();
+    assert.equal(state.saved, 1);
+    assert.equal(sidebar.providers.length, 1);
+    assert.equal(sidebar.providers[0].id, provider.id);
+    assert.equal(sidebar.providers[0].endpoint, 'https://cart.ravenhash.org/v1');
+    assert.equal(sidebar._getVideoProvider().apiKey, 'new-site-key');
+    assert.equal(sidebar.getVideoProviderConfig({ providerId: provider.id, model: 'second' }).endpoint, 'https://cart.ravenhash.org/v1');
+    sidebar._showForm(sidebar.providers[0]);
+    assert.equal(sidebar.formEndpoint.value, 'https://cart.ravenhash.org/v1');
+});

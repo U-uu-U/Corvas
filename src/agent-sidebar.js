@@ -77,15 +77,22 @@ const DEFAULT_TEMPLATES = {
     'ravenhash-text': { name: 'RavenHash Text', capability: 'text', type: 'openai', endpoint: 'https://ai.ravenhash.org/v1', model: '' },
     ravenhash: { name: 'RavenHash Image', capability: 'image', type: 'openai', endpoint: 'https://ai.ravenhash.org/v1', model: 'gpt-image-2' },
     'ravenhash-video': { name: 'RavenHash Video', capability: 'video', type: 'openai', endpoint: 'https://art.ravenhash.org/v1', model: 'doubao-seedance-2-0' },
+    'ravenhash-video-cart': { name: 'RavenHash 新站', capability: 'video', type: 'openai', endpoint: 'https://cart.ravenhash.org/v1', model: '' },
     shanhai: { name: 'Shanhai Video', capability: 'video', type: 'openai', endpoint: 'https://shanhai.vnshu.cn/api/v1', model: 'oc-model-qbdmeb',
         models: ['oc-model-qbdmeb', 'oc-model-1iq31f', 'oc-model-bkb50q', 'oc-model-c6ws7e'] }
 };
 
 function normalizeRavenHashEndpoint(endpoint) {
-    const value = String(endpoint || '').trim().replace(/\/+$/, '');
-    if (/^https:\/\/(?:ai|art|cart)\.ravenhash\.org$/i.test(value)) {
-        return `${value}/v1`;
-    }
+    let value = String(endpoint || '').trim().replace(/\/+$/, '');
+    if (/^(?:ai|art|cart)\.ravenhash\.org(?:[/:?#]|$)/i.test(value)) value = `https://${value}`;
+    try {
+        const url = new URL(value);
+        if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
+            && ['ai.ravenhash.org', 'art.ravenhash.org', 'cart.ravenhash.org'].includes(url.hostname)) {
+            if (!url.pathname || url.pathname === '/') url.pathname = '/v1';
+            return url.toString().replace(/\/+$/, '');
+        }
+    } catch { /* Keep invalid input editable until save validation. */ }
     return value;
 }
 
@@ -2672,18 +2679,7 @@ export class AgentSidebar {
 
         // 各种表单动作
         this.addApiBtn?.addEventListener('click', () => this._showForm());
-        this.getApiBtn?.addEventListener('click', async () => {
-            const endpoint = String(this.formEndpoint?.value || '').toLowerCase();
-            const site = endpoint.includes('art.ravenhash.org') ? 'art' : 'ai';
-            this.getApiBtn.disabled = true;
-            try {
-                await window.flowCanvas?.shell?.openRavenHash?.(site);
-            } catch (err) {
-                console.error('[AgentSidebar] Failed to open RavenHash:', err);
-            } finally {
-                this.getApiBtn.disabled = false;
-            }
-        });
+        this.getApiBtn?.addEventListener('click', () => this._openProviderKeySite());
         this.apiFormCloseBtn?.addEventListener('click', () => this._hideForm());
         this.formSaveBtn?.addEventListener('click', () => this._saveForm());
         this.fetchModelsBtn?.addEventListener('click', () => this._fetchModelsForForm());
@@ -2696,7 +2692,10 @@ export class AgentSidebar {
         });
         [this.formType, this.formEndpoint, this.formKey, this.formCapability].forEach(el => {
             const update = () => {
-                if (el === this.formEndpoint) this.formCapabilityAuto = true;
+                if (el === this.formEndpoint) {
+                    this.formCapabilityAuto = true;
+                    this.formEndpointEdited = true;
+                }
                 if (el === this.formCapability) this.formCapabilityAuto = false;
                 this.modelFormRequestVersion = (this.modelFormRequestVersion || 0) + 1;
                 this._resetFetchedModels();
@@ -4430,6 +4429,7 @@ export class AgentSidebar {
         this.formCatalogBinding = null;
         this.formCatalogManaged = false;
         this.formCapabilityAuto = !provider;
+        this.formEndpointEdited = Boolean(provider);
         this._resetFetchedModels();
 
         // 清除芯片选中态
@@ -4472,17 +4472,40 @@ export class AgentSidebar {
         this.modelFormRequestVersion = (this.modelFormRequestVersion || 0) + 1;
         this.formCapabilityAuto = false;
         const tpl = DEFAULT_TEMPLATES[id] || DEFAULT_TEMPLATES.ravenhash;
+        const keepEndpoint = this.formEndpointEdited && id !== 'ravenhash-video-cart';
         if (this.formName) this.formName.value = tpl.name;
         this.formAutoName = tpl.name;
         if (this.formCapability) this.formCapability.value = tpl.capability;
         if (this.formType) this.formType.value = tpl.type;
-        if (this.formEndpoint) this.formEndpoint.value = tpl.endpoint;
+        if (this.formEndpoint && !keepEndpoint) {
+            this.formEndpoint.value = tpl.endpoint;
+            this.formEndpointEdited = id === 'ravenhash-video-cart';
+        }
         if (this.formModel) this.formModel.value = tpl.model;
         this._resetModelSlots(Array.isArray(tpl.models) ? tpl.models.slice(1) : []);
         this._resetFetchedModels();
         this.formCatalogBinding = null;
         this.formCatalogManaged = false;
         this._syncFormCatalog();
+    }
+
+    _providerKeySite() {
+        try {
+            const url = new URL(normalizeRavenHashEndpoint(this.formEndpoint?.value));
+            if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return 'ai';
+            return { 'art.ravenhash.org': 'art', 'cart.ravenhash.org': 'cart', 'ai.ravenhash.org': 'ai' }[url.hostname] || 'ai';
+        } catch { return 'ai'; }
+    }
+
+    async _openProviderKeySite() {
+        if (this.getApiBtn) this.getApiBtn.disabled = true;
+        try {
+            await window.flowCanvas?.shell?.openRavenHash?.(this._providerKeySite());
+        } catch (err) {
+            console.error('[AgentSidebar] Failed to open RavenHash:', err);
+        } finally {
+            if (this.getApiBtn) this.getApiBtn.disabled = false;
+        }
     }
 
     _formCatalogState() {
@@ -4508,11 +4531,15 @@ export class AgentSidebar {
             const kinds = catalogProviderKinds(modelConfigStore.getConfig(), normalizeRavenHashEndpoint(this.formEndpoint?.value));
             if (kinds.length === 1 && this.formCapability) this.formCapability.value = kinds[0];
             if (kinds.length && !this.editingProviderId && this.formName?.value === this.formAutoName) {
-                this.formName.value = new URL(this.formEndpoint.value).hostname;
+                this.formName.value = new URL(normalizeRavenHashEndpoint(this.formEndpoint.value)).hostname;
                 this.formAutoName = this.formName.value;
             }
         }
         const { provider, entries, managed } = this._formCatalogState();
+        if (this.getApiBtn) {
+            const siteName = { ai: 'RavenHash', art: 'RavenHash 老站', cart: 'RavenHash 新站' }[this._providerKeySite()];
+            this.getApiBtn.title = `在浏览器打开${siteName}`;
+        }
         const binding = `${provider.endpoint}\n${provider.capability}`;
         const changed = this.formCatalogBinding !== null && this.formCatalogBinding !== undefined && this.formCatalogBinding !== binding;
         this.formCatalogBinding = binding;
@@ -4823,6 +4850,12 @@ export class AgentSidebar {
                 roleEl.appendChild(badge);
             }
             info.appendChild(nameEl);
+            try {
+                const address = document.createElement('div');
+                address.className = 'agent-provider-meta';
+                address.textContent = new URL(p.endpoint).origin;
+                info.appendChild(address);
+            } catch { /* Legacy invalid addresses remain editable. */ }
             info.appendChild(metaEl);
             if (roleEl.childNodes.length > 0) info.appendChild(roleEl);
             info.addEventListener('click', () => this._setActiveProvider(p.id));
