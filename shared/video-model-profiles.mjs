@@ -69,7 +69,7 @@ export const VIDEO_MODEL_PROFILES = [
         label: 'Seedance 2.5 720p（卡人脸）',
         routeLabel: 'StarFrame CH1401',
         faceRestriction: true,
-        ratios: ['16:9'],
+        ratios: ['16:9', '9:16'],
         resolutions: ['720p'],
         durations: Array.from({ length: 27 }, (_, index) => index + 4),
         durationControl: 'slider',

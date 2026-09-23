@@ -707,7 +707,7 @@
             },
             "options": {
                 "duration": { "type": "range", "min": 4, "max": 30, "integer": true, "unit": "second", "default": 4 },
-                "ratio": { "type": "unknown", "reason": "供应商未公开该模型比例枚举，当前界面使用文档示例16:9" },
+                "ratio": { "type": "enum", "values": ["16:9", "9:16"], "default": "16:9", "field": "aspect_ratio" },
                 "resolutionTier": { "type": "enum", "values": ["720p"], "default": "720p" }
             },
             "capabilities": {
@@ -721,7 +721,7 @@
                 "watermark": { "supported": false }
             },
             "prompt": { "required": true },
-            "notes": "用户指定售价CNY5.00/次（老站）；720p、4-30秒；最多30张参考图片；不支持参考视频/音频；卡人脸；references模式、公网URL；必传client_task_id；完成后鉴权下载content；比例枚举未公开"
+            "notes": "用户指定售价CNY5.00/次（老站）；720p、4-30秒；最多30张参考图片；不支持参考视频/音频；卡人脸；references模式、公网URL；必传client_task_id；完成后鉴权下载content；官方工作台画幅16:9/9:16"
         },
         {
             "id": "globalaiopc.sd-2.5-discount-v1",
