@@ -419,7 +419,7 @@ export class AgentGeneration {
             generateAudio: !!config.generateAudio, cameraFixed: !!config.cameraFixed, watermark: !!config.watermark, webSearch: !!config.webSearch };
         if (step.kind === 'image') Object.assign(body, imageGenerationRequestParams({ ...config,
             size: body.size, midjourneyRepeat: 1 }, provider.model, outputId));
-        if (submitting && step.kind === 'video' && adapters.isSeedanceVideoModel(provider.model)) adapters.buildSeedance25RequestBody({ model: provider.model, prompt: step.prompt,
+        if (submitting && step.kind === 'video' && adapters.isSeedanceVideoModel(provider.model)) adapters.buildSeedance25RequestBody({ endpoint: provider.endpoint, model: provider.model, prompt: step.prompt,
             duration: config.duration, resolution: config.resolution, aspectRatio: ratio, referenceImages: body.sourceReferences.map(r => r.filePath),
             referenceVideos: body.videoReferences.map(r => r.filePath), referenceAudios: body.audioReferences.map(r => r.filePath) });
         if (signal?.aborted) throw error('CANCELED', '已停止');

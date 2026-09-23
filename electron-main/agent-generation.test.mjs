@@ -654,6 +654,47 @@ describe('AgentGeneration effective CONFIG', () => {
 });
 
 describe('AgentGeneration execution', () => {
+    test('Yueqi Pro 720 preserves endpoint-specific duration and media limits through Agent preflight', async t => {
+        const model = 'seedance-2.5-pro-720';
+        for (const host of ['art.ravenhash.org', 'cart.ravenhash.org', 'yueqi.icu']) {
+            const p = { ...provider('videos', 'video', model), endpoint: `https://${host}/v1` };
+            const modelConfig = { schemaVersion: 1, catalogMode: 'remote', models: [{
+                id: 'yueqi-pro-720', kind: 'video', match: { model: ['^seedance-2\\.5-pro-720$'] },
+                catalog: { model, hosts: [host], enabled: true },
+                options: {
+                    duration: { type: 'range', min: 1, max: 60, integer: true, default: 10 },
+                    resolutionTier: { type: 'enum', values: ['720p'], default: '720p' },
+                    ratio: { type: 'enum', values: ['16:9', '9:16'], default: '16:9' }
+                },
+                capabilities: {
+                    referenceImages: { supported: true, max: 30 },
+                    referenceVideos: { supported: true, max: 10 },
+                    referenceAudios: { supported: true, max: 10 }
+                }
+            }] };
+            const h = await setup(t, { providers: [p], modelConfig,
+                items: [op('target', 'video', { duration: 60, resolution: '720p', ratio: '16:9' })] });
+            const expected = {};
+            for (const [mediaType, extension] of [['image', 'png'], ['video', 'mp4'], ['audio', 'mp3']]) {
+                const filePath = await h.file(`reference.${extension}`);
+                h.projects.original.items.push({ id: mediaType, kind: 'media', mediaType, filePath });
+                h.projects.original.connections.push(edge(mediaType, 'target'));
+                expected[mediaType] = [{ filePath }];
+            }
+            const run = h.plan(['target']);
+            await h.execute(run.steps[0], run);
+            assert.equal(h.requests.length, 1);
+            const body = h.requests[0].body;
+            assert.equal(body.providerConfig.endpoint, p.endpoint);
+            assert.equal(body.providerConfig.model, model);
+            assert.equal(body.duration, 60);
+            assert.equal(body.resolution, '720p');
+            assert.deepEqual(body.sourceReferences, expected.image);
+            assert.deepEqual(body.videoReferences, expected.video);
+            assert.deepEqual(body.audioReferences, expected.audio);
+        }
+    });
+
     for (const kind of ['image', 'video']) {
         test(`${kind} Agent landing shares stack state while retaining provenance and completed-output reuse`, async t => {
             const h = await setup(t, { items: [op('source', kind)] });

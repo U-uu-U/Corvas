@@ -108,6 +108,9 @@ function errorText(value, depth = 0) {
 
 function classify(status, value, { query = false, terminal = false, transport = false } = {}) {
     const text = errorText(value);
+    // A completed routing rejection is distinct from a lost POST response.
+    if (!transport && !findTaskId(value) && /\bmodel_not_found\b/i.test(text)
+        && /no available channel for model/i.test(text)) return 'RH_MODEL_UNAVAILABLE';
     // An uncertain POST must never turn into an invitation to automatically resubmit.
     if (!query && !terminal && (transport || status === 408 || status >= 500)) return 'RH_SUBMISSION_UNKNOWN';
     if (/not supported on (?:the )?chat completions endpoint|(?:does not support|unsupported).{0,30}chat[ _-]?completions|chat[ _-]?completions.{0,30}(?:not supported|unsupported)/i.test(text)) return 'RH_MODEL_ENDPOINT_MISMATCH';

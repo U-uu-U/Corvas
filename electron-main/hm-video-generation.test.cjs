@@ -10,6 +10,8 @@ const sharp = require('sharp');
 let profile;
 let fetchFixture;
 let Bridge;
+const uploadCacheProfiles = [];
+test.after(() => uploadCacheProfiles.forEach(directory => fs.rmSync(directory, { recursive: true, force: true })));
 const originalLoad = Module._load;
 try {
     Module._load = function (name, ...args) {
@@ -75,6 +77,51 @@ test('Zhubo Pro preserves 480p through the full submission and recovery pipeline
     assert.ok(fs.existsSync(generated.filePath));
     await bridge._resumeVideoFromRenderer({ ...request, taskId: 'pro-task' });
     assert.equal(posts, 1);
+});
+
+test('Yueqi 720 route carries video and audio references without the legacy zero-reference limit', async () => {
+    profile = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-yueqi-720-'));
+    // The bridge's upload cache persists across tests in this process.
+    uploadCacheProfiles.push(profile);
+    const bridge = new Bridge({ store: { load: () => ({ items: [] }) }, recoveryDirectory: path.join(profile, 'records') });
+    bridge._loadWithPlanService = () => ({ data: { items: [] }, planService: {} });
+    const request = { prompt: 'fixture', duration: 60, resolution: '720p', ratio: '16:9', targetDir: profile, addToCanvas: false,
+        providerConfig: { endpoint: 'https://art.ravenhash.org/v1', model: 'seedance-2.5-pro-720', apiKey: 'fixture-only',
+            temporaryUploadEndpoint: 'https://yueqi-fixture.test/upload', temporaryUploadToken: 'fixture-only' } };
+    const expected = {};
+    for (const [field, extension, wire] of [['sourceReferences', 'png', 'image_urls'],
+        ['videoReferences', 'mp4', 'video_urls'], ['audioReferences', 'mp3', 'audio_urls']]) {
+        const bytes = extension === 'png'
+            ? await sharp({ create: { width: 8, height: 8, channels: 3, background: '#cccccc' } }).png().toBuffer()
+            : Buffer.from(field);
+        const filePath = path.join(profile, `reference.${extension}`);
+        fs.writeFileSync(filePath, bytes);
+        request[field] = [{ filePath }];
+        expected[wire] = [mediaUrl(bytes)];
+    }
+    let submissions = 0;
+    let uploads = 0;
+    fetchFixture = async (url, options = {}) => {
+        if (url === 'https://yueqi-fixture.test/upload') {
+            const form = await new Response(options.body, { headers: options.headers }).formData();
+            uploads++;
+            return json({ success: true, url: mediaUrl(Buffer.from(await form.get('file').arrayBuffer())) });
+        }
+        assert.equal(new URL(url).hostname, 'art.ravenhash.org', 'Every request is intercepted by this fixture');
+        if (url.endsWith('/output.mp4')) return new Response('fixture video');
+        if (options.method === 'POST') {
+            submissions++;
+            assert.equal(url, 'https://art.ravenhash.org/v1/video/generations');
+            assert.deepEqual(JSON.parse(options.body), { model: 'seedance-2.5-pro-720', prompt: 'fixture',
+                seconds: 60, resolution: '720p', ratio: '16:9', ...expected });
+        }
+        return json({ id: 'yueqi-existing-task', status: 'completed', video_url: 'https://art.ravenhash.org/output.mp4' });
+    };
+    const result = await bridge._generateVideoFromRenderer(request);
+    assert.ok(fs.existsSync(result.filePath));
+    assert.equal(uploads, 3);
+    await bridge._resumeVideoFromRenderer({ ...request, taskId: 'yueqi-existing-task' });
+    assert.equal(submissions, 1, 'Recovery only queries the existing job');
 });
 
 test('direct video recovery keeps every original bound medium in the landed generation record', async t => {

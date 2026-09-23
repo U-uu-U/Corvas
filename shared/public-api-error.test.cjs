@@ -79,6 +79,20 @@ test('POST transport and 5xx retain unknown outcome without resubmission', () =>
     }
 });
 
+test('explicit model routing rejection is unavailable while ambiguous POST failures remain unknown', () => {
+    const rejection = { code: 'fail_to_fetch_task', message: JSON.stringify({ error: {
+        code: 'model_not_found', type: 'new_api_error',
+        message: 'No available channel for model seedance-2.5-pro-720 under group default (distributor)'
+    } }), data: null };
+    const result = mapLocalError(503, rejection);
+    assert.equal(result.code, 'RH_MODEL_UNAVAILABLE');
+    assert.equal(result.submissionUnknown, false);
+    assert.equal(result.retryable, false);
+    assert.equal(mapLocalError(503, rejection, { transport: true }).code, 'RH_SUBMISSION_UNKNOWN');
+    assert.equal(mapLocalError(503, { ...rejection, task_id: 'already-created' }).code, 'RH_SUBMISSION_UNKNOWN');
+    assert.equal(mapLocalError(503, { error: 'model service temporarily unavailable' }).code, 'RH_SUBMISSION_UNKNOWN');
+});
+
 test('terminal task failure retains identity but not arbitrary payload fields', () => {
     const result = publicFailure(200, { data: { id: 'job-123', status: 'failed', error: { message: privateDetail } }, debug: privateDetail },
         { requestId, terminal: true, query: true });
