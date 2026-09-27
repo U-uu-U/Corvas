@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('flowCanvas', {
         summary: () => ipcRenderer.invoke('diagnostics:summary'),
         copy: () => ipcRenderer.invoke('diagnostics:copy'),
         export: () => ipcRenderer.invoke('diagnostics:export'),
+        submit: input => ipcRenderer.invoke('diagnostics:submit', input),
     },
 
     // 数据存储
@@ -87,6 +88,10 @@ contextBridge.exposeInMainWorld('flowCanvas', {
             ipcRenderer.on('hunyuan:changed', listener);
             return () => ipcRenderer.removeListener('hunyuan:changed', listener);
         }
+    },
+
+    creativeWeb: {
+        open: platform => ipcRenderer.invoke('creative-web:open', platform)
     },
 
     rhino: {

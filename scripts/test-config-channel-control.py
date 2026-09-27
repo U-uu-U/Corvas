@@ -43,6 +43,10 @@ def observe(revision, ids, enabled):
 
 
 def main():
+    raise RuntimeError("This legacy live test is disabled: preview now shares the production CONFIG. Use configserver/catalog-control.test.mjs for isolated checks.")
+
+
+def legacy_preview_test():
     snapshot = local("/model-config")
     assert snapshot["status"]["url"] == SOURCE
     assert snapshot["status"]["catalogMode"] == "remote"

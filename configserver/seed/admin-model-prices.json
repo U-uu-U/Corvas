@@ -1,12 +1,12 @@
 {
-    "checkedAt": "2026-09-22T16:56:56.625184+00:00",
+    "checkedAt": "2026-09-22T18:54:51.638Z",
     "sites": [
         {
             "host": "art.ravenhash.org",
             "label": "老站",
-            "checkedAt": "2026-09-22T16:56:56.625184+00:00",
-            "currency": "USD",
-            "exchangeToCny": 6.75,
+            "checkedAt": "2026-09-22T18:54:51.638Z",
+            "currency": "CNY",
+            "exchangeToCny": 1,
             "models": [
                 {
                     "model": "minimax-h3",
@@ -340,10 +340,17 @@
                     "prices": [
                         {
                             "label": "",
-                            "amount": 4,
+                            "amount": 5,
                             "unit": "request"
                         }
                     ]
+                },
+                {
+                    "model": "oc-model-r5cfh8",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [{ "label": "", "amount": 5, "unit": "request" }]
                 },
                 {
                     "model": "oc-model-1iq31f",
@@ -441,7 +448,7 @@
                     "prices": [
                         {
                             "label": "",
-                            "amount": 5.0,
+                            "amount": 5,
                             "unit": "request"
                         }
                     ]
@@ -451,7 +458,7 @@
         {
             "host": "cart.ravenhash.org",
             "label": "新站",
-            "checkedAt": "2026-09-22T16:56:56.625184+00:00",
+            "checkedAt": "2026-09-22T18:54:51.638Z",
             "currency": "CNY",
             "exchangeToCny": 1,
             "models": [
@@ -463,17 +470,17 @@
                     "prices": [
                         {
                             "label": "480p",
-                            "amount": 5,
+                            "amount": 5.72,
                             "unit": "second"
                         },
                         {
                             "label": "720p",
-                            "amount": 5,
+                            "amount": 5.72,
                             "unit": "second"
                         },
                         {
                             "label": "1080p",
-                            "amount": 5,
+                            "amount": 5.72,
                             "unit": "second"
                         }
                     ]
@@ -486,7 +493,7 @@
                     "prices": [
                         {
                             "label": "",
-                            "amount": 7,
+                            "amount": 8,
                             "unit": "request"
                         }
                     ]
@@ -577,7 +584,7 @@
                     "prices": [
                         {
                             "label": "",
-                            "amount": 7,
+                            "amount": 8,
                             "unit": "request"
                         }
                     ]
@@ -836,10 +843,17 @@
                     "prices": [
                         {
                             "label": "",
-                            "amount": 4,
+                            "amount": 5.72,
                             "unit": "request"
                         }
                     ]
+                },
+                {
+                    "model": "oc-model-r5cfh8",
+                    "status": "known",
+                    "active": true,
+                    "currency": "CNY",
+                    "prices": [{ "label": "", "amount": 5.72, "unit": "request" }]
                 },
                 {
                     "model": "sd2-fast",
@@ -849,7 +863,7 @@
                     "prices": [
                         {
                             "label": "",
-                            "amount": 4,
+                            "amount": 4.58,
                             "unit": "request"
                         }
                     ]
@@ -862,7 +876,7 @@
                     "prices": [
                         {
                             "label": "",
-                            "amount": 13,
+                            "amount": 14.86,
                             "unit": "request"
                         }
                     ]
@@ -875,7 +889,7 @@
                     "prices": [
                         {
                             "label": "",
-                            "amount": 9.8,
+                            "amount": 11.2,
                             "unit": "request"
                         }
                     ]

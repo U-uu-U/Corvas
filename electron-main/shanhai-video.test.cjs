@@ -7,6 +7,8 @@ const path = require('node:path');
 const {
     isShanhaiEndpoint,
     isShanhaiModel,
+    isShanhaiDola30Model,
+    shanhaiReferenceLimits,
     buildShanhaiGenerationBody,
     generateShanhaiVideo,
     resumeShanhaiVideo
@@ -14,6 +16,7 @@ const {
 
 const ENDPOINT = 'https://shanhai.vnshu.cn/api/v1';
 const MODEL = 'oc-model-qbdmeb';
+const DOLA_30_MODEL = 'oc-model-r5cfh8';
 const INPUTS = {
     imageUrls: ['https://assets.example/image.png'],
     videoUrls: ['https://assets.example/video.mp4'],
@@ -59,6 +62,7 @@ test('recognizes and normalizes the documented endpoint', () => {
 
 test('recognizes Shanhai model IDs without accepting unrelated models', () => {
     assert.equal(isShanhaiModel(MODEL), true);
+    assert.equal(isShanhaiModel(DOLA_30_MODEL), true);
     assert.equal(isShanhaiModel('oc-model-1iq31f'), true);
     assert.equal(isShanhaiModel('shanhai-dola-seedance-v2-5-30-9-0-7'), true);
     assert.equal(isShanhaiModel('shanhai-image-2'), false);
@@ -102,6 +106,74 @@ test('applies documented model limits and maps adaptive ratio', () => {
     assert.throws(() => buildShanhaiGenerationBody({ model: 'shanhai-dola-test', prompt: 'x', duration: 5,
         imageUrls: Array.from({ length: 10 }, (_, index) => `https://assets.example/${index}.png`),
         videoUrls: ['https://assets.example/video.mp4'] }), /10 个参考素材/);
+});
+
+test('Dola 30 builds the exact fixed-duration image-reference contract', () => {
+    const imageUrls = Array.from({ length: 10 }, (_, index) => `https://assets.example/${index}.png`);
+    assert.deepEqual(shanhaiReferenceLimits(DOLA_30_MODEL), { image: 10, video: 0, audio: 0 });
+    for (const ratio of ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16']) {
+        const body = buildShanhaiGenerationBody({ model: DOLA_30_MODEL, prompt: ' scene ', ratio, imageUrls });
+        assert.deepEqual(body, { model: DOLA_30_MODEL, prompt: 'scene', media_type: 'video',
+            inputs: imageUrls.map(url => ({ type: 'image', url })),
+            options: { aspect_ratio: ratio, resolution: '720p', duration: '30' } });
+    }
+});
+
+test('Dola 30 specialized rules match only its model and documented supplier or relay hosts', () => {
+    for (const endpoint of [ENDPOINT, 'https://art.ravenhash.org/v1', 'https://cart.ravenhash.org/v1/video/generations']) {
+        assert.equal(isShanhaiDola30Model(DOLA_30_MODEL, endpoint), true);
+        assert.equal(isShanhaiDola30Model(MODEL, endpoint), false);
+    }
+    for (const endpoint of ['https://other.example/v1', 'https://art.ravenhash.org.evil.test/v1',
+        'http://shanhai.vnshu.cn/api/v1', 'https://name:secret@art.ravenhash.org/v1', 'invalid']) {
+        assert.equal(isShanhaiDola30Model(DOLA_30_MODEL, endpoint), false);
+    }
+});
+
+test('Dola 30 rejects unsupported duration, resolution and reference inputs before submission', async () => {
+    const invalid = [
+        [{ duration: 15 }, /时长/],
+        [{ duration: 31 }, /时长/],
+        [{ resolution: '480p' }, /分辨率/],
+        [{ resolution: '1080p' }, /分辨率/],
+        [{ imageUrls: Array.from({ length: 11 }, (_, index) => `https://assets.example/${index}.png`) }, /10 张参考图片/],
+        [{ videoUrls: INPUTS.videoUrls }, /不支持视频参考/],
+        [{ audioUrls: INPUTS.audioUrls }, /不支持音频参考/]
+    ];
+    let requests = 0;
+    for (const [overrides, expected] of invalid) {
+        await assert.rejects(generateShanhaiVideo(baseOptions({ model: DOLA_30_MODEL, duration: 30,
+            ...overrides, fetchImpl: async () => { requests += 1; } })), expected);
+    }
+    assert.equal(requests, 0);
+});
+
+test('Dola 30 persists a submitted task and resumes polling without resubmitting', async () => {
+    const calls = [];
+    const submitted = [];
+    let resumed = false;
+    const options = baseOptions({ model: DOLA_30_MODEL, duration: 30, maxPolls: 1,
+        onTaskSubmitted: event => submitted.push(event), fetchImpl: async (url, request) => {
+            calls.push({ url, request });
+            if (request.method === 'POST') {
+                assert.equal(JSON.parse(request.body).options.duration, '30');
+                return jsonResponse({ id: 'dola-30-task', status: 'queued' }, 202);
+            }
+            if (url.endsWith('/tasks/dola-30-task')) return jsonResponse(resumed
+                ? { id: 'dola-30-task', status: 'succeeded', output: { url: 'https://cdn.example/dola-30.mp4' } }
+                : { id: 'dola-30-task', status: 'running' });
+            assert.equal(url, 'https://cdn.example/dola-30.mp4');
+            return videoResponse('dola 30 video');
+        } });
+    await assert.rejects(generateShanhaiVideo(options), error => error.code === 'SHANHAI_POLL_TIMEOUT'
+        && error.taskId === 'dola-30-task' && error.confirmedFailure === false);
+    assert.equal(submitted[0].model, DOLA_30_MODEL);
+    assert.equal(submitted[0].taskId, 'dola-30-task');
+    resumed = true;
+    const result = await resumeShanhaiVideo({ ...options, taskId: submitted[0].taskId });
+    assert.equal(result.taskId, 'dola-30-task');
+    assert.equal(options._output[0].buffer.toString(), 'dola 30 video');
+    assert.equal(calls.filter(call => call.request.method === 'POST').length, 1);
 });
 
 test('rejects non-HTTPS reference URLs', () => {

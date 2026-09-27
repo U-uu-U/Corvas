@@ -38,7 +38,9 @@ try {
     const draft = JSON.parse(await page.locator('#configText').inputValue());
     assert.ok(draft.models.filter(m => m.id.startsWith('shanhai-video.')).every(m => m.catalog.enabled === false && m.presentation.visible === true));
     for (const target of targets) assert.equal(isVideoGenerationAvailable({ endpoint: 'https://art.ravenhash.org/v1', model: target.catalog.model }, draft), false);
+    await page.locator('#formTab').click();
     await page.locator('[data-field="catalogHosts"]').fill('art.ravenhash.org\ncart.ravenhash.org\nshanhai.vnshu.cn\n');
+    await page.locator('#operationTab').click();
     assert.ok(JSON.parse(await page.locator('#configText').inputValue()).models
         .filter(m => m.id.startsWith('shanhai-video.')).every(m => m.catalog.enabled === false), 'Editing hosts must preserve the hidden call state');
     await page.locator('#saveBtn').click();

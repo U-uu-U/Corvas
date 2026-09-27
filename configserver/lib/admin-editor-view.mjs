@@ -174,6 +174,10 @@ export function modelEditorMarkup() {
                   </div>
                 </div>`).join('')}
               </div>
+              <div class="form-section">
+                <h3>条件参数规则</h3>
+                <label class="field full"><span>规则 JSON</span><textarea data-field="parameterRulesJson" rows="12" spellcheck="false" aria-label="条件参数规则 JSON"></textarea></label>
+              </div>
             </fieldset>
           </div>
         </div>

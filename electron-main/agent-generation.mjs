@@ -17,6 +17,7 @@ import { getModelPresentation } from '../shared/model-presentation.mjs';
 import { expandCatalogProviders, isCatalogManaged } from '../shared/model-catalog.mjs';
 import adapters from './video-provider-adapters.js';
 import { mediaKind } from './agent-media.cjs';
+import parameterRules from '../shared/model-parameter-rules.cjs';
 
 const copy = value => JSON.parse(JSON.stringify(value));
 const IMAGE_RATIOS = ['adaptive', '1:1', '16:9', '9:16', '4:3', '3:4'];
@@ -138,10 +139,12 @@ export class AgentGeneration {
         for (const result of results) {
             if (result.ok) continue;
             const issue = result.errors[0];
-            const code = { duration: 'INVALID_DURATION', resolutionTier: 'INVALID_RESOLUTION', ratio: 'INVALID_RATIO',
-                referenceImages: 'REFERENCE_LIMIT', referenceVideos: 'REFERENCE_LIMIT', referenceAudios: 'REFERENCE_LIMIT' }[issue.field]
-                || (issue.code === 'FEATURE_UNSUPPORTED' ? 'UNSUPPORTED_PARAMETER' : issue.code);
-            throw Object.assign(error(code, `当前模型 CONFIG 不支持此请求：${result.errors.map(item => item.message).join('；')}`),
+            const validationError = parameterRules.createParameterValidationError(result.errors);
+            if (!issue.code.startsWith('PARAMETER_RULES_')) validationError.code = {
+                duration: 'INVALID_DURATION', resolutionTier: 'INVALID_RESOLUTION', ratio: 'INVALID_RATIO',
+                referenceImages: 'REFERENCE_LIMIT', referenceVideos: 'REFERENCE_LIMIT', referenceAudios: 'REFERENCE_LIMIT'
+            }[issue.field] || (issue.code === 'FEATURE_UNSUPPORTED' ? 'UNSUPPORTED_PARAMETER' : issue.code);
+            throw Object.assign(validationError,
                 { issues: result.errors, warnings: result.warnings });
         }
         // This wire format has only sd/hd. Never acknowledge 4K and send sd.
@@ -369,6 +372,24 @@ export class AgentGeneration {
             : (step.kind === 'video' ? getVideoModelProfile(provider) : null);
         const ratio = !config.ratio || config.ratio === 'adaptive' ? inferClosestAspectRatio(first?.width, first?.height,
             step.kind === 'video' ? (profile?.ratios || []).filter(r => r !== 'adaptive') : IMAGE_RATIOS, '16:9') : config.ratio;
+        if (submitting && step.kind === 'video' && adapters.isYueqiFastModel(provider.model, provider.endpoint)) {
+            adapters.buildYueqiFastRequestBody({ endpoint: provider.endpoint, model: provider.model, prompt: step.prompt,
+                modelConfigEntry: modelConfig ? resolveModelConfigEntry(modelConfig, { ...provider, kind: 'video' }).entry : null,
+                duration: config.duration, resolution: config.resolution, aspectRatio: ratio,
+                referenceImages: references.filter(reference => reference.kind === 'image').map(reference => reference.filePath),
+                referenceVideos: references.filter(reference => reference.kind === 'video').map(reference => reference.filePath),
+                referenceAudios: references.filter(reference => reference.kind === 'audio').map(reference => reference.filePath) });
+        }
+        if (submitting && step.kind === 'video' && adapters.getZhuboVideoModelSpec(provider.model, provider.endpoint)) {
+            adapters.buildSeedance25RequestBody({ endpoint: provider.endpoint, model: provider.model, prompt: step.prompt,
+                duration: config.duration, resolution: config.resolution, aspectRatio: ratio,
+                referenceImages: references.filter(reference => reference.kind === 'image').map(reference => reference.filePath),
+                referenceVideos: references.filter(reference => reference.kind === 'video').map(reference => reference.filePath),
+                referenceAudios: references.filter(reference => reference.kind === 'audio').map(reference => reference.filePath) });
+            for (const reference of references) adapters.assertZhuboVideoReferenceFile(provider.model, provider.endpoint, {
+                filePath: reference.filePath, size: fs.statSync(reference.filePath).size, mediaType: reference.kind
+            });
+        }
         const dimensions = resolveImageDimensions(config.resolutionTier || '2K', config.ratio || 'adaptive', first || {});
         const targetDir = path.join(project.defaultSaveFolder || this.fallbackDir, 'FlowCanvas-Agent', crypto.createHash('sha256').update(String(run.projectId)).digest('hex').slice(0, 12));
         if (hasExistingOutput) {

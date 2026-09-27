@@ -6,6 +6,7 @@ const SHANHAI_HOST = 'shanhai.vnshu.cn';
 const SHANHAI_BASE_PATH = '/api/v1';
 const SHANHAI_MODELS = new Set([
     'oc-model-qbdmeb',
+    'oc-model-r5cfh8',
     'oc-model-1iq31f',
     'oc-model-bkb50q',
     'oc-model-c6ws7e'
@@ -55,9 +56,23 @@ function isShanhaiModel(model) {
     return SHANHAI_MODELS.has(value.toLowerCase()) || MODEL_PATTERN.test(value);
 }
 
+function isShanhaiDola30Model(model, endpoint) {
+    if (String(model || '').trim().toLowerCase() !== 'oc-model-r5cfh8') return false;
+    if (isShanhaiEndpoint(endpoint)) return true;
+    try {
+        const url = new URL(String(endpoint || '').trim());
+        return url.protocol === 'https:' && !url.username && !url.password
+            && ['art.ravenhash.org', 'cart.ravenhash.org'].includes(url.hostname.toLowerCase());
+    } catch (_) {
+        return false;
+    }
+}
+
 function modelRules(model) {
     const id = String(model || '').trim().toLowerCase();
     if (id === 'oc-model-qbdmeb') return { durations: new Set([5, 10, 15]), defaultDuration: 15, imageLimit: 10, resolution: new Set(['720p']) };
+    if (id === 'oc-model-r5cfh8') return { durations: new Set([30]), defaultDuration: 30,
+        imageLimit: 10, videoLimit: 0, audioLimit: 0, resolution: new Set(['720p']) };
     if (id === 'oc-model-1iq31f') return { minDuration: 5, maxDuration: 15, defaultDuration: 10, imageLimit: 9, resolution: new Set(['480p', '720p', '1080p']) };
     if (id === 'oc-model-bkb50q' || id === 'oc-model-c6ws7e') {
         return { minDuration: 4, maxDuration: 15, defaultDuration: 10, totalReferences: 0, resolution: new Set(['720p']) };
@@ -111,6 +126,8 @@ function buildShanhaiGenerationBody({ model, prompt, duration, ratio = '16:9', a
     if (rules.imageLimit != null && images.length > rules.imageLimit) {
         throw new Error(`Shanhai 当前模型最多支持 ${rules.imageLimit} 张参考图片`);
     }
+    if (rules.videoLimit === 0 && videos.length > 0) throw new Error('Shanhai 当前模型不支持视频参考');
+    if (rules.audioLimit === 0 && audios.length > 0) throw new Error('Shanhai 当前模型不支持音频参考');
     if (rules.totalReferences === 0 && images.length + videos.length + audios.length > 0) {
         throw new Error('Shanhai 当前模型不支持参考素材');
     }
@@ -408,5 +425,5 @@ async function resumeShanhaiVideo(options = {}) {
         fetcher, onProgress, options: resolved });
 }
 
-module.exports = { isShanhaiEndpoint, isShanhaiModel, shanhaiReferenceLimits, buildShanhaiGenerationBody,
+module.exports = { isShanhaiEndpoint, isShanhaiModel, isShanhaiDola30Model, shanhaiReferenceLimits, buildShanhaiGenerationBody,
     generateShanhaiVideo, resumeShanhaiVideo };

@@ -1,3 +1,5 @@
+const { normalizeParameterIssues, normalizePublicDetail, safeRequestId, formatPublicDetail } = require('./public-error-detail.cjs');
+
 const CATALOG = Object.freeze({
     RH_ASSET_PENDING: [409, '参考素材仍在审核，尚未提交视频任务；稍后重试会复用素材 ID。'],
     RH_MODEL_ENDPOINT_MISMATCH: [400, '当前模型不支持这类调用。请检查节点或 Agent 选择的模型；文字分析需要文字或视觉理解模型，不能使用图片生成模型。'],
@@ -66,7 +68,7 @@ function safeTaskId(value) {
 
 function findTaskId(value, depth = 0) {
     if (!value || typeof value !== 'object' || depth > 8) return null;
-    for (const key of ['task_id', 'taskId', 'request_id', 'id', 'TaskId']) {
+    for (const key of ['task_id', 'taskId', 'id', 'TaskId']) {
         const id = safeTaskId(value[key]);
         if (id) return id;
     }
@@ -174,6 +176,11 @@ function readPublicError(payload) {
     const value = parsePayload(payload);
     const node = failureNode(value);
     const error = node?.error;
+    if (error?.type === 'ravenhash_error' && error.protocolVersion === 2) {
+        const detail = normalizePublicDetail(error);
+        const taskId = findExplicitTaskId(value);
+        return { ...detail, taskId, message: formatPublicDetail(detail, CATALOG) };
+    }
     if (error?.type !== 'ravenhash_error' || !Object.hasOwn(CATALOG, error.code)) return null;
     const requestId = /^rh_[a-f0-9]{32}$/.test(error.request_id || '') ? error.request_id : null;
     const confirmedFailure = isTerminalFailure(value) || CONTENT_REJECTION_CODES.has(error.code);
@@ -185,6 +192,10 @@ function readPublicError(payload) {
 
 function publicErrorResult(payload) {
     const error = readPublicError(payload);
+    if (error?.protocolVersion === 2) {
+        const { message, ...details } = error;
+        return { success: false, error: message, ...details };
+    }
     return error ? { success: false, error: error.message, code: error.code, requestId: error.requestId,
         submissionUnknown: error.submissionUnknown, retryable: error.retryable,
         taskId: error.taskId, confirmedFailure: error.confirmedFailure } : null;
@@ -192,6 +203,13 @@ function publicErrorResult(payload) {
 
 function mapLocalError(status, payload, options = {}) {
     const mapped = readPublicError(payload);
+    if (mapped?.protocolVersion === 2) {
+        const { message, ...details } = mapped;
+        return { success: false, error: message, ...details, taskId: mapped.taskId || safeTaskId(options.taskId) };
+    }
+    if (!mapped && (options.protocolVersion === 2 || ['upstream', 'client_account'].includes(options.origin))) {
+        return publicErrorResult(normalizeRelayFailure(Number(status) || 502, payload, options).body);
+    }
     const statusCode = Number(status) || 502;
     const statusSuffix = statusCode >= 400 && statusCode <= 599 ? `（HTTP ${statusCode}）` : '';
     if (mapped) return {
@@ -212,5 +230,100 @@ function mapLocalError(status, payload, options = {}) {
     };
 }
 
+function findExplicitTaskId(value, depth = 0) {
+    if (!value || typeof value !== 'object' || depth > 8) return null;
+    for (const key of ['task_id', 'taskId', 'TaskId']) {
+        const id = safeTaskId(value[key]);
+        if (id) return id;
+    }
+    for (const key of WRAPPERS) {
+        const id = findExplicitTaskId(value[key], depth + 1);
+        if (id) return id;
+    }
+    return null;
+}
+
+function categoryForCode(code) {
+    if (CONTENT_REJECTION_CODES.has(code)) return 'moderation';
+    if (['RH_INVALID_REQUEST', 'RH_MODEL_ENDPOINT_MISMATCH', 'RH_TOOLS_UNSUPPORTED'].includes(code)) return 'parameter';
+    if (['RH_MEDIA_TOO_LARGE', 'RH_MEDIA_UNREADABLE', 'RH_ASSET_PENDING'].includes(code)) return 'asset';
+    return ({ RH_AUTH_FAILED: 'auth', RH_PERMISSION_DENIED: 'permission', RH_QUOTA_EXHAUSTED: 'quota',
+        RH_RATE_LIMITED: 'rate_limit', RH_MODEL_UNAVAILABLE: 'model_unavailable' })[code] || 'service';
+}
+
+function extractParameterIssues(payload) {
+    const text = errorText(payload);
+    const duration = /duration|时长/i.test(text);
+    const field = /reference[_ ]?audio|input[_ ]?audio|参考音频|音频.{0,12}时长/i.test(text) ? 'referenceAudioDuration'
+        : /reference[_ ]?video|input[_ ]?video|参考视频/i.test(text) ? 'referenceVideoDuration' : 'duration';
+    if (!duration) return [];
+    const range = text.match(/(?:duration|时长).{0,35}?(?:between|from|支持|范围[为是]?|必须[为在])\s*(\d+(?:\.\d+)?)\s*(?:and|to|到|[-~])\s*(\d+(?:\.\d+)?)/i);
+    const maximum = text.match(/(?:duration|时长).{0,40}?(?:maximum(?: of)?|max(?:imum)?[=: ]|at most|最多|上限[为是]?|超过|exceeds?(?: maximum)?)\s*(\d+(?:\.\d+)?)/i);
+    const minimum = text.match(/(?:duration|时长).{0,40}?(?:minimum(?: of)?|at least|至少|不足)\s*(\d+(?:\.\d+)?)/i);
+    if (!range && !maximum && !minimum) return [];
+    const issue = { field, reason: 'range' };
+    if (range) Object.assign(issue, { min: Number(range[1]), max: Number(range[2]) });
+    else if (maximum) issue.max = Number(maximum[1]);
+    else issue.min = Number(minimum[1]);
+    const actual = text.match(/(?:received|actual|当前(?:为)?|实际(?:为)?)\s*[:=]?\s*(\d+(?:\.\d+)?)/i);
+    if (actual) issue.actual = Number(actual[1]);
+    return normalizeParameterIssues([issue]);
+}
+
+function mappedRuleCode(value, rules) {
+    if (!Array.isArray(rules)) return null;
+    const node = failureNode(value) || value;
+    const upstreamCode = node?.error?.code ?? node?.code;
+    if (typeof upstreamCode !== 'string' || upstreamCode.length > 256) return null;
+    const rule = rules.slice(0, 100).find(candidate => candidate?.upstreamCode === upstreamCode
+        && Object.hasOwn(CATALOG, candidate.publicCode));
+    return rule?.publicCode || null;
+}
+
+// Gateway-only conversion. Raw provider fields are classified here but never returned.
+function normalizeRelayFailure(status, payload, options = {}) {
+    const value = parsePayload(payload) || payload;
+    const query = options.query === true || ['poll', 'download'].includes(options.stage);
+    const taskId = safeTaskId(options.taskId) || findExplicitTaskId(value);
+    const terminal = options.terminal === true || (query && isTerminalFailure(value));
+    const transport = options.transport === true;
+    let code = (Object.hasOwn(CATALOG, options.code || '') ? options.code : null) || mappedRuleCode(value, options.rules)
+        || classify(status, value, { query, terminal, transport });
+    const text = errorText(value);
+    const routingRejected = !taskId && /\bmodel_not_found\b/i.test(text) && /no available channel for model/i.test(text);
+    const ambiguous = !query && !['validate', 'upload'].includes(options.stage)
+        && (transport || status === 408 || (status >= 500 && !routingRejected && !terminal));
+    if (ambiguous) code = 'RH_SUBMISSION_UNKNOWN';
+    if (options.origin !== 'client_account' && ['RH_AUTH_FAILED', 'RH_QUOTA_EXHAUSTED', 'RH_PERMISSION_DENIED'].includes(code)) {
+        code = 'RH_SERVICE_UNAVAILABLE';
+    }
+    const category = categoryForCode(code);
+    const confirmedFailure = !ambiguous && (terminal || CONTENT_REJECTION_CODES.has(code));
+    const submissionState = ambiguous ? 'unknown' : ['validate', 'upload'].includes(options.stage) ? 'not_submitted'
+        : taskId || (query && terminal) ? 'accepted' : query ? 'unknown'
+            : status >= 400 && status < 500 && status !== 408 ? 'rejected'
+            : confirmedFailure || code === 'RH_MODEL_UNAVAILABLE' ? 'rejected' : 'unknown';
+    const parameterIssues = ['parameter', 'asset'].includes(category)
+        ? normalizeParameterIssues(options.parameterIssues || extractParameterIssues(value)) : [];
+    const action = submissionState === 'unknown' ? (taskId || query ? 'retry_query' : 'contact_support')
+        : submissionState === 'accepted' && !confirmedFailure ? 'retry_query'
+            : category === 'parameter' || category === 'moderation' ? 'edit_parameters'
+                : category === 'asset' ? 'replace_reference'
+                    : ['auth', 'quota', 'permission'].includes(category) ? 'check_account'
+                        : category === 'rate_limit' ? 'wait' : 'contact_support';
+    const detail = normalizePublicDetail({ protocolVersion: 2, code, category,
+        stage: options.stage || (query ? 'poll' : 'submit'), submissionState, action,
+        requestId: safeRequestId(options.requestId), parameterIssues, confirmedFailure,
+        retryable: query && !confirmedFailure && ['RH_RATE_LIMITED', 'RH_TASK_NOT_FOUND', 'RH_SERVICE_UNAVAILABLE', 'RH_REQUEST_TIMEOUT'].includes(code) });
+    const { requestId, ...fields } = detail;
+    const error = { type: 'ravenhash_error', ...fields, message: CATALOG[code][1] };
+    if (requestId) error.request_id = requestId;
+    const body = { error };
+    if (taskId) Object.assign(body, { id: taskId, task_id: taskId });
+    if (confirmedFailure) body.status = 'failed';
+    return { status: confirmedFailure && taskId ? 200 : status >= 400 && status <= 599 ? status : CATALOG[code][0], body };
+}
+
 module.exports = { CATALOG, parsePayload, failureNode, isTerminalFailure, safeTaskId, findTaskId,
-    publicFailure, readPublicError, publicErrorResult, mapLocalError, errorText };
+    publicFailure, readPublicError, publicErrorResult, mapLocalError, errorText, normalizeRelayFailure,
+    normalizePublicDetail, normalizeParameterIssues, formatPublicDetail, safeRequestId, findExplicitTaskId };

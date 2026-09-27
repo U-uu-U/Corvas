@@ -18,12 +18,16 @@ const readConfig = () => JSON.parse(fs.readFileSync(JSON_PATH, 'utf8'));
 const sourceFiles = [
     'shared/model-channels.source.csv',
     'shared/model-config.default.json',
-    'shared/schemas/model-config.schema.json'
+    'shared/schemas/model-config.schema.json',
+    'shared/model-parameter-rules.cjs',
+    'shared/error-report-contract.cjs'
 ];
 const generatedFiles = [
     'src/model-config-default.js',
     'configserver/seed/model-config.default.json',
-    'configserver/schema/model-config.schema.json'
+    'configserver/schema/model-config.schema.json',
+    'configserver/lib/model-parameter-rules.cjs',
+    'configserver/lib/error-report-contract.cjs'
 ];
 
 function syncFixture(t, sourceEol = '\n', targetEol = '\n') {
@@ -79,14 +83,17 @@ for (const file of generatedFiles) {
             const target = fixture.file(file);
             const before = sourceFiles.map(file => fs.readFileSync(fixture.file(file)));
             const original = fs.readFileSync(target, 'utf8');
+            const changed = file.endsWith('.cjs')
+                ? `${original}\n// Generated copy drift.\n`
+                : original.replace('"schemaVersion"', '"schemaVersionDrift"');
             if (state === 'missing') fs.unlinkSync(target);
-            else fs.writeFileSync(target, original.replace('"schemaVersion"', '"schemaVersionDrift"'));
+            else fs.writeFileSync(target, changed);
             const checked = fixture.run();
             assert.ifError(checked.error);
             assert.equal(checked.status, 1, checked.stdout);
             assert.ok(checked.stderr.includes(file.replaceAll('/', path.sep)) || checked.stderr.includes(file), checked.stderr);
             assert.equal(fs.existsSync(target), state === 'changed');
-            if (state === 'changed') assert.equal(fs.readFileSync(target, 'utf8'), original.replace('"schemaVersion"', '"schemaVersionDrift"'));
+            if (state === 'changed') assert.equal(fs.readFileSync(target, 'utf8'), changed);
             const written = fixture.run('--write');
             assert.ifError(written.error);
             assert.equal(written.status, 0, written.stderr);

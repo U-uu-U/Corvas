@@ -1,13 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { expandCatalogProviders, findCatalogEntry, isRemoteCatalog, isCatalogManaged,
-    getCatalogProviderEntries, catalogProviderKinds } from './model-catalog.mjs';
+    getCatalogProviderEntries, catalogProviderKinds, resolveCatalogDefaultProvider } from './model-catalog.mjs';
 
 const account = { id: 'video-account', endpoint: 'https://art.example.test/v1', apiKey: 'test-art-key',
     capability: 'video', model: 'local-old', models: ['local-old', 'local-extra'] };
 const entry = (id = 'remote-a', overrides = {}) => ({ id, kind: 'video', priority: 0,
     catalog: { model: id, hosts: ['art.example.test'] }, ...overrides });
 const remote = (...models) => ({ catalogMode: 'remote', models });
+
+test('remote defaults resolve exact entries on the preferred account and safely ignore unavailable defaults', () => {
+    const config = { ...remote(entry('first'), entry('second')), defaultModels: { video: 'second' } };
+    const accounts = [{ ...account, model: 'first' }, { ...account, id: 'preferred', model: 'first' }];
+    const before = structuredClone(accounts);
+    const selected = resolveCatalogDefaultProvider(config, accounts, 'video', 'preferred::model:first');
+    assert.equal(selected.model, 'second');
+    assert.equal(selected.sourceProviderId, 'preferred');
+    assert.equal(selected.apiKey, accounts[1].apiKey);
+    config.models[1].catalog.enabled = false;
+    assert.equal(resolveCatalogDefaultProvider(config, accounts, 'video', 'preferred').model, 'first');
+    config.models[0].presentation = { visible: false };
+    assert.equal(resolveCatalogDefaultProvider(config, accounts, 'video', 'preferred'), null);
+    assert.deepEqual(accounts, before);
+});
 
 test('new remote accounts use URL and capability without a local model list or global scope change', () => {
     const config = { ...remote(entry('remote-video'), entry('remote-image', { kind: 'image' }),

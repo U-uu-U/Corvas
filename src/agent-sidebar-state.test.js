@@ -63,6 +63,32 @@ test('portrait task failures are not treated as disconnections or primary recove
     assert.match(html, /肖像保护限制/);
     assert.doesNotMatch(html, /data-retry-task=/);
     assert.ok(html.indexOf('data-recover-task=') < html.indexOf('</details>'), 'Manual recovery stays inside collapsed advanced controls');
+    assert.match(html, /data-report-task="portrait"/);
+});
+
+test('reporting a failed task opens a draft with correlation and parameters but no prompts or media paths', t => {
+    const events = [];
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: { dispatchEvent: event => events.push(event) } });
+    t.after(() => {
+        if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
+        else delete globalThis.document;
+    });
+    const task = { id: 'local-task', taskId: 'remote-task', requestId: 'rh_1234567890', status: 'failed',
+        site: 'cart', model: 'sd2-fast', kind: 'video', prompt: 'private story', error: 'bad duration',
+        errorDetail: { stage: 'submit', submissionState: 'rejected', parameterIssues: [{ field: 'duration', max: 12 }] },
+        sourcePaths: ['/private/ref.png'], params: { duration: 15, resolution: '720p', nodeId: 'node-1',
+            audioSourcePaths: ['/private/voice.wav'], apiKey: 'sk-private' } };
+    const sidebar = Object.assign(Object.create(AgentSidebar.prototype), { generationTasks: [task] });
+    const detail = sidebar._reportGenerationTask(task.id);
+    assert.equal(events[0].type, 'diagnostics:report');
+    assert.equal(detail.clientTaskId, 'local-task');
+    assert.equal(detail.requestId, task.requestId);
+    assert.equal(detail.site, 'cart');
+    assert.equal(detail.params.duration, 15);
+    assert.equal(detail.stage, 'submit');
+    assert.deepEqual(detail.referenceCounts, { images: 1, videos: 0, audios: 1 });
+    assert.doesNotMatch(JSON.stringify(detail), /private story|\/private\/|sk-private/);
 });
 
 test('node prompt presets remain independent by project and media kind without workspace DOM', t => {

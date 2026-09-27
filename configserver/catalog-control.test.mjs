@@ -43,7 +43,7 @@ function fixture(t, models = [model('first'), model('second'), model('image', { 
 test('lists concise entries without prices or full config', async t => {
     const { execute, preview } = fixture(t);
     const result = await execute({ action: 'list', query: 'FIRST' });
-    assert.equal(result.channel, 'preview');
+    assert.equal(result.channel, 'stable');
     assert.equal(result.revision, preview.revision);
     assert.equal(result.version, preview.name);
     assert.deepEqual(result.models, [{ id: 'first', model: 'first', label: 'Model first', group: 'recommended', enabled: true, visible: true }]);
@@ -56,7 +56,8 @@ test('disables exact entry, records only enabled fields, restores missing enable
     const stable = store.current('stable').name;
     const result = await set();
     assert.equal(result.changed, 1);
-    assert.equal(store.current('stable').name, stable);
+    assert.notEqual(store.current('stable').name, stable);
+    assert.equal(store.current('stable').name, store.current('preview').name);
     const changed = store.current('preview').config.models[0];
     assert.equal(changed.catalog.enabled, false);
     assert.deepEqual(changed.presentation, preview.config.models[0].presentation);

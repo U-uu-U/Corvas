@@ -67,6 +67,9 @@ export function readModelConfig(raw) {
     if (!isPlainObject(raw)) return null;
     if (Number(raw.schemaVersion) !== MODEL_CONFIG_SCHEMA_VERSION) return null;
     if (!Array.isArray(raw.models)) return null;
+    if (raw.defaultModels !== undefined && (!isPlainObject(raw.defaultModels)
+        || Object.entries(raw.defaultModels).some(([kind, id]) => !VALID_KINDS.includes(kind)
+            || typeof id !== 'string' || !id.trim() || id.length > 200))) return null;
     if (raw.catalogScope !== undefined) {
         const scope = raw.catalogScope;
         if (!isPlainObject(scope)
@@ -103,6 +106,7 @@ export function readModelConfig(raw) {
         schemaVersion: MODEL_CONFIG_SCHEMA_VERSION,
         ...(raw.catalogMode === 'remote' ? { catalogMode: 'remote' } : {}),
         ...(raw.catalogScope ? { catalogScope: { hosts: [...raw.catalogScope.hosts], kinds: [...raw.catalogScope.kinds] } } : {}),
+        ...(raw.defaultModels ? { defaultModels: { ...raw.defaultModels } } : {}),
         revision: Number.isFinite(Number(raw.revision)) ? Number(raw.revision) : 0,
         updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
         source: typeof raw.source === 'string' ? raw.source : '',

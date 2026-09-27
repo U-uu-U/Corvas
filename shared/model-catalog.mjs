@@ -143,3 +143,17 @@ export function expandCatalogProviders(config, providers, { includeHidden = fals
         });
     });
 }
+
+export function resolveCatalogDefaultProvider(config, accounts, kind, preferredId = '') {
+    const available = expandCatalogProviders(config, accounts)
+        .filter(provider => inferProviderCapability(provider) === kind);
+    const preferredAccount = (accounts || []).find(account => account.id === preferredId
+        || String(preferredId).startsWith(`${account.id}::model:`));
+    const defaultId = config?.defaultModels?.[kind];
+    const defaults = typeof defaultId === 'string'
+        ? available.filter(provider => provider.catalogEntryId === defaultId) : [];
+    return defaults.find(provider => provider.sourceProviderId === preferredAccount?.id) || defaults[0]
+        || available.find(provider => provider.id === preferredId)
+        || available.find(provider => provider.sourceProviderId === preferredAccount?.id && provider.model === preferredAccount.model)
+        || available[0] || null;
+}

@@ -1,0 +1,26 @@
+[Unit]
+Description=Corvas relay public error gateway and private diagnostics
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/corvas-relay-error-gateway
+EnvironmentFile=/etc/corvas-relay-error-gateway.env
+ExecStart=/usr/bin/node /opt/corvas-relay-error-gateway/server/relay-error-gateway/gateway.cjs
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+StateDirectory=relay-error-gateway
+StateDirectoryMode=0700
+Environment=RELAY_DIAGNOSTICS_DIR=/var/lib/relay-error-gateway
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/relay-error-gateway
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

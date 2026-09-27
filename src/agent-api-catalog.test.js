@@ -52,6 +52,30 @@ function harness(t, config = catalog(entry('first'), entry('second'))) {
     return { sidebar, state };
 }
 
+test('remote video default applies to new nodes while explicit node and personal selections stay fixed', t => {
+    const { sidebar, state } = harness(t, { ...catalog(entry('first'), entry('second')), defaultModels: { video: 'second' } });
+    sidebar.providers = [{ id: 'video', endpoint: 'https://art.ravenhash.org/v1', capability: 'video',
+        model: 'first', models: [], modelCatalog: 'remote', apiKey: 'fixture-only' }];
+    sidebar.globalConfig.videoProviderId = 'video';
+    const provider = sidebar.getVideoProviderConfig();
+    const node = { config: { providerId: provider.id, sourceProviderId: provider.sourceProviderId, model: provider.model } };
+    assert.equal(node.config.model, 'second');
+    const bound = structuredClone(node.config);
+    state.config.defaultModels.video = 'first';
+    assert.equal(sidebar.getVideoProviderConfig().model, 'first');
+    assert.equal(sidebar.getVideoProviderConfig(node.config).model, 'second');
+    assert.deepEqual(node.config, bound, 'CONFIG refresh must not rewrite an existing node');
+    state.config.models[1].catalog.enabled = false;
+    assert.equal(sidebar.getVideoProviderConfig(node.config).model, 'second', 'A disabled bound model must not be silently rerouted');
+    state.config.models[1].catalog.enabled = true;
+    sidebar._setVideoProvider('video::model:second');
+    assert.equal(sidebar.globalConfig.videoProviderSelection, 'manual');
+    assert.equal(sidebar._getVideoProvider().model, 'second');
+    state.config.models[1].catalog.enabled = false;
+    assert.equal(sidebar._getVideoProvider().model, 'second', 'Explicit personal preference survives retirement until the user changes it');
+    assert.equal(state.saved, 1, 'Only the explicit user selection is persisted');
+});
+
 for (const host of ['art.ravenhash.org', 'cart.ravenhash.org']) {
     test(`${host} selects video from CONFIG without fetching upstream models`, async t => {
         const config = catalog(entry('first'), entry('disabled', 'video', {

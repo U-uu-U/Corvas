@@ -123,6 +123,13 @@
             "prices": [{ "label": "720p", "amount": 0.9, "unit": "request" }]
         },
         {
+            "ids": ["shanhai-video.oc-model-r5cfh8"], "models": ["oc-model-r5cfh8"],
+            "supplier": "山海", "sourceUrl": "https://shanhai.vnshu.cn/api/v1/models",
+            "status": "reference", "currency": "CREDITS", "quotedAt": "2026-09-24T02:48:00Z",
+            "note": "鉴权 API 核对：固定30秒、0.9山海币/次；与15秒版同价，人民币兑换比例待核对",
+            "prices": [{ "label": "720p", "amount": 0.9, "unit": "request" }]
+        },
+        {
             "ids": ["shanhai-video.oc-model-1iq31f"], "models": ["oc-model-1iq31f"],
             "supplier": "山海", "sourceUrl": "https://shanhai.vnshu.cn/api/v1/models",
             "status": "reference", "currency": "CREDITS", "note": "账号 API 返回积分标价，人民币兑换比例待核对",

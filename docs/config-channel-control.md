@@ -1,10 +1,10 @@
 # CONFIG 快捷开关
 
-适用于本项目 CONFIG 模型/分组的启用和停用，不控制 art/cart 两站后台数据库。按用户当前上下文确定预览、正式配置或中转站；没有明确要求正式配置时，当前源码试验流程使用 `preview`。不要把“已关闭 CONFIG 模型”说成“两站渠道已下架”。
+适用于本项目 CONFIG 模型/分组的启用和停用，不控制 art/cart 两站后台数据库。2026-09-24 起源码版与安装版共用一份现行 CONFIG；`preview` 参数和 `/config/preview` 仅保留为兼容别名，和默认 `stable` 相同。不要把“已关闭 CONFIG 模型”说成“两站渠道已下架”。
 
 ## 管理卡片入口
 
-已纳入目录的模型卡片右上方都有“允许调用”开关，修改 `catalog.enabled`。切换后点击“发布配置”，生效范围是当前选择的正式或源码预览通道。停用保留普通灰色卡片，以开关和“已停用”文字表示状态，整组停用也保留组卡片；开启不改价格、参数或分组。右侧重复的“目录状态”下拉框已移除。`presentation.visible` 仅表示显隐，日常关闭调用不要再用隐藏来代替。未补全模型 ID 与 API 主机的旧模板没有调用开关。
+已纳入目录的模型卡片右上方都有“允许调用”开关，修改 `catalog.enabled`。切换后点击“发布配置”，源码版和安装版统一生效。停用保留普通灰色卡片，以开关和“已停用”文字表示状态，整组停用也保留组卡片；开启不改价格、参数或分组。`presentation.visible` 表示画布显隐，日常关闭调用不要用隐藏代替；分组操作台中的未分组视频模型为待用区，发布时隐藏，重新入组恢复显示。未补全模型 ID 与 API 主机的旧模板没有调用开关。
 
 这项开关由画布远程目录和提交前检查执行，暂停新请求，保留已有任务恢复。它不关闭供应商账户，也不拦截绕过画布直接发往中转站的请求。模型在中转站或上游本身不可用时，打开 CONFIG 开关不能修复该上游。
 
@@ -22,16 +22,18 @@ python -B scripts/config-channel-control.py disable --id minimax-video.minimax-h
 python -B scripts/config-channel-control.py restore --receipt <receiptId>
 ```
 
-- 默认通道为 `preview`；正式配置要明确传 `--channel stable`。
+- 默认统一通道为 `stable`，无需选择源码或安装版。旧 `--channel preview` 参数仍兼容。
 - 分组 ID：推荐 `zhubo-video`，2.5 备用 `seedance25-backup`，2.0 推荐 `seedance20-recommended`，山海 `shanhai-backup-2`。
 - `--id` 是 CONFIG 条目 ID，`--model` 是精确 wire model；同名匹配多条时改用 `--id`。分组只操作已纳入 `catalog` 的视频条目。
 - 命令会先读取当前版本，再检查版本并发布；重复开关不产生新版本。遇到版本冲突重新读取，核对目标后再执行。
-- 默认主动刷新本机 `18766` 上、确实连接该远端通道的源码实例；不需要等待轮询。可以用 `--bridge` 指定其他实例或 `--no-refresh` 仅发布。
+- 默认主动刷新本机 `18765`；连接 `/config` 或旧 `/config/preview` 都可刷新。可以用 `--bridge` 指定其他实例或 `--no-refresh` 仅发布。
 - 返回 `receiptId`、发布版本、目标状态、耗时及画布刷新结果。刷新失败不等于发布失败，先查询现行状态，避免盲目重发。
 - `restore` 只恢复该回执改动的 `catalog.enabled` 字段，保留随后修改的名称、分组、价格及其他模型；目标状态已被他人更改时拒绝恢复，不整包回滚。
 - 显隐 `presentation.visible` 与启用状态独立。已隐藏模型即使启用也不会自动取消隐藏；两站后台启用状态同样独立。
 
-## 已测结果
+## 历史验证记录
+
+以下为统一前的记录，旧预览通道不再隔离。`scripts/test-config-channel-control.py` 已禁用，避免以为仅测试预览而改变正式配置；使用 `configserver/catalog-control.test.mjs` 在隔离目录验证。
 
 2026-09-23 用户确认在正式、预览均恢复山海。既有 CLI 发布预览 r14 和正式 r15，仅打开四条 `catalog.enabled`，回执分别为 `fc694734-085b-450a-9edd-74d7572641c1`、`e41b8c69-a980-4981-b03d-d43343eca7c1`。随后单独将四条 `presentation.visible` 恢复为 true，预览 r16、正式 r17；其他模型、参数、价格逐字段比较不变。注意 CLI 回执只恢复调用状态，不恢复后续显隐修改。
 

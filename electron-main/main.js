@@ -20,6 +20,7 @@ const { ApiConfigStore } = require('./api-config-store');
 const { fetchModelConfig } = require('./model-config-service.cjs');
 const { DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
 const { mapLocalError } = require('../shared/public-api-error.cjs');
+const { normalizePublicDetail } = require('../shared/public-error-detail.cjs');
 const { HunyuanAccounts, partitionFor } = require('./hunyuan-accounts.cjs');
 const { launchHunyuanBrowser } = require('./hunyuan-browser-process.cjs');
 const { RhinoDesktop } = require('./rhino-desktop.cjs');
@@ -28,6 +29,7 @@ const { HunyuanRhinoWorkflow } = require('./hunyuan-rhino-workflow.cjs');
 const { WorkflowService } = require('./workflow-service.cjs');
 const { BlenderDesktop } = require('./blender-desktop.cjs');
 const { BlenderWorkbench } = require('./blender-workbench.cjs');
+const { CreativeWebApps } = require('./creative-web-apps.cjs');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -59,6 +61,7 @@ let hunyuanAccounts = null;
 let hunyuanRhinoWorkflow = null;
 let rhinoWorkbench = null;
 let blenderWorkbench = null;
+let creativeWebApps = null;
 let mediaPreviewWasFullScreen = null;
 let mediaAccess = null;
 // 文件移动会让 chokidar 先后报告旧路径 unlink、新路径 add。
@@ -120,6 +123,7 @@ installSafeConsole();
 require('./diagnostics-electron.cjs').installDiagnostics({
     getWindow: () => mainWindow,
     getTasks: () => flowCanvasBridge?.recoveryStore.list() || [],
+    getConfigStatus: async () => (await flowCanvasBridge?._modelConfig(false))?.status || {},
     getSecrets: () => {
         const keys = (apiConfigStore?.load()?.config?.providers || []).map(provider => provider.apiKey).filter(Boolean);
         try { keys.push(...(agentServices?.runtime?.getSecrets?.() || [])); } catch { /* Runtime may still be initializing. */ }
@@ -329,6 +333,7 @@ function createWindow() {
     }
 
     mainWindow.on('closed', () => {
+        creativeWebApps?.close();
         void hunyuanAccounts?.closeAll();
         flowCanvasBridge?.setBoardToolsReady(false, {
             code: 'RENDERER_NOT_READY',
@@ -2140,6 +2145,12 @@ ipcMain.handle('shell:openFile', async (event, filePath) => {
     if (error) throw new Error('系统未能打开此素材，请检查默认打开程序');
 });
 
+ipcMain.handle('creative-web:open', async (event, platform) => {
+    requireMainFrame(event);
+    creativeWebApps ||= new CreativeWebApps({ BrowserWindow, session, Menu, shell });
+    return creativeWebApps.open(platform);
+});
+
 const RAVENHASH_URLS = Object.freeze({
     ai: 'https://ai.ravenhash.org/',
     art: 'https://art.ravenhash.org/',
@@ -2700,6 +2711,7 @@ ipcMain.handle('mcp:image:generate', async (_, body) => {
             // 结构化语义必须显式过 IPC：自定义错误属性不会随 message 传过去，
             // 而渲染层需要它来区分「结果未知」与「确定失败」——前者绝不能
             // 引导用户直接重新提交（可能重复计费）。
+            ...(normalizePublicDetail(err) || {}),
             submissionUnknown: err?.submissionUnknown === true,
             code: err?.code,
             confirmedFailure: err?.confirmedFailure === true,
@@ -2745,6 +2757,7 @@ ipcMain.handle('mcp:video:generate', async (_, body) => {
         return {
             success: false,
             canceled: err?.code === 'GENERATION_CANCELED' || err?.name === 'AbortError',
+            ...(normalizePublicDetail(err) || {}),
             submissionUnknown: err?.submissionUnknown === true,
             code: err?.code,
             confirmedFailure: err?.confirmedFailure === true,
@@ -3507,6 +3520,7 @@ let agentShutdownPromise = null;
 let agentShutdownComplete = false;
 app.on('before-quit', event => {
     isQuitting = true;
+    creativeWebApps?.close();
     hunyuanRhinoWorkflow?.close();
     rhinoWorkbench?.close();
     blenderWorkbench?.close();
@@ -3525,7 +3539,7 @@ ipcMain.handle('mcp:generation:recover', async (event, body) => {
         if (!flowCanvasBridge) throw new Error('任务恢复服务尚未就绪');
         return { success: true, ...await flowCanvasBridge.recoverGenerationFromRenderer(body || {}) };
     } catch (error) {
-        return { success: false, error: error.message, code: error.code,
+        return { success: false, ...(normalizePublicDetail(error) || {}), error: error.message, code: error.code,
             confirmedFailure: error.confirmedFailure === true, submissionUnknown: error.submissionUnknown === true,
             retryable: error.retryable, requestId: error.requestId,
             canceled: error.code === 'GENERATION_CANCELED' || error.name === 'AbortError' };

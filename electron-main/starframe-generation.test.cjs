@@ -32,7 +32,7 @@ test('StarFrame persists task IDs, queries native status and authenticates conte
     const bridge = new Bridge({ store: { load: () => ({ items: [] }) }, recoveryDirectory: path.join(profile, 'records') });
     bridge._loadWithPlanService = () => ({ data: { items: [] }, planService: {} });
     const endpoint = 'https://starframe.test/v1/videos';
-    const request = { clientTaskId: 'stable-1', prompt: 'fixture', duration: 5, ratio: '16:9', resolution: '720p',
+    const request = { clientTaskId: 'stable-1', prompt: 'fixture', duration: 5, resolution: '720p',
         targetDir: profile, addToCanvas: false, sourceReferences: [{ filePath: image }],
         videoReferences: ['video-1.mp4', 'video-2.mp4'].map(file => ({ filePath: path.join(profile, file) })),
         audioReferences: [{ filePath: path.join(profile, 'audio.mp3') }],
@@ -111,7 +111,8 @@ for (const host of ['art.ravenhash.org', 'cart.ravenhash.org']) {
         const taskId = `task-${host.replaceAll('.', '-')}`;
         const apiKey = `fixture-key-${host}`;
         const signedUrl = `https://starframe-sh.tos-s3-cn-shanghai.volces.com/videos/${taskId}.mp4?X-Amz-Signature=fixture`;
-        const request = { clientTaskId, prompt: 'relay fixture', duration: 4, ratio: '16:9', resolution: '720p',
+        const ratio = host === 'art.ravenhash.org' ? '9:16' : '';
+        const request = { clientTaskId, prompt: 'relay fixture', duration: 4, ratio, resolution: '720p',
             targetDir: profile, addToCanvas: false,
             providerConfig: { id: `${sourceProviderId}::model:${STARFRAME_MODEL}`, sourceProviderId,
                 endpoint: `${origin}/v1`, model: STARFRAME_MODEL, capability: 'video', apiKey } };
@@ -130,7 +131,7 @@ for (const host of ['art.ravenhash.org', 'cart.ravenhash.org']) {
                 posts++;
                 assert.equal(url, `${origin}/v1/video/generations`);
                 assert.deepEqual(JSON.parse(options.body), { model: STARFRAME_MODEL, client_task_id: clientTaskId,
-                    prompt: 'relay fixture', mode: 'references', duration: 4, resolution: '720p', aspect_ratio: '16:9' });
+                    prompt: 'relay fixture', mode: 'references', duration: 4, resolution: '720p', aspect_ratio: ratio || '16:9' });
                 return json({ id: taskId, object: 'video', status: 'pending', created: 1 });
             }
             assert.equal(options.method, 'GET');

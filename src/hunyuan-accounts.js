@@ -1,5 +1,7 @@
+import { creativeAppIcon } from './creative-app-icons.js';
+
 const icon = name => `<svg class="flow-icon" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-${name}"></use></svg>`;
-const cube = '<svg class="flow-icon hunyuan-cube" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9ZM4 7.5l8 4.5 8-4.5M12 12v9M8 5.25l8 4.5"/></svg>';
+const hunyuanLogo = creativeAppIcon('hunyuan');
 
 export function createApplicationLauncher({ onSelect }) {
     const trigger = document.getElementById('agentToggleBtn');
@@ -9,11 +11,22 @@ export function createApplicationLauncher({ onSelect }) {
     menu.className = 'corvas-app-launcher';
     menu.setAttribute('aria-label', '创作应用');
     menu.hidden = true;
-    menu.innerHTML = `<span class="corvas-app-launcher-label">创作应用</span>
+    menu.innerHTML = `<div class="corvas-app-launcher-group" role="group" aria-label="AI 助手">
+        <span class="corvas-app-launcher-label">AI 助手</span>
         <button type="button" data-app="agent">${icon('sparkles')}<span>AI Agent</span></button>
-        <button type="button" data-app="hunyuan">${cube}<span>混元 3D</span></button>
-        <button type="button" data-app="rhino"><span class="corvas-rhino-mark" aria-hidden="true">Rh</span><span>Rhino</span></button>
-        <button type="button" data-app="blender"><span class="corvas-blender-mark" aria-hidden="true">B</span><span>Blender</span></button>`;
+        </div>
+        <div class="corvas-app-launcher-group" role="group" aria-label="网页创作">
+        <span class="corvas-app-launcher-label">网页创作</span>
+        <button type="button" data-app="tripo" title="打开 Tripo 创作平台">${creativeAppIcon('tripo')}<span>Tripo</span></button>
+        <button type="button" data-app="hunyuan">${hunyuanLogo}<span>混元 3D</span></button>
+        <button type="button" data-app="jimeng" title="打开即梦创作平台">${creativeAppIcon('jimeng')}<span>即梦</span></button>
+        </div>
+        <div class="corvas-app-launcher-group" role="group" aria-label="本地软件">
+        <span class="corvas-app-launcher-label">本地软件</span>
+        <button type="button" data-app="rhino">${creativeAppIcon('rhino')}<span>Rhino</span></button>
+        <button type="button" data-app="blender">${creativeAppIcon('blender')}<span>Blender</span></button>
+        </div>
+        <p class="corvas-app-launcher-status" role="status" hidden></p>`;
     document.body.append(menu);
     let timer;
     const hide = () => { clearTimeout(timer); menu.hidden = true; };
@@ -22,7 +35,8 @@ export function createApplicationLauncher({ onSelect }) {
         menu.hidden = false;
         const bounds = trigger.getBoundingClientRect();
         menu.style.left = `${Math.max(8, Math.min(bounds.right - menu.offsetWidth, innerWidth - menu.offsetWidth - 8))}px`;
-        menu.style.top = `${Math.max(8, bounds.top - menu.offsetHeight - 10)}px`;
+        const top = bounds.top - menu.offsetHeight - 10;
+        menu.style.top = `${Math.max(8, Math.min(top, innerHeight - menu.offsetHeight - 8))}px`;
     };
     const deferHide = () => {
         clearTimeout(timer);
@@ -45,12 +59,27 @@ export function createApplicationLauncher({ onSelect }) {
     trigger.addEventListener('click', hide);
     menu.addEventListener('keydown', event => {
         if (event.key === 'Escape') { event.stopPropagation(); trigger.focus(); hide(); }
+        if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+            event.preventDefault();
+            const buttons = [...menu.querySelectorAll('button')];
+            const index = buttons.indexOf(document.activeElement);
+            const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+                : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length;
+            buttons[next].focus();
+        }
     });
-    menu.addEventListener('click', event => {
+    menu.addEventListener('click', async event => {
         const button = event.target.closest('[data-app]');
         if (!button) return;
         hide();
-        onSelect(button.dataset.app);
+        const status = menu.querySelector('[role="status"]');
+        status.hidden = true;
+        try { await onSelect(button.dataset.app); }
+        catch (error) {
+            status.textContent = error.message || '打开失败，请重试';
+            status.hidden = false;
+            show();
+        }
     });
     document.addEventListener('pointerdown', event => {
         if (!menu.contains(event.target) && !trigger.contains(event.target)) hide();
@@ -67,7 +96,7 @@ export function createHunyuanPanel({ onClose, onAgent }) {
     root.className = 'hunyuan-accounts-panel';
     root.setAttribute('aria-label', '混元账号');
     root.hidden = true;
-    root.innerHTML = `<header class="hunyuan-panel-head"><div>${cube}<h2>混元 3D</h2></div>
+    root.innerHTML = `<header class="hunyuan-panel-head"><div>${hunyuanLogo}<h2>混元 3D</h2></div>
         <button type="button" data-action="close" title="关闭侧边栏" aria-label="关闭混元账号侧栏">${icon('close')}</button></header>
         <div class="hunyuan-panel-intro"><strong>选择一个账号开始创作</strong>
             <p>各账号使用独立浏览器环境，可同时打开。首次使用请在各自窗口中登录。</p></div>
@@ -112,7 +141,7 @@ export function createHunyuanPanel({ onClose, onAgent }) {
         if (!data.accounts.length) {
             const empty = document.createElement('div');
             empty.className = 'hunyuan-accounts-empty';
-            empty.innerHTML = `${cube}<strong>添加你的第一个混元账号</strong><p>为账号取个便于区分的名字，<br>然后打开网页登录。</p>`;
+            empty.innerHTML = `${hunyuanLogo}<strong>添加你的第一个混元账号</strong><p>为账号取个便于区分的名字，<br>然后打开网页登录。</p>`;
             list.append(empty);
         }
         for (const account of data.accounts) {

@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import Ajv from 'ajv';
-import { getModelPresentation, formatModelPrice, describeModelPresentation } from './model-presentation.mjs';
+import { getModelPresentation, formatModelPrice, describeModelPresentation,
+    formatModelSalePrice, formatModelSalePriceDetails } from './model-presentation.mjs';
 import { getVideoModelProfile, describeVideoModelProfile } from './video-model-profiles.mjs';
 import { resolveModelConfigEntry, toVideoProfileOverrides, mergeVideoProfile } from '../src/model-config-capabilities.js';
 import { DEFAULT_MODEL_CONFIG } from '../src/model-config-default.js';
@@ -15,6 +16,130 @@ const entryFor = (config, p = provider) => resolveModelConfigEntry(config, p).en
 const profileFor = (config, p = provider) => mergeVideoProfile(getVideoModelProfile(p), toVideoProfileOverrides(config, entryFor(config, p), p));
 const sale = { status: 'known', hosts: ['art.ravenhash.org'], amount: 6.5, currency: 'CNY', unit: 'request',
     kind: 'sale', source: 'test-sale-catalog', updatedAt: '2026-09-13T00:00:00Z' };
+const siteSale = (host = 'art.ravenhash.org', amount = 5, unit = 'request') => ({
+    host, status: 'known', currency: 'CNY', kind: 'sale', source: 'relay billing snapshot',
+    updatedAt: '2026-09-24T00:00:00.000Z', prices: [{ label: '', amount, unit }]
+});
+
+test('sale price projection uses the exact provider host and supersedes legacy prices', () => {
+    const art = siteSale();
+    const cart = siteSale('cart.ravenhash.org', 5.72);
+    const entry = { salePrices: [art, cart], pricing: sale };
+    for (const [endpoint, expected] of [['https://art.ravenhash.org/v1', art], ['https://CART.RAVENHASH.ORG/v1', cart]]) {
+        const result = getModelPresentation(entry, { endpoint });
+        assert.deepEqual(result.salePricing, expected);
+        assert.equal(result.price.amount, expected.prices[0].amount);
+        assert.equal(result.price.source, 'relay billing snapshot');
+    }
+    for (const endpoint of ['https://other.test/v1', 'https://art.ravenhash.org.evil.test/v1',
+        'https://evil.test/art.ravenhash.org', 'https://art.ravenhash.org@evil.test/v1', '', undefined]) {
+        assert.deepEqual(getModelPresentation(entry, { endpoint }), { salePricing: null, price: null });
+    }
+    const missing = getModelPresentation({ salePrices: [cart], pricing: sale }, provider);
+    assert.deepEqual(missing, { salePricing: null, price: null });
+    assert.equal(getModelPresentation({ pricing: sale }, provider).price.amount, sale.amount);
+});
+
+test('invalid or duplicate site sale records never revive stale sale amounts', () => {
+    const good = siteSale();
+    const invalid = [
+        [], null, 'invalid', [good, { ...good, prices: [{ label: '', amount: 8, unit: 'request' }] }],
+        [{ ...good, host: undefined }], [{ ...good, currency: 'RMB' }], [{ ...good, kind: 'cost' }],
+        [{ ...good, updatedAt: '2026-09-24' }], [{ ...good, source: '' }], [{ ...good, prices: [] }],
+        [{ ...good, prices: [{ label: '', amount: -1, unit: 'request' }] }],
+        [{ ...good, prices: [{ label: '', amount: 5, unit: 'token' }] }], [{ ...good, cost: 1 }]
+    ];
+    for (const salePrices of invalid) {
+        const result = getModelPresentation({ salePrices, pricing: sale }, provider);
+        assert.deepEqual(result, { salePricing: null, price: null }, JSON.stringify(salePrices));
+        assert.equal(formatModelSalePrice(result.salePricing), '售价待配置');
+    }
+    const unknown = { ...good, status: 'unknown', prices: [], note: '尚无计费规则' };
+    const result = getModelPresentation({ salePrices: [unknown], pricing: sale }, provider);
+    assert.equal(result.price, null);
+    assert.equal(formatModelSalePrice(result.salePricing), '售价待配置');
+    assert.equal(formatModelSalePriceDetails(result.salePricing), '老站售价\n售价待配置\n尚无计费规则');
+    assert.equal(formatModelSalePriceDetails(result.salePricing, { includeSite: false }), '售价明细\n售价待配置\n尚无计费规则');
+    assert.equal(formatModelSalePrice(undefined), '售价待配置');
+});
+
+test('sale formatting preserves zero, currency and billing unit with two decimals', () => {
+    assert.equal(formatModelSalePrice(siteSale()), '¥5.00/次');
+    assert.equal(formatModelSalePrice(siteSale('cart.ravenhash.org', 1.25, 'second')), '¥1.25/秒');
+    assert.equal(formatModelSalePrice(siteSale('art.ravenhash.org', 0, 'image')), '¥0.00/张');
+    assert.equal(formatModelSalePrice({ ...siteSale(), currency: 'USD' }), 'US$5.00/次');
+    assert.equal(formatModelSalePrice(siteSale('art.ravenhash.org', 46.368, 'million_tokens')), '¥46.37/百万 Token');
+    assert.equal(formatModelSalePrice({ ...siteSale(), kind: 'cost' }), '售价待配置');
+});
+
+test('tiered resolution prices retain their range until matching resolution is selected', () => {
+    const pricing = { ...siteSale(), prices: [
+        { label: '480p', amount: 0.05, unit: 'second' },
+        { label: '786p', amount: 0.12, unit: 'second' },
+        { label: '1080p', amount: 0.20, unit: 'second' },
+        { label: '2k超分', amount: 0.20, unit: 'second' },
+        { label: '4K', amount: 0.25, unit: 'second' }
+    ] };
+    assert.equal(formatModelSalePrice(pricing), '¥0.05-0.25/秒');
+    assert.equal(formatModelSalePrice(pricing, { resolution: '768p' }), '¥0.12/秒');
+    assert.equal(formatModelSalePrice(pricing, { resolution: '786p' }), '¥0.12/秒');
+    assert.equal(formatModelSalePrice(pricing, { resolution: '2K' }), '¥0.20/秒');
+    assert.equal(formatModelSalePrice(pricing, { resolution: '720p' }), '¥0.05-0.25/秒');
+    const projected = getModelPresentation({ salePrices: [pricing] }, provider);
+    assert.equal(projected.price, null);
+    assert.deepEqual(projected.salePricing, pricing);
+    const uniform = { ...pricing, prices: pricing.prices.map(price => ({ ...price, amount: 0.2 })) };
+    assert.equal(getModelPresentation({ salePrices: [uniform] }, provider).price.amount, 0.2);
+});
+
+test('video reference tiers preserve token billing and ambiguous labels keep a range', () => {
+    const pricing = { ...siteSale('cart.ravenhash.org'), note: '实际按生成 Token 计费', prices: [
+        { label: '720p 无参考视频', amount: 20, unit: 'million_tokens' },
+        { label: '720p 有参考视频', amount: 10, unit: 'million_tokens' },
+        { label: '1080p 无参考视频', amount: 30, unit: 'million_tokens' },
+        { label: '1080p 有参考视频', amount: 15, unit: 'million_tokens' }
+    ] };
+    assert.equal(formatModelSalePrice(pricing), '¥10.00-30.00/百万 Token');
+    assert.equal(formatModelSalePrice(pricing, { resolution: '720p' }), '¥10.00-20.00/百万 Token');
+    assert.equal(formatModelSalePrice(pricing, { resolution: '720p', hasVideoReference: false }), '¥20.00/百万 Token');
+    assert.equal(formatModelSalePrice(pricing, { resolution: '1080p', hasVideoReference: true }), '¥15.00/百万 Token');
+    assert.equal(formatModelSalePrice(pricing, { hasVideoReference: true }), '¥10.00-15.00/百万 Token');
+    assert.equal(formatModelSalePriceDetails(pricing), '新站售价\n720p 无参考视频：¥20.00/百万 Token\n720p 有参考视频：¥10.00/百万 Token\n1080p 无参考视频：¥30.00/百万 Token\n1080p 有参考视频：¥15.00/百万 Token\n实际按生成 Token 计费');
+    pricing.prices.push({ label: '特殊条件', amount: 40, unit: 'million_tokens' });
+    assert.equal(formatModelSalePrice(pricing, { resolution: '720p', hasVideoReference: true }), '¥10.00-40.00/百万 Token');
+    assert.equal(formatModelSalePrice({ ...siteSale(), prices: [
+        { label: '1720p', amount: 1, unit: 'request' }, { label: '720p', amount: 2, unit: 'request' }
+    ] }, { resolution: '720p' }), '¥2.00/次');
+});
+
+test('mixed billing units remain separate in the display and cannot become a legacy scalar', () => {
+    const pricing = { ...siteSale(), prices: [
+        { label: '基础', amount: 1, unit: 'request' }, { label: '生成', amount: 1, unit: 'million_tokens' }
+    ] };
+    assert.equal(formatModelSalePrice(pricing), '¥1.00/次；¥1.00/百万 Token');
+    assert.equal(getModelPresentation({ salePrices: [pricing] }, provider).price, null);
+});
+
+test('both schemas accept scoped sale tiers and unknown snapshots but reject costs and duplicate hosts', () => {
+    const serverSchema = JSON.parse(fs.readFileSync(new URL('../configserver/schema/model-config.schema.json', import.meta.url), 'utf8'));
+    assert.deepEqual(serverSchema, schema);
+    const config = structuredClone(DEFAULT_MODEL_CONFIG);
+    const entry = entryFor(config);
+    const art = siteSale();
+    const cart = { ...siteSale('cart.ravenhash.org'), status: 'unknown', prices: [] };
+    entry.salePrices = [art, cart];
+    assert.equal(validate(config), true, JSON.stringify(validate.errors));
+    const invalid = [
+        [{ ...art, kind: 'cost' }], [{ ...art, host: 'art.ravenhash.org.evil.test' }],
+        [{ ...art, prices: [] }], [art, { ...art, source: 'duplicate' }],
+        [{ ...cart, updatedAt: 'yesterday' }], [{ ...art, prices: [{ label: '', amount: 0, unit: 'token' }] }],
+        [{ ...art, prices: [{ label: '', amount: 0, unit: 'request', cost: 1 }] }]
+    ];
+    for (const salePrices of invalid) {
+        entry.salePrices = salePrices;
+        assert.equal(validate(config), false, JSON.stringify(salePrices));
+    }
+});
 
 test('remote presentation replaces display fields without changing capabilities or provider identity', () => {
     const config = structuredClone(DEFAULT_MODEL_CONFIG);

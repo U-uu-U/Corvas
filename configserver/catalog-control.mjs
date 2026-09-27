@@ -22,9 +22,9 @@ function fail(code, message) {
     throw new CatalogControlError(code, message);
 }
 
-function channelOf(value = 'preview') {
+function channelOf(value = 'stable') {
     if (value !== 'preview' && value !== 'stable') fail('INVALID_REQUEST', 'channel must be preview or stable');
-    return value;
+    return 'stable';
 }
 
 function kindOf(value = 'video') {
@@ -150,7 +150,7 @@ export async function executeCatalogControl(request, {
     }
     if (request.action === 'restore') {
         const receipt = readReceipt(dataDir, request.receiptId);
-        const channel = receipt.channel;
+        const channel = channelOf(receipt.channel);
         const current = currentOf(store, channel);
         if (receipt.status === 'restored') return response(current, channel, { changed: 0, receiptId: receipt.receiptId, restored: true });
         if (receipt.status !== 'applied' || !isVersionFileName(receipt.afterVersion)) {

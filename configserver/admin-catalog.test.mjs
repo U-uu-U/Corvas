@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { addCatalogModel, applyCatalogFields, catalogGroups, catalogGroupKey, catalogModelPrices, catalogModelSource, catalogModelSummary, createCatalogGroup,
-    createCatalogHistory, deleteCatalogModel, moveCatalogModel, renameCatalogGroup, reorderCatalog, setCatalogEnabled,
+    createCatalogHistory, deleteCatalogGroup, deleteCatalogModel, groupCatalogModel, moveCatalogModel, normalizeCatalogWorkspace, placeCatalogGroup, renameCatalogGroup, reorderCatalog, reorderCatalogGroup, setCatalogDefaultModel, setCatalogEnabled,
     toggleCatalogVisibility } from './lib/admin-catalog-model.mjs';
 import { applyEditorValues, readEditorValues } from './lib/admin-editor-model.mjs';
 import { prepareRemoteCatalog } from '../scripts/prepare-remote-catalog.mjs';
+import { getCatalogProviderEntries } from '../shared/model-catalog.mjs';
 
 const base = () => ({ schemaVersion: 1, revision: 12, other: { retained: true }, models: [
     { id: 'minimax', kind: 'video', catalog: { model: 'minimax-h3', hosts: ['art.example.com'] },
@@ -18,6 +19,18 @@ const base = () => ({ schemaVersion: 1, revision: 12, other: { retained: true },
     { id: 'backup', kind: 'video', presentation: { label: 'Backup', routeGroup: 'recommended', routeGroupLabel: '推荐渠道', routeGroupOrder: 10, routeOrder: 20 },
         match: { model: ['^seedance[-.]backup.*$'] }, options: { duration: { type: 'range', min: 4, max: 30 } } }
 ] });
+
+test('remote default selection is explicit and cleared when its model leaves the usable catalog', () => {
+    const initial = base();
+    const selected = setCatalogDefaultModel(initial, 'video', 'main');
+    assert.equal(selected.defaultModels.video, 'main');
+    assert.deepEqual(selected.models, initial.models);
+    assert.equal(setCatalogDefaultModel(selected, 'video', '').defaultModels, undefined);
+    assert.equal(moveCatalogModel(selected, 'main', '').defaultModels, undefined);
+    assert.equal(normalizeCatalogWorkspace(setCatalogEnabled(selected, 'main', false)).defaultModels, undefined);
+    assert.throws(() => setCatalogDefaultModel(initial, 'video', 'backup'), /默认模型/);
+    assert.throws(() => setCatalogDefaultModel(initial, 'image', 'main'), /默认模型/);
+});
 
 test('model cards show independently verified site prices and billing units instead of CONFIG metadata', () => {
     const entry = { id: 'legacy', catalog: { model: 'test-model' }, pricing: { amount: 999 } };
@@ -213,6 +226,123 @@ test('group movement is type-scoped and moving out keeps the entry independent',
     assert.equal(next.models[1].presentation.routeGroup, '');
     assert.equal(catalogGroups(next).find(group => group.entries.some(entry => entry.id === 'main')).id, '');
     assert.equal(config.models[1].presentation.routeGroup, 'recommended');
+});
+
+test('empty groups survive serialization, assignment, last-member removal, rename and reordering', () => {
+    const initial = base();
+    let next = createCatalogGroup(initial, '', '空分组', 'video');
+    const key = catalogGroups(next, { includeEmpty: true }).find(group => group.label === '空分组').key;
+    assert.deepEqual(next.models, initial.models);
+    next = JSON.parse(JSON.stringify(next));
+    assert.equal(catalogGroups(next, { includeEmpty: true }).find(group => group.key === key).entries.length, 0);
+    next = moveCatalogModel(next, 'minimax', key);
+    assert.equal(catalogGroupKey(next.models[0]), key);
+    next = moveCatalogModel(next, 'minimax', '');
+    next = renameCatalogGroup(next, key, '新空分组');
+    assert.throws(() => renameCatalogGroup(next, key, '推荐渠道'), /已有/);
+    next = reorderCatalogGroup(next, key, -1);
+    assert.equal(catalogGroups(next, { includeEmpty: true }).filter(group => group.id)[0].key, key);
+    assert.equal(catalogGroups(next, { includeEmpty: true }).find(group => group.key === key).label, '新空分组');
+    assert.equal(catalogGroups(next).some(group => group.key === key), false, 'Empty groups are omitted from legacy projections');
+});
+
+test('a model can become a same-named group without changing its generation or call settings', () => {
+    const initial = base();
+    initial.models[0].catalog.enabled = false;
+    const before = structuredClone(initial);
+    let next = groupCatalogModel(initial, 'minimax');
+    const group = catalogGroups(next).find(group => group.id && group.entries.some(entry => entry.id === 'minimax'));
+    assert.equal(group.label, 'MiniMax H3');
+    assert.equal(group.entries.length, 1);
+    assert.equal(group.entries[0].presentation.routeGroupAlways, true);
+    assert.equal(group.entries[0].catalog.enabled, false);
+    assert.deepEqual(groupCatalogModel(next, 'minimax'), next, 'Repeating promotion must not create another group');
+    next = createCatalogGroup(initial, '', 'MiniMax H3');
+    next = groupCatalogModel(next, 'minimax');
+    assert.equal(next.models[0].presentation.routeGroupLabel, 'MiniMax H3 (2)');
+    next = groupCatalogModel(initial, 'main');
+    assert.equal(next.models[1].presentation.routeGroupLabel, 'Seedance Main');
+    assert.equal(next.models[2].presentation.routeGroup, 'recommended');
+    assert.deepEqual(next.models[1].options, initial.models[1].options);
+    assert.deepEqual(next.models[1].pricing, initial.models[1].pricing);
+    assert.deepEqual(initial, before);
+});
+
+test('group deletion unassigns all members including hidden or disabled models without changing call contracts', () => {
+    const initial = base();
+    initial.models[1].catalog.enabled = false;
+    initial.models[2].presentation.visible = false;
+    const history = createCatalogHistory(initial);
+    const next = deleteCatalogGroup(initial, 'video:recommended');
+    history.push(next);
+    assert.equal(next.models.length, initial.models.length);
+    assert.ok(next.models.every(entry => !entry.presentation.routeGroup));
+    assert.equal(catalogGroups(next, { includeEmpty: true }).some(group => group.key === 'video:recommended'), false);
+    for (let i = 0; i < initial.models.length; i++) {
+        const { presentation: _before, ...before } = initial.models[i];
+        const { presentation: _after, ...after } = next.models[i];
+        assert.deepEqual(after, before);
+        assert.equal(next.models[i].presentation.visible, initial.models[i].catalog ? false : initial.models[i].presentation.visible);
+    }
+    assert.deepEqual(history.undo(), initial);
+    assert.deepEqual(history.redo(), next);
+});
+
+test('drag ordering targets the full group while preserving unfiltered members', () => {
+    const initial = base();
+    initial.models[2].presentation.visible = false;
+    const before = structuredClone(initial);
+    let next = moveCatalogModel(initial, 'minimax', 'video:recommended', 'backup');
+    assert.deepEqual(catalogGroups(next).find(group => group.id).entries.map(entry => entry.id), ['main', 'minimax', 'backup']);
+    next = moveCatalogModel(next, 'backup', 'video:recommended', 'main');
+    assert.deepEqual(catalogGroups(next).find(group => group.id).entries.map(entry => entry.id), ['backup', 'main', 'minimax']);
+    next = moveCatalogModel(next, 'backup', 'video:recommended', 'minimax', 'after');
+    assert.deepEqual(catalogGroups(next).find(group => group.id).entries.map(entry => entry.id), ['main', 'minimax', 'backup']);
+    assert.throws(() => moveCatalogModel(next, 'main', 'video:recommended', 'missing'), /目标模型/);
+    assert.deepEqual(moveCatalogModel(next, 'main', 'video:recommended', 'main'), next);
+    assert.equal(next.models[2].presentation.visible, false);
+    assert.deepEqual(initial, before);
+});
+
+test('unassigned video models stay in the admin workspace but leave canvas choices, and rejoining restores visibility', () => {
+    const initial = base();
+    initial.catalogMode = 'remote';
+    let next = moveCatalogModel(initial, 'main', '');
+    assert.equal(next.models[1].presentation.visible, false);
+    assert.equal(next.models[1].catalog.enabled, initial.models[1].catalog.enabled);
+    assert.ok(catalogGroups(next, { includeHidden: false, includeDisabled: true, includeUnassigned: true })
+        .flatMap(group => group.entries).some(entry => entry.id === 'main'));
+    assert.ok(!catalogGroups(next, { includeHidden: false }).flatMap(group => group.entries).some(entry => entry.id === 'main'));
+    assert.ok(!getCatalogProviderEntries(next, { endpoint: 'https://art.example.com/v1', kind: 'video' }).some(entry => entry.id === 'main'));
+    next = moveCatalogModel(next, 'main', 'video:recommended');
+    assert.equal(next.models[1].presentation.visible, true);
+    assert.ok(getCatalogProviderEntries(next, { endpoint: 'https://art.example.com/v1', kind: 'video' }).some(entry => entry.id === 'main'));
+    assert.equal(next.models[1].presentation.routeGroupScope, 'catalog');
+    next.models[2].catalog = { model: 'backup', hosts: ['art.example.com'] };
+    delete next.models[2].presentation.routeGroupScope;
+    const normalized = normalizeCatalogWorkspace(next);
+    assert.equal(normalized.models[2].presentation.routeGroupScope, 'catalog', 'Members of a catalog group must not split by API account');
+    assert.deepEqual(normalized.models[1].options, initial.models[1].options);
+    assert.deepEqual(normalized.models[1].pricing, initial.models[1].pricing);
+    assert.deepEqual(normalizeCatalogWorkspace(initial), initial, 'Legacy catalogs without workspace metadata keep standalone models');
+});
+
+test('group dragging supports both insertion sides, empty groups and type isolation', () => {
+    let config = createCatalogGroup(base(), '', '第二组');
+    const second = catalogGroups(config, { includeEmpty: true }).find(group => group.label === '第二组').key;
+    config = createCatalogGroup(config, '', '第三组');
+    const third = catalogGroups(config, { includeEmpty: true }).find(group => group.label === '第三组').key;
+    const keys = config => catalogGroups(config, { kind: 'video', includeEmpty: true }).filter(group => group.id).map(group => group.key);
+    let next = placeCatalogGroup(config, third, 'video:recommended', 'before');
+    assert.deepEqual(keys(next), [third, 'video:recommended', second]);
+    next = placeCatalogGroup(next, third, second, 'after');
+    assert.deepEqual(keys(next), ['video:recommended', second, third]);
+    assert.deepEqual(placeCatalogGroup(next, second, second), next);
+    assert.throws(() => placeCatalogGroup(next, second, 'video:missing'), /不存在/);
+    next = createCatalogGroup(next, '', '图片组', 'image');
+    const imageGroup = catalogGroups(next, { kind: 'image', includeEmpty: true })[0].key;
+    assert.throws(() => placeCatalogGroup(next, second, imageGroup), /相同类型/);
+    assert.deepEqual(next.models.map(({ presentation, ...rest }) => rest), config.models.map(({ presentation, ...rest }) => rest));
 });
 
 test('preview defaults and tie breakers match the canvas, including the migrated catalog', () => {

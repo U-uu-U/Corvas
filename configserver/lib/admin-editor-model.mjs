@@ -42,7 +42,7 @@ export const REFERENCE_KINDS = [
 export const REFERENCE_MODES = ['none', 'supported', 'unsupported'];
 const referenceFieldsOf = key => [`${key}Mode`, `${key}Max`, `${key}Bytes`, `${key}Note`];
 
-export const PARAM_FIELDS = [...DURATION_FIELDS, ...REFERENCE_KINDS.flatMap(kind => referenceFieldsOf(kind.key))];
+export const PARAM_FIELDS = [...DURATION_FIELDS, 'parameterRulesJson', ...REFERENCE_KINDS.flatMap(kind => referenceFieldsOf(kind.key))];
 
 const MAX_SECONDS = 3600;
 const MAX_REFERENCE_COUNT = 1000;
@@ -64,6 +64,18 @@ export function parseEditorConfig(text) {
             throw new Error('每个模型需要唯一且非空的 id');
         }
         ids.add(entry.id);
+    }
+    if (config.catalogGroups !== undefined) {
+        if (!Array.isArray(config.catalogGroups)) throw new Error('catalogGroups 必须是数组');
+        const keys = new Set();
+        for (const group of config.catalogGroups) {
+            if (!object(group) || typeof group.id !== 'string' || !group.id.trim()
+                || !['image', 'video', 'text'].includes(group.kind) || typeof group.label !== 'string' || !group.label.trim()
+                || !Number.isInteger(group.order)) throw new Error('分组需要 ID、类型、名称和整数排序');
+            const key = `${group.kind}:${group.id}`;
+            if (keys.has(key)) throw new Error('同类型的分组 ID 不能重复');
+            keys.add(key);
+        }
     }
     return config;
 }
@@ -125,6 +137,7 @@ export function readEditorValues(entry) {
         currency: price.currency || 'CNY', unit: price.unit || 'request', source: price.source || 'config-admin',
         updatedAt: price.updatedAt || '',
         ...readDurationValues(entry),
+        parameterRulesJson: entry.parameterRules ? JSON.stringify(entry.parameterRules, null, 2) : '',
         ...REFERENCE_KINDS.reduce((values, kind) => Object.assign(values, readReferenceValues(entry, kind)), {})
     };
 }
@@ -323,5 +336,15 @@ export function applyEditorValues(entry, values, touched, now = new Date().toISO
     }
 
     if (PRICE_FIELDS.some(key => touched.has(key))) applyPricing(next, entry, values, now);
+    if (touched.has('parameterRulesJson')) {
+        const text = trimmed(values.parameterRulesJson);
+        if (!text) delete next.parameterRules;
+        else {
+            let rules;
+            try { rules = JSON.parse(text); } catch { throw new Error('条件参数规则不是合法 JSON'); }
+            if (!object(rules) || rules.version !== 1 || !Array.isArray(rules.rules)) throw new Error('条件参数规则需要 version: 1 和 rules 数组');
+            next.parameterRules = rules;
+        }
+    }
     return next;
 }

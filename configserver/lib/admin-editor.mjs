@@ -1,6 +1,7 @@
 import { parseEditorConfig, readEditorValues, applyEditorValues, REFERENCE_KINDS } from './admin-editor-model.mjs';
 import { addCatalogModel, catalogGroupKey, catalogGroups, createCatalogGroup, createCatalogHistory,
-    deleteCatalogModel, modelName, moveCatalogModel, renameCatalogGroup, reorderCatalog, setCatalogEnabled, toggleCatalogVisibility } from './admin-catalog-model.mjs';
+    deleteCatalogGroup, deleteCatalogModel, groupCatalogModel, modelName, moveCatalogModel, normalizeCatalogWorkspace, placeCatalogGroup, renameCatalogGroup, reorderCatalog,
+    reorderCatalogGroup, setCatalogDefaultModel, setCatalogEnabled, toggleCatalogVisibility } from './admin-catalog-model.mjs';
 import { appendCatalogPrices, appendCatalogSource, renderCatalog } from './admin-catalog-view.mjs';
 
 export function initAdminEditor(document) {
@@ -18,6 +19,7 @@ export function initAdminEditor(document) {
     let config = null;
     let original = null;
     let selectedId = '';
+    let selectedGroupKey = '';
     let mode = 'json';
     let history = null;
     let catalogSources = null;
@@ -26,6 +28,15 @@ export function initAdminEditor(document) {
     const touched = new Set();
     let submitting = false;
     const selected = () => config?.models.find(entry => entry.id === selectedId);
+    const viewGroups = () => catalogGroups(config, { kind: document.getElementById('catalogKind').value,
+        query: document.getElementById('catalogSearch').value, includeHidden: document.getElementById('catalogShowHidden').checked,
+        includeDisabled: true, includeEmpty: true, includeUnassigned: true,
+        includeLegacy: config.catalogMode !== 'remote' || document.getElementById('catalogShowLegacy').checked });
+    const selectedGroup = () => {
+        const groups = viewGroups().filter(group => group.id);
+        return groups.find(group => group.key === selectedGroupKey)
+            || groups.find(group => group.entries.some(entry => entry.id === selectedId)) || groups[0];
+    };
     const setState = (message, bad = false) => {
         state.textContent = message;
         state.dataset.error = String(bad);
@@ -36,6 +47,7 @@ export function initAdminEditor(document) {
     };
     const dirty = () => text.value !== originalText || touched.size > 0;
     const writeConfig = (record = true) => {
+        config = normalizeCatalogWorkspace(config);
         text.value = JSON.stringify(config) === JSON.stringify(original) ? originalText : JSON.stringify(config, null, 2);
         if (record) history?.push(config);
         document.getElementById('undoCatalogBtn').disabled = !history?.canUndo;
@@ -129,25 +141,67 @@ export function initAdminEditor(document) {
             list.appendChild(empty);
         }
         list.scrollTop = scroll;
-        if (config) renderCatalog(document, config, selectedId, selectModel, catalogSources, catalogPrices, catalogCosts, toggleModelCall);
+        if (config) renderCatalog(document, config, selectedId, selectModel, catalogSources, catalogPrices, catalogCosts, toggleModelCall,
+            { groupKey: selectedGroupKey, onSelectGroup: selectGroup, onMove: moveModel, onGroupMove: moveGroup, onCreateGroup: groupModel,
+                onDefaultChange: id => operate(() => setCatalogDefaultModel(config, 'video', id)),
+                onEdit: id => { selectModel(id); if (selectedId === id) setMode('form'); } });
     };
     function selectModel(id) {
         if (!flushSelected()) return;
         const focused = document.activeElement;
-        const parentId = focused?.closest('#modelList,#catalogGroups,#catalogModels')?.id;
+        const parentId = focused?.closest('#modelList,#catalogGroups,#catalogModels,#catalogUngrouped')?.id;
         const groupKey = focused?.dataset.catalogGroup;
         selectedId = id;
+        if (selected()?.presentation?.routeGroup) selectedGroupKey = catalogGroupKey(selected());
         renderEditor();
         renderList();
         if (parentId === 'modelList') [...list.children].find(button => button.dataset.modelId === id)?.focus({ preventScroll: true });
-        else if (['catalogGroups', 'catalogModels'].includes(parentId)) {
+        else if (['catalogGroups', 'catalogModels', 'catalogUngrouped'].includes(parentId)) {
             [...document.getElementById(parentId).querySelectorAll('.catalog-tile')].find(button => groupKey
                 ? button.dataset.catalogGroup === groupKey : button.dataset.catalogModelId === id)?.focus({ preventScroll: true });
         }
     }
+    function selectGroup(key) {
+        if (!flushSelected()) return;
+        const group = viewGroups().find(group => group.key === key && group.id);
+        if (!group) return;
+        selectedGroupKey = key;
+        if (!group.entries.some(entry => entry.id === selectedId)) selectedId = group.entries[0]?.id || '';
+        renderEditor();
+        renderList();
+        [...document.querySelectorAll('#catalogGroups [data-catalog-group]')]
+            .find(button => button.dataset.catalogGroup === key)?.focus({ preventScroll: true });
+    }
+    function moveModel(id, key, targetId = '', placement = 'before') {
+        if (!flushSelected()) return;
+        try {
+            const next = moveCatalogModel(config, id, key, targetId, placement);
+            if (key) selectedGroupKey = key;
+            replaceConfig(next, id);
+        } catch (error) { showErrors([error.message]); setState('模型未移动', true); }
+    }
+    function moveGroup(key, targetKey, placement) {
+        if (!flushSelected()) return;
+        try {
+            const next = placeCatalogGroup(config, key, targetKey, placement);
+            selectedGroupKey = key;
+            replaceConfig(next);
+        } catch (error) { showErrors([error.message]); setState('分组未移动', true); }
+    }
+    function groupModel(id) {
+        if (!flushSelected()) return;
+        try {
+            const next = groupCatalogModel(config, id);
+            const entry = next.models.find(entry => entry.id === id);
+            selectedGroupKey = catalogGroupKey(entry);
+            document.getElementById('catalogKind').value = entry.kind;
+            document.getElementById('catalogSearch').value = '';
+            replaceConfig(next, id);
+        } catch (error) { showErrors([error.message]); setState('分组未创建', true); }
+    }
     const renderEditor = () => {
         const entry = selected();
-        fieldset.disabled = !entry || mode === 'json';
+        fieldset.disabled = !entry || mode !== 'form';
         document.getElementById('selectedModelId').textContent = entry?.id || '未选择模型';
         document.getElementById('restoreModelBtn').disabled = !original?.models.some(model => model.id === entry?.id);
         if (!entry) {
@@ -241,10 +295,10 @@ export function initAdminEditor(document) {
         event.preventDefault();
         buttons[next]?.click();
     });
-    for (const id of ['catalogGroups', 'catalogModels']) {
+    for (const id of ['catalogGroups', 'catalogModels', 'catalogUngrouped']) {
         document.getElementById(id).addEventListener('keydown', event => {
             if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
-            if (document.activeElement?.classList.contains('catalog-call-switch')) return;
+            if (!document.activeElement?.classList.contains('catalog-tile')) return;
             const buttons = [...event.currentTarget.querySelectorAll('.catalog-tile')];
             const index = buttons.indexOf(document.activeElement);
             const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
@@ -281,7 +335,7 @@ export function initAdminEditor(document) {
     };
     function toggleModelCall(id, enabled) {
         if (!flushSelected()) return;
-        const parentId = document.activeElement?.closest('#catalogGroups,#catalogModels')?.id;
+        const parentId = document.activeElement?.closest('#catalogGroups,#catalogModels,#catalogUngrouped')?.id;
         try {
             replaceConfig(setCatalogEnabled(config, id, enabled));
             if (parentId) [...document.getElementById(parentId).querySelectorAll('.catalog-call-switch')]
@@ -292,13 +346,15 @@ export function initAdminEditor(document) {
         const catalogMode = event.target.value;
         operate(() => ({ ...config, catalogMode }));
     });
-    for (const [id, direction, scope] of [['moveModelUpBtn', -1, 'model'], ['moveModelDownBtn', 1, 'model'],
-        ['moveGroupUpBtn', -1, 'group'], ['moveGroupDownBtn', 1, 'group']]) {
-        document.getElementById(id).addEventListener('click', () => operate(() => reorderCatalog(config, selectedId, direction, scope)));
+    for (const [id, direction] of [['moveModelUpBtn', -1], ['moveModelDownBtn', 1]]) {
+        document.getElementById(id).addEventListener('click', () => operate(() => reorderCatalog(config, selectedId, direction)));
+    }
+    for (const [id, direction] of [['moveGroupUpBtn', -1], ['moveGroupDownBtn', 1]]) {
+        document.getElementById(id).addEventListener('click', () => operate(() => reorderCatalogGroup(config, selectedGroup()?.key, direction)));
     }
     document.getElementById('catalogMoveGroup').addEventListener('change', event => {
         const destination = event.target.value;
-        operate(() => moveCatalogModel(config, selectedId, destination));
+        moveModel(selectedId, destination);
     });
     document.getElementById('catalogVisible').addEventListener('change', () => operate(() => toggleCatalogVisibility(config, selectedId)));
     document.getElementById('deleteModelBtn').addEventListener('click', () => operate(() => deleteCatalogModel(config, selectedId)));
@@ -309,10 +365,7 @@ export function initAdminEditor(document) {
     }
     const filterCatalog = () => {
         if (!flushSelected()) return;
-        const groups = catalogGroups(config, { kind: document.getElementById('catalogKind').value,
-            query: document.getElementById('catalogSearch').value, includeHidden: document.getElementById('catalogShowHidden').checked,
-            includeDisabled: true,
-            includeLegacy: config.catalogMode !== 'remote' || document.getElementById('catalogShowLegacy').checked });
+        const groups = viewGroups();
         if (!groups.some(group => group.entries.some(entry => entry.id === selectedId))) {
             selectedId = groups[0]?.entries[0]?.id || '';
             renderEditor();
@@ -333,10 +386,11 @@ export function initAdminEditor(document) {
         const creating = action === 'add' || action === 'copy';
         const grouping = action === 'createGroup' || action === 'renameGroup';
         document.getElementById('catalogDialogTitle').textContent = ({ add: '新增模型', copy: '复制模型',
-            createGroup: '新建分组', renameGroup: '修改分组名', clear: '清空模型目录' })[action];
+            createGroup: '新建分组', renameGroup: '修改分组名', deleteGroup: '删除分组', clear: '清空模型目录' })[action];
         dialogFields.disabled = false;
         for (const row of dialogFields.querySelectorAll('[data-dialog-row]')) {
-            row.hidden = !creating && !(grouping && row.dataset.dialogRow === 'label');
+            row.hidden = !creating && !(grouping && row.dataset.dialogRow === 'label')
+                && !(action === 'createGroup' && row.dataset.dialogRow === 'kind');
             for (const input of row.querySelectorAll('input,select,textarea')) {
                 input.disabled = row.hidden;
                 input.required = !row.hidden;
@@ -344,21 +398,25 @@ export function initAdminEditor(document) {
         }
         document.getElementById('catalogDialogLabelTitle').textContent = grouping ? '分组名' : '显示名称';
         document.getElementById('catalogDialogLabel').value = action === 'renameGroup'
-            ? selected()?.presentation?.routeGroupLabel || selected()?.presentation?.routeGroup || ''
+            ? selectedGroup()?.label || ''
             : action === 'copy' ? `${modelName(selected())} 副本`.slice(0, 100) : '';
         document.getElementById('catalogDialogKind').value = selected()?.kind || document.getElementById('catalogKind').value || 'video';
         document.getElementById('catalogDialogModel').value = '';
         document.getElementById('catalogDialogHosts').value = selected()?.catalog?.hosts?.join('\n') || '';
         const message = document.getElementById('catalogDialogMessage');
-        message.hidden = action !== 'clear';
-        message.textContent = `移除目录中的 ${config.models.length} 个模型？`;
-        document.getElementById('catalogDialogConfirm').textContent = action === 'clear' ? '清空目录' : '确定';
+        message.hidden = !['clear', 'deleteGroup'].includes(action);
+        const group = selectedGroup();
+        const fullGroup = group && catalogGroups(config, { includeEmpty: true }).find(item => item.key === group.key);
+        message.textContent = action === 'deleteGroup'
+            ? `删除“${group?.label || ''}”分组？${fullGroup?.totalCount || 0} 个模型将移到未分组。`
+            : `移除目录中的 ${config.models.length} 个模型？`;
+        document.getElementById('catalogDialogConfirm').textContent = action === 'clear' ? '清空目录' : action === 'deleteGroup' ? '删除分组' : '确定';
         dialogError.hidden = true;
         dialog.showModal();
         (creating || grouping ? document.getElementById('catalogDialogLabel') : document.getElementById('catalogDialogCancel')).focus();
     }
     for (const [id, action] of [['addModelBtn', 'add'], ['copyModelBtn', 'copy'], ['createGroupBtn', 'createGroup'],
-        ['renameGroupBtn', 'renameGroup'], ['clearCatalogBtn', 'clear']]) {
+        ['renameGroupBtn', 'renameGroup'], ['deleteGroupBtn', 'deleteGroup'], ['clearCatalogBtn', 'clear']]) {
         document.getElementById(id).addEventListener('click', () => openDialog(action));
     }
     dialog.addEventListener('close', () => { dialogFields.disabled = true; });
@@ -379,9 +437,24 @@ export function initAdminEditor(document) {
                 document.getElementById('catalogKind').value = kind;
                 document.getElementById('catalogSearch').value = '';
                 replaceConfig(result.config, result.id);
-            } else if (dialogAction === 'createGroup') replaceConfig(createCatalogGroup(config, selectedId, label));
-            else if (dialogAction === 'renameGroup') replaceConfig(renameCatalogGroup(config, catalogGroupKey(selected()), label));
-            else if (dialogAction === 'clear') replaceConfig({ ...config, models: [] });
+            } else if (dialogAction === 'createGroup') {
+                const kind = document.getElementById('catalogDialogKind').value;
+                const next = createCatalogGroup(config, '', label, kind);
+                const added = next.catalogGroups.at(-1);
+                selectedGroupKey = `${added.kind}:${added.id}`;
+                document.getElementById('catalogKind').value = kind;
+                document.getElementById('catalogSearch').value = '';
+                replaceConfig(next, '');
+                selectGroup(selectedGroupKey);
+            } else if (dialogAction === 'renameGroup') replaceConfig(renameCatalogGroup(config, selectedGroup()?.key, label));
+            else if (dialogAction === 'deleteGroup') {
+                const next = deleteCatalogGroup(config, selectedGroup()?.key);
+                selectedGroupKey = '';
+                replaceConfig(next);
+            } else if (dialogAction === 'clear') {
+                selectedGroupKey = '';
+                replaceConfig({ ...config, models: [], ...(config.catalogGroups ? { catalogGroups: [] } : {}) });
+            }
             dialog.close();
         } catch (error) {
             dialogError.textContent = error.message;
@@ -441,7 +514,7 @@ export function initAdminEditor(document) {
         }
     });
     document.getElementById('resetBtn').addEventListener('click', () => {
-        window.location.href = form.elements.channel?.value === 'preview' ? '/admin?channel=preview' : '/admin';
+        window.location.href = '/admin';
     });
     window.addEventListener('beforeunload', event => {
         if (dirty() && !submitting) { event.preventDefault(); event.returnValue = ''; }

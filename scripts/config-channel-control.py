@@ -56,8 +56,7 @@ def refresh_canvas(channel, bridge):
     try:
         with urllib.request.urlopen(bridge + "/model-config", timeout=3) as response:
             status = json.load(response)["status"]
-        suffix = "/config/preview" if channel == "preview" else "/config"
-        if status.get("url") != "https://artconfig.ravenhash.org" + suffix:
+        if status.get("url") not in ["https://artconfig.ravenhash.org/config", "https://artconfig.ravenhash.org/config/preview"]:
             return {"skipped": True, "reason": "Canvas uses another CONFIG source"}
         request = urllib.request.Request(bridge + "/model-config/refresh", data=b"{}",
                                          headers={"Content-Type": "application/json"})
@@ -72,7 +71,7 @@ def refresh_canvas(channel, bridge):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["list", "enable", "disable", "restore"])
-    parser.add_argument("--channel", choices=["preview", "stable"], default="preview")
+    parser.add_argument("--channel", choices=["preview", "stable"], default="stable", help=argparse.SUPPRESS)
     targets = parser.add_mutually_exclusive_group()
     for target in ["id", "model", "group"]:
         targets.add_argument("--" + target)
@@ -81,7 +80,7 @@ def main():
     parser.add_argument("--receipt")
     parser.add_argument("--expected-revision", type=int)
     parser.add_argument("--no-refresh", action="store_true")
-    parser.add_argument("--bridge", default="http://127.0.0.1:18766")
+    parser.add_argument("--bridge", default="http://127.0.0.1:18765")
     args = parser.parse_args()
     if args.action in ["enable", "disable"] and not any([args.id, args.model, args.group]):
         parser.error("enable/disable requires --id, --model or --group")

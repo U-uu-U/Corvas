@@ -1,4 +1,5 @@
 import { mountExternalHandoff } from './external-handoff.js';
+import { creativeAppIcon } from './creative-app-icons.js';
 
 export function createRhinoPanel({ onClose, onHandoff, getProjectId = () => null }) {
     const host = document.getElementById('agentSidebarWrapper');
@@ -6,7 +7,7 @@ export function createRhinoPanel({ onClose, onHandoff, getProjectId = () => null
     const root = document.createElement('aside');
     root.id = 'rhinoWorkbenchPanel'; root.className = 'hunyuan-accounts-panel rhino-workbench-panel';
     root.hidden = true; root.setAttribute('aria-label', 'Rhino 工作台');
-    root.innerHTML = `<header class="hunyuan-panel-head"><div><span class="corvas-rhino-mark">Rh</span><h2>Rhino</h2></div>
+    root.innerHTML = `<header class="hunyuan-panel-head"><div>${creativeAppIcon('rhino')}<h2>Rhino</h2></div>
         <button type="button" data-action="close" aria-label="关闭 Rhino 侧栏">×</button></header>
         <div class="rhino-workbench-content"><div class="hunyuan-panel-intro"><strong>模型预览与编辑</strong><p>Codex · Rhino MCP</p></div>
         <section class="rhino-connection-card"><div class="rhino-connection-state"><i></i><strong data-state>未连接</strong><span data-tools></span></div>

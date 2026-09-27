@@ -1,0 +1,10 @@
+# Store the real file at /etc/corvas-relay-error-gateway.env with mode 0600.
+# Generate this value with: openssl rand -hex 32
+CORVAS_DIAGNOSTICS_KEY=
+RELAY_SITE=art
+RELAY_GATEWAY_PORT=18089
+RELAY_GATEWAY_TIMEOUT_MS=3600000
+RELAY_DIAGNOSTICS_DIR=/var/lib/relay-error-gateway
+# Optional: enrich public error classification from exact private log records.
+RELAY_ERROR_CLASSIFY_FROM_LOG=0
+# RELAY_ERROR_RULES_FILE=/etc/corvas-relay-error-rules.json

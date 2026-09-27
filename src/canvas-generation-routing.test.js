@@ -4,9 +4,10 @@ import Module from 'node:module';
 import { generationNodeSignature } from '../shared/generation-node-state.mjs';
 import { appendGeneratorResult, rotateGeneratorResults, setGeneratorResultLayout } from './generator-result-stack.js';
 import { generatorResultOutput } from './graph-model.js';
+import { GraphView } from './graph-view.js';
 import { PlanService } from './plan-service.js';
 import planCore from '../shared/plan-service-core.cjs';
-import { getGenerationReuseConfig } from './generation-record.js';
+import { getGenerationRecord, getGenerationReuseConfig } from './generation-record.js';
 
 const originalLoad = Module._load;
 const originalDOMMatrix = Object.getOwnPropertyDescriptor(globalThis, 'DOMMatrix');
@@ -183,6 +184,123 @@ function deletionHarness(t, items) {
     items.forEach(data => manager._createOpNode(data));
     return manager;
 }
+
+function duplicationHarness(t, items, connections) {
+    const manager = deletionHarness(t, items);
+    manager.plans = new Map();
+    manager._createCard = data => manager._createOpNode(data);
+    manager._syncGenerationReferenceBadge = t.mock.fn();
+    manager.graphView = Object.assign(Object.create(GraphView.prototype), {
+        canvas: manager, connections: clone(connections),
+        renderPorts: t.mock.fn(), drawEdge: t.mock.fn()
+    });
+    return manager;
+}
+
+test('duplicating a node keeps ordered material inputs and citation bindings without rewiring downstream nodes', t => {
+    const image = { id: 'image', mediaType: 'image', filePath: '/image.png' };
+    const audio = { id: 'audio', mediaType: 'audio', filePath: '/audio.wav' };
+    const target = { id: 'target', kind: 'op', nodeType: 'video', config: {
+        prompt: 'Scene and voice', referenceCitationIds: ['image-edge', 'audio-edge'],
+        referenceCitationLabels: ['image', 'audio'], referenceCitationOffsets: { 'image-edge': 0, 'audio-edge': 6 },
+        referenceCitationAnnotations: { 'image-edge': 'scene' },
+        referenceCitationOccurrences: [{ id: 'citation', connectionId: 'image-edge', sourceNodeId: 'image', offset: 0 }]
+    } };
+    const next = { id: 'next', kind: 'op', nodeType: 'video', config: {} };
+    const connections = [
+        { id: 'image-edge', from: { nodeId: image.id, port: 'out' }, to: { nodeId: target.id, port: 'source' } },
+        { id: 'audio-edge', from: { nodeId: audio.id, port: 'out' }, to: { nodeId: target.id, port: 'source' } },
+        { id: 'downstream', from: { nodeId: target.id, port: 'video' }, to: { nodeId: next.id, port: 'source' } }
+    ];
+    const before = clone(target);
+    const manager = duplicationHarness(t, [image, audio, target, next], connections);
+    const [copy] = manager.duplicateItems([target.id]);
+    const edges = manager.graphView.connections.slice(connections.length);
+    assert.deepEqual(manager.graphView.connections.slice(0, connections.length), connections);
+    assert.deepEqual(edges.map(edge => [edge.from.nodeId, edge.to.nodeId, edge.to.port]),
+        [[image.id, copy.id, 'source'], [audio.id, copy.id, 'source']]);
+    assert.deepEqual(copy.config.referenceCitationIds, edges.map(edge => edge.id));
+    assert.deepEqual(copy.config.referenceCitationOffsets, { [edges[0].id]: 0, [edges[1].id]: 6 });
+    assert.deepEqual(copy.config.referenceCitationAnnotations, { [edges[0].id]: 'scene' });
+    assert.equal(copy.config.referenceCitationOccurrences[0].connectionId, edges[0].id);
+    assert.equal(manager._generationComposerCitationState(copy).occurrences[0].missing, false);
+    assert.deepEqual(target, before);
+    assert.equal(new Set(manager.graphView.connections.map(edge => edge.id)).size, connections.length + 2);
+    assert.equal(manager.graphView.drawEdge.mock.callCount(), 2);
+});
+
+test('multi-selection duplication remaps internal inputs to cloned sources and keeps external inputs', t => {
+    const image = { id: 'image', mediaType: 'image', filePath: '/image.png' };
+    const audio = { id: 'audio', mediaType: 'audio', filePath: '/audio.wav' };
+    const target = { id: 'target', kind: 'op', nodeType: 'video', config: {
+        prompt: 'Scene', referenceCitationIds: ['internal'], referenceCitationLabels: ['image'],
+        referenceCitationOffsets: { internal: 0 },
+        referenceCitationOccurrences: [{ id: 'citation', connectionId: 'internal', sourceNodeId: image.id, offset: 0 }]
+    } };
+    const connections = [
+        { id: 'internal', from: { nodeId: image.id, port: 'out' }, to: { nodeId: target.id, port: 'source' } },
+        { id: 'external', from: { nodeId: audio.id, port: 'out' }, to: { nodeId: target.id, port: 'source' } }
+    ];
+    const manager = duplicationHarness(t, [image, audio, target], connections);
+    const [targetCopy, imageCopy] = manager.duplicateItems([target.id, image.id, image.id]);
+    assert.equal(manager.storeData.items.length, 5, 'Repeated selected IDs must create only one copy');
+    const edges = manager.graphView.connections.slice(connections.length);
+    assert.deepEqual(edges.map(edge => [edge.from.nodeId, edge.to.nodeId]),
+        [[imageCopy.id, targetCopy.id], [audio.id, targetCopy.id]]);
+    assert.equal(targetCopy.config.referenceCitationOccurrences[0].sourceNodeId, imageCopy.id);
+    assert.equal(manager._generationComposerCitationState(targetCopy).occurrences[0].missing, false);
+    assert.deepEqual(manager.graphView.serialize().slice(0, connections.length), connections);
+});
+
+test('duplicating generated media preserves history links and legacy draft citation offsets', t => {
+    const image = { id: 'image', mediaType: 'image', filePath: '/image.png' };
+    const result = { id: 'result', mediaType: 'video', filePath: '/output.mp4', generation: {
+        referenceBindings: [{ sourceNodeId: image.id, sourceNodeIds: [image.id], filePath: image.filePath }]
+    }, generationPromptDraft: { referenceCitationIds: ['history'], referenceCitationOffsets: { history: 4 } } };
+    const connections = [{ id: 'history', kind: 'history',
+        from: { nodeId: image.id, port: 'out' }, to: { nodeId: result.id, port: 'source' } }];
+    const manager = duplicationHarness(t, [image, result], connections);
+    const [copy] = manager.duplicateItems([result.id]);
+    const edge = manager.graphView.connections[1];
+    assert.equal(edge.kind, 'history');
+    assert.equal(edge.to.nodeId, copy.id);
+    assert.equal(edge.from.nodeId, image.id);
+    assert.deepEqual(copy.generationPromptDraft.referenceCitationIds, [edge.id]);
+    assert.deepEqual(copy.generationPromptDraft.referenceCitationOffsets, { [edge.id]: 4 });
+    assert.deepEqual(copy.generation, result.generation);
+    assert.deepEqual(manager.graphView.serialize()[1], edge);
+});
+
+test('duplicating a generated result with its material reopens using the copied material', t => {
+    const image = { id: 'image', mediaType: 'image', filePath: '/image.png' };
+    const draft = { prompt: 'Scene', referenceCitationIds: ['history'], referenceCitationLabels: ['image'],
+        referenceCitationOccurrences: [{ id: 'citation', connectionId: 'history', sourceNodeId: image.id, offset: 0 }] };
+    const record = { nodeType: 'video', config: clone(draft), promptDraftConfig: clone(draft),
+        references: [{ itemId: image.id, filePath: image.filePath }],
+        referenceBindings: [{ position: 1, connectionId: 'history', sourceNodeId: image.id,
+            sourceNodeIds: [image.id], filePath: image.filePath }] };
+    const result = { id: 'result', kind: 'op', nodeType: 'video', generation: clone(record), config: clone(draft) };
+    appendGeneratorResult(result, { filePath: '/output.mp4', item: { generation: clone(record) } });
+    const before = clone(result);
+    const manager = duplicationHarness(t, [image, result], [{ id: 'history', kind: 'history',
+        from: { nodeId: image.id, port: 'out' }, to: { nodeId: result.id, port: 'source' } }]);
+    const [copy, material] = manager.duplicateItems([result.id, image.id]);
+    const edge = manager.graphView.connections[1];
+    const reopened = getGenerationRecord(copy);
+    assert.deepEqual(manager._getHistoricalGenerationReferenceConnections(copy.id, 'video', reopened),
+        [{ nodeId: material.id, port: 'out' }]);
+    for (const copiedRecord of [copy.generation, copy.resultEntries[0].item.generation, copy.resultItems[0].generation]) {
+        assert.equal(copiedRecord.references[0].itemId, material.id);
+        assert.equal(copiedRecord.referenceBindings[0].sourceNodeId, material.id);
+        assert.deepEqual(copiedRecord.referenceBindings[0].sourceNodeIds, [material.id]);
+        assert.equal(copiedRecord.referenceBindings[0].connectionId, edge.id);
+        for (const config of [copiedRecord.config, copiedRecord.promptDraftConfig]) {
+            assert.equal(config.referenceCitationOccurrences[0].sourceNodeId, material.id);
+            assert.equal(config.referenceCitationOccurrences[0].connectionId, edge.id);
+        }
+    }
+    assert.deepEqual(result, before);
+});
 
 for (const kind of ['video', 'image']) {
     test(`deleting a duplicated ${kind} node preserves the original shared-file result and config`, t => {

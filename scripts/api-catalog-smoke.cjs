@@ -171,6 +171,43 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
         assert.ok((await page.locator('.generation-composer-model-options').innerText()).includes('Remote video B'));
         await page.locator('[data-model]').click();
 
+        config.defaultModels = { video: videoB.id };
+        await refresh();
+        const readBoard = async () => JSON.parse(await fs.readFile(path.join(profile, 'data/board.json'), 'utf8'));
+        const waitForBoardItem = async predicate => {
+            for (let attempt = 0; attempt < 100; attempt++) {
+                const item = (await readBoard()).items.find(predicate);
+                if (item) return item;
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            throw new Error('Expected saved video node was not found');
+        };
+        const createVideoNode = async () => {
+            const ids = (await readBoard()).items.map(item => item.id);
+            await page.locator('.node-palette-item[data-node-type="video"]').evaluate(button => button.click());
+            return waitForBoardItem(item => item.nodeType === 'video' && !ids.includes(item.id));
+        };
+        const inheritedNode = await createVideoNode();
+        assert.equal(inheritedNode.config.model, videoB.catalog.model);
+        assert.equal(inheritedNode.config.sourceProviderId, cart.id, 'Remote default must retain the preferred account');
+        await page.evaluate(id => window.Konva.stages[0].findOne(`#${id}`).fire('click', { evt: { button: 0 } }), inheritedNode.id);
+        await page.locator('[data-model]').click();
+        await page.locator('.generation-composer-model-option').filter({ hasText: 'Remote video A' }).first().click();
+        const explicitNode = await waitForBoardItem(item => item.id === inheritedNode.id && item.config.model === 'sd2.5-route1');
+        config.defaultModels.video = videoA.id;
+        await refresh();
+        config.defaultModels.video = videoB.id;
+        await refresh();
+        videoA.catalog.enabled = false;
+        await refresh();
+        const retainedNode = (await readBoard()).items.find(item => item.id === inheritedNode.id);
+        assert.deepEqual(retainedNode.config, explicitNode.config, 'Refresh and retirement must never replace a user-selected node model');
+        const newDefaultNode = await createVideoNode();
+        assert.equal(newDefaultNode.config.model, videoB.catalog.model);
+        videoA.catalog.enabled = true;
+        delete config.defaultModels;
+        await refresh();
+
         await openSettings();
         await edit('Art remote');
         await page.locator('#agentFormEndpoint').fill('cart.ravenhash.org');

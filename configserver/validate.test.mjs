@@ -65,6 +65,27 @@ test('坏 JSON 给出可读原因，不抛异常', async () => {
     assert.equal(result.config, null);
 });
 
+test('conditional rules reject invalid ranges and executable fields in both validation modes', async () => {
+    for (const schemaPath of [SCHEMA, undefined]) {
+        const validator = await createValidator({ schemaPath });
+        const config = {
+            schemaVersion: 1,
+            models: [{ id: 'conditional', kind: 'video', match: { model: ['^conditional$'] },
+                parameterRules: { version: 1, rules: [{ when: { resolutionTier: '720p' },
+                    options: { duration: { type: 'range', min: 1, max: 12, integer: true } } }] } }]
+        };
+        assert.equal(validator.validate(config).ok, true);
+        config.models[0].parameterRules.rules[0].options.duration.min = 20;
+        assert.equal(validator.validate(config).ok, false);
+        config.models[0].parameterRules.rules[0].options.duration.min = 1;
+        config.models[0].parameterRules.rules[0].script = 'return true';
+        assert.equal(validator.validate(config).ok, false);
+        delete config.models[0].parameterRules.rules[0].script;
+        config.models[0].parameterRules.version = 2;
+        assert.equal(validator.validate(config).ok, false);
+    }
+});
+
 test('没有 ajv/schema 时降级为结构校验，并如实报告模式', async () => {
     const validator = await createValidator({ schemaPath: path.join(HERE, 'schema', '不存在.json') });
     assert.equal(validator.mode, 'structural');

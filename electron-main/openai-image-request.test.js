@@ -4,6 +4,72 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const zhuboVideoCases = [
+    ['LongXia-video-seedance2_5-standard-480p-express-PerSecond', '480p', 25, 15],
+    ['LongXia-video-seedance2_5-standard-720p-express-PerSecond', '720p', 25, 15],
+    ['seedance-2.5-480p', '480p', 30, 20],
+    ['seedance-2.5-720p', '720p', 30, 20],
+    ['seedance-2.5-1080p', '1080p', 30, 20]
+];
+
+test('Zhubo fixed-resolution models preserve 30/0/10 references and their documented per-model limits', () => {
+    const { getZhuboVideoModelSpec, seedanceReferenceLimits, assertZhuboVideoReferenceFile } = require('./video-provider-adapters');
+    const refs = (count, extension) => Array.from({ length: count }, (_, i) => `https://example.test/${i}.${extension}`);
+    for (const [model, resolution, maxDuration, audioMegabytes] of zhuboVideoCases) {
+        for (const host of ['art.ravenhash.org', 'cart.ravenhash.org', 'video.zhubo.asia']) {
+            const endpoint = `https://${host}/v1`;
+            const input = { endpoint, model, resolution, duration: maxDuration, prompt: 'fixture', aspectRatio: '9:16',
+                referenceImages: refs(30, 'png'), referenceAudios: refs(10, 'mp3') };
+            assert.ok(getZhuboVideoModelSpec(model, endpoint));
+            assert.deepEqual(seedanceReferenceLimits(model, endpoint), { image: 30, video: 0, audio: 10 });
+            assert.deepEqual(buildSeedance25RequestBody(input), { model, resolution, seconds: maxDuration, prompt: 'fixture',
+                ratio: '9:16', image_urls: input.referenceImages, audio_urls: input.referenceAudios });
+            assert.equal(buildSeedance25RequestBody({ ...input, duration: 4 }).seconds, 4);
+            assert.equal(buildSeedance25RequestBody({ ...input, resolution: undefined }).resolution, resolution);
+            for (const duration of [3, maxDuration + 1, 4.5, 'unknown']) {
+                assert.throws(() => buildSeedance25RequestBody({ ...input, duration }), /时长/);
+            }
+            for (const other of ['480p', '720p', '1080p'].filter(value => value !== resolution)) {
+                assert.throws(() => buildSeedance25RequestBody({ ...input, resolution: other }), /仅支持/);
+            }
+            for (const aspectRatio of ['16:9', '9:16', '1:1', '4:3', '3:4']) {
+                assert.equal(buildSeedance25RequestBody({ ...input, aspectRatio }).ratio, aspectRatio);
+            }
+            for (const aspectRatio of ['adaptive', '21:9', '2:3']) {
+                assert.throws(() => buildSeedance25RequestBody({ ...input, aspectRatio }), /画幅/);
+            }
+            for (const [field, values] of [['referenceImages', refs(31, 'png')], ['referenceVideos', refs(1, 'mp4')],
+                ['referenceAudios', refs(11, 'mp3')]]) {
+                assert.throws(() => buildSeedance25RequestBody({ ...input, [field]: values }), /最多支持/);
+            }
+            const expectedEndpoint = `https://${host}/v1/${host === 'video.zhubo.asia' ? 'videos' : 'video/generations'}`;
+            assert.equal(buildVideoGenerationEndpoint(endpoint, model), expectedEndpoint);
+            assert.equal(buildVideoGenerationEndpoint(`${endpoint}/videos?unused=1`, model), expectedEndpoint);
+            const audio = { mediaType: 'audio', filePath: '/fixture.mp3', size: audioMegabytes * 1024 * 1024 };
+            assert.doesNotThrow(() => assertZhuboVideoReferenceFile(model, endpoint, audio));
+            assert.throws(() => assertZhuboVideoReferenceFile(model, endpoint, { ...audio, size: audio.size + 1 }), /不能超过/);
+            assert.throws(() => assertZhuboVideoReferenceFile(model, endpoint, { ...audio, filePath: '/fixture.aac' }), /仅支持/);
+            if (audioMegabytes === 15) assert.throws(() => assertZhuboVideoReferenceFile(model, endpoint,
+                { ...audio, filePath: '/fixture.wav' }), /MP3/);
+            else assert.doesNotThrow(() => assertZhuboVideoReferenceFile(model, endpoint, { ...audio, filePath: '/fixture.wav' }));
+            assert.throws(() => assertZhuboVideoReferenceFile(model, endpoint,
+                { mediaType: 'image', filePath: '/fixture.png', size: 20 * 1024 * 1024 + 1 }), /图片不能超过 20/);
+        }
+    }
+});
+
+test('Zhubo limits are scoped to the five exact model IDs and three exact hosts', () => {
+    const { getZhuboVideoModelSpec, seedanceReferenceLimits } = require('./video-provider-adapters');
+    for (const [model] of zhuboVideoCases) {
+        for (const endpoint of [undefined, '', 'invalid', 'https://other.test/v1', 'https://video.zhubo.asia.other.test/v1']) {
+            assert.equal(getZhuboVideoModelSpec(model, endpoint), null);
+            assert.deepEqual(seedanceReferenceLimits(model, endpoint), { image: 10, video: 0, audio: 0 });
+        }
+        assert.equal(getZhuboVideoModelSpec(`${model}-other`, 'https://art.ravenhash.org/v1'), null);
+    }
+    assert.equal(getZhuboVideoModelSpec('seedance-2.5-pro', 'https://video.zhubo.asia/v1'), null);
+});
+
 test('Zhubo Pro sends both supported resolutions and complete multimodal references', () => {
     const refs = n => Array.from({ length: n }, (_, i) => `https://example.test/${i}`);
     for (const resolution of ['480p', '720p']) {
@@ -73,6 +139,71 @@ test('Yueqi Pro 720 exception does not expand unknown hosts or other Seedance mo
     }
     assert.throws(() => buildSeedance25RequestBody({ model: 'seedance-2.5-pro', endpoint: 'https://yueqi.icu/v1',
         prompt: 'fixture', duration: 60 }));
+});
+
+test('Yueqi SD2 Fast sends the upstream request schema and 9/3/0 reference limits', () => {
+    const { buildYueqiFastRequestBody, isYueqiFastModel, seedanceReferenceLimits } = require('./video-provider-adapters');
+    const refs = (count, extension) => Array.from({ length: count }, (_, i) => `https://example.test/${i}.${extension}`);
+    for (const host of ['art.ravenhash.org', 'cart.ravenhash.org', 'yueqi.icu']) {
+        const endpoint = `https://${host}/v1`;
+        const input = { endpoint, model: 'sd2-fast', prompt: ' fixture ', duration: '12', aspectRatio: '9:16', resolution: '720p',
+            referenceImages: refs(9, 'png'), referenceVideos: refs(3, 'mp4') };
+        assert.equal(isYueqiFastModel(input.model, endpoint), true);
+        assert.deepEqual(seedanceReferenceLimits(input.model, endpoint), { image: 9, video: 3, audio: 0 });
+        assert.deepEqual(buildYueqiFastRequestBody(input), {
+            model: 'sd2-fast', prompt: 'fixture', resolution: '720p', aspect_ratio: '9:16', duration: 12, seconds: '12',
+            image_urls: input.referenceImages, video_urls: input.referenceVideos
+        });
+        assert.throws(() => buildYueqiFastRequestBody({ ...input, referenceImages: refs(10, 'png') }), /9/);
+        assert.throws(() => buildYueqiFastRequestBody({ ...input, referenceVideos: refs(4, 'mp4') }), /3/);
+        assert.throws(() => buildYueqiFastRequestBody({ ...input, referenceAudios: refs(1, 'mp3') }), /不支持参考音频/);
+        assert.equal(buildVideoGenerationEndpoint(endpoint, input.model), host === 'yueqi.icu'
+            ? 'https://yueqi.icu/v1/videos' : `https://${host}/v1/video/generations`);
+    }
+});
+
+test('Yueqi SD2 Fast enforces resolution-specific durations and concrete ratios', () => {
+    const { buildYueqiFastRequestBody } = require('./video-provider-adapters');
+    const input = { endpoint: 'https://cart.ravenhash.org/v1', model: 'sd2-fast', prompt: 'fixture' };
+    assert.deepEqual(buildYueqiFastRequestBody(input), {
+        model: 'sd2-fast', prompt: 'fixture', resolution: '720p', aspect_ratio: '16:9', duration: 10, seconds: '10'
+    });
+    for (const [resolution, max] of [['480p', 15], ['720p', 12]]) {
+        for (const duration of [1, max]) assert.equal(buildYueqiFastRequestBody({ ...input, resolution, duration }).duration, duration);
+        for (const duration of [0, -1, max + 1, 1.5, 'unknown']) {
+            assert.throws(() => buildYueqiFastRequestBody({ ...input, resolution, duration }), error => {
+                assert.equal(error.code, 'LOCAL_SD2_FAST_DURATION_OUT_OF_RANGE');
+                assert.equal(error.retryable, false);
+                assert.match(error.message, /720p 支持 1 到 12 秒/);
+                assert.match(error.message, /480p 支持 1 到 15 秒/);
+                return true;
+            });
+        }
+    }
+    for (const ratio of ['16:9', '9:16', '1:1', '4:3', '3:4']) {
+        assert.equal(buildYueqiFastRequestBody({ ...input, aspectRatio: ratio }).aspect_ratio, ratio);
+    }
+    for (const aspectRatio of ['adaptive', '21:9']) {
+        assert.throws(() => buildYueqiFastRequestBody({ ...input, aspectRatio }), /画幅比例/);
+    }
+    assert.throws(() => buildYueqiFastRequestBody({ ...input, resolution: '1080p' }), /480p 或 720p/);
+    assert.throws(() => buildYueqiFastRequestBody({ ...input, prompt: '  ' }), /提示词不能为空/);
+    assert.deepEqual(buildYueqiFastRequestBody({ ...input, referenceImages: [{ url: ' https://example.test/ref.png ' }],
+        referenceVideos: [{ url: 'https://example.test/ref.mp4' }] }).image_urls, ['https://example.test/ref.png']);
+});
+
+test('Yueqi SD2 Fast routing leaves other hosts and model IDs unchanged', () => {
+    const { buildYueqiFastRequestBody, isYueqiFastModel } = require('./video-provider-adapters');
+    for (const endpoint of [undefined, '', 'invalid', 'https://other.test/v1',
+        'https://art.ravenhash.org.other.test/v1', 'https://yueqi.icu.other.test/v1']) {
+        assert.equal(isYueqiFastModel('sd2-fast', endpoint), false);
+        assert.throws(() => buildYueqiFastRequestBody({ endpoint, model: 'sd2-fast', prompt: 'fixture' }), /API 地址/);
+    }
+    for (const model of ['seedance-2.5-pro', 'sd2-fast-other', 'sd2']) {
+        assert.equal(isYueqiFastModel(model, 'https://yueqi.icu/v1'), false);
+    }
+    assert.equal(buildVideoGenerationEndpoint('https://other.test/v1', 'sd2-fast'), 'https://other.test/v1/video/generations');
+    assert.equal(buildVideoGenerationEndpoint('https://yueqi.icu/v1', 'sd2-fast-other'), 'https://yueqi.icu/v1/video/generations');
 });
 
 const {

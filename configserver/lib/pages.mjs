@@ -3,6 +3,7 @@
 import { ADMIN_USERNAME, SESSION_COOKIE } from './auth.mjs';
 import { EDITOR_STYLE, modelEditorMarkup } from './admin-editor-view.mjs';
 import { BALANCE_STYLE, balancesMarkup } from './admin-balances-view.mjs';
+import { CUSTOMER_REPORT_STYLE, customerReportsMarkup } from './customer-error-reports-view.mjs';
 
 const STYLE = `
 :root { color-scheme: dark; }
@@ -51,6 +52,7 @@ pre.errors { background: #1a1113; border: 1px solid #54282a; border-radius: 8px;
 code { background: #161b24; padding: 1px 5px; border-radius: 5px; }
 ${EDITOR_STYLE}
 ${BALANCE_STYLE}
+${CUSTOMER_REPORT_STYLE}
 `;
 
 export function escapeHtml(value) {
@@ -73,10 +75,11 @@ function layout(title, body) {
 }
 
 export function loginPage({ error = '', publicConfigPath = '/config', channel = 'stable' } = {}) {
-    channel = channel === 'preview' ? 'preview' : 'stable';
+    channel = 'stable';
+    publicConfigPath = '/config';
     return layout('模型配置服务 · 登录', `
 <div class="login">
-  <h1 style="font-size:16px">模型配置服务${channel === 'preview' ? ' · 源码预览' : ''}</h1>
+  <h1 style="font-size:16px">模型配置服务</h1>
   <p class="muted">客户端从这里获取模型能力 CONFIG：<a href="${escapeHtml(publicConfigPath)}"><code>${escapeHtml(publicConfigPath)}</code></a></p>
   ${error ? `<div class="flash err">${escapeHtml(error)}</div>` : ''}
   <form id="loginForm" method="post" action="/admin/login" autocomplete="on">
@@ -98,9 +101,8 @@ function formatBytes(size) {
 function versionRows(versions, { csrf, editing, channel }) {
     if (!versions.length) return '<tr><td colspan="6" class="muted">还没有任何版本</td></tr>';
     return versions.map(version => {
-        const selectedCurrent = channel === 'preview' ? version.preview : version.current;
-        const activeBadges = [version.current ? '<span class="badge ok">正式现行</span>' : '',
-            version.preview ? '<span class="badge ok">源码预览现行</span>' : ''].filter(Boolean).join(' ');
+        const selectedCurrent = version.current;
+        const activeBadges = version.current ? '<span class="badge ok">当前生效</span>' : '';
         const cells = [
             `<td class="mono">${escapeHtml(version.name)}</td>`,
             `<td>${version.broken ? '<span class="badge err">损坏</span>' : `r${escapeHtml(version.revision)}`}</td>`,
@@ -110,7 +112,7 @@ function versionRows(versions, { csrf, editing, channel }) {
             `<td>${activeBadges || (version.name === editing ? '<span class="badge">编辑中</span>' : '')}</td>`
         ];
         const actions = [];
-        actions.push(`<a class="link" href="/admin?channel=${channel}&amp;version=${encodeURIComponent(version.name)}">载入编辑器</a>`);
+        actions.push(`<a class="link" href="/admin?version=${encodeURIComponent(version.name)}">载入编辑器</a>`);
         if (!selectedCurrent) {
             actions.push(`<form method="post" action="/admin/apply" style="display:inline">
                 <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
@@ -118,7 +120,7 @@ function versionRows(versions, { csrf, editing, channel }) {
                 <input type="hidden" name="name" value="${escapeHtml(version.name)}">
                 <button class="link" type="submit">应用为现行</button></form>`);
         }
-        if (!version.current && !version.preview) {
+        if (!version.current) {
             actions.push(`<form method="post" action="/admin/delete" style="display:inline" onsubmit="return confirm('确认删除 ${escapeHtml(version.name)}？该操作不可撤销。')">
                 <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
                 <input type="hidden" name="channel" value="${channel}">
@@ -136,8 +138,8 @@ export function adminPage({
     flash = '', error = '', csrf = '', validatorMode = 'schema', validatorNote = '',
     publicConfigPath = '/config', publicOrigin = '', draft = false, note = '', channel = 'stable'
 } = {}) {
-    channel = channel === 'preview' ? 'preview' : 'stable';
-    const channelLabel = channel === 'preview' ? '源码预览' : '正式配置';
+    channel = 'stable';
+    publicConfigPath = '/config';
     const currentLabel = current
         ? `r${escapeHtml(current.config?.revision ?? 0)} · ${escapeHtml(Array.isArray(current.config?.models) ? current.config.models.length : 0)} 个模型 · <span class="mono">${escapeHtml(current.name)}</span>`
         : '<span class="badge warn">尚无现行版本</span>';
@@ -158,12 +160,8 @@ export function adminPage({
     return layout('模型配置服务 · 管理面板', `
 <header>
   <h1>模型能力 CONFIG 管理</h1>
-  <nav class="channel-nav" aria-label="发布通道">
-    <a href="/admin"${channel === 'stable' ? ' aria-current="page"' : ''}>正式配置</a>
-    <a href="/admin?channel=preview"${channel === 'preview' ? ' aria-current="page"' : ''}>源码预览</a>
-  </nav>
   ${modeBadge}
-  <span class="badge">${channelLabel}现行：${currentLabel}</span>
+  <span class="badge">统一配置现行：${currentLabel}</span>
   <span class="spacer"></span>
   <span class="muted">客户端地址 <a href="${escapeHtml(publicConfigPath)}"><code>${escapeHtml(configUrl)}</code></a></span>
   <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">退出登录</button></form>
@@ -196,6 +194,21 @@ export function adminPage({
 
   ${balancesMarkup()}
 
+  ${customerReportsMarkup()}
+
+  <section>
+    <h2>请求排查</h2>
+    <form id="requestDiagnosticsForm" class="publish-bar">
+      <label>站点 <select name="site" aria-label="诊断站点"><option value="art">老站</option><option value="cart">新站</option></select></label>
+      <input name="requestId" type="text" required maxlength="84" placeholder="排查编号 rh_… 或 fc_…" aria-label="排查编号" autocomplete="off">
+      <button type="submit"><svg width="14" height="14" aria-hidden="true"><use href="/admin/assets/flow-icons.svg#icon-search"></use></svg> 查询</button>
+    </form>
+    <p id="requestDiagnosticsStatus" role="status"></p>
+    <dl id="requestDiagnosticsSummary" style="display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 16px;overflow-wrap:anywhere"></dl>
+    <pre id="requestDiagnosticsError" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+    <details><summary>脱敏诊断数据</summary><pre id="requestDiagnosticsResult" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:560px;overflow:auto"></pre></details>
+  </section>
+
   <section>
     <h2>版本记录 · ${versions.length}</h2>
     <div class="table-scroll"><table>
@@ -213,6 +226,8 @@ export function adminPage({
   </section>
 </main>
 <script type="module" src="/admin/assets/admin-editor.mjs"></script>
+<script type="module" src="/admin/assets/admin-request-diagnostics-client.mjs"></script>
+<script type="module" src="/admin/assets/customer-error-reports-client.mjs"></script>
 <script type="module" src="/admin/assets/admin-balances-client.mjs"></script>`);
 }
 
