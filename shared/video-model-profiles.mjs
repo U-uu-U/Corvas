@@ -1,7 +1,59 @@
 import { describeModelPresentation } from './model-presentation.mjs';
+import sd2FastValidation from './sd2-fast-validation.cjs';
+import parameterRules from './model-parameter-rules.cjs';
 
 const RAVENHASH_VIDEO_HOSTS = new Set(['art.ravenhash.org', 'cart.ravenhash.org']);
 const STARFRAME_VIDEO_HOSTS = new Set(['api.xzapi.vip', ...RAVENHASH_VIDEO_HOSTS]);
+
+export const getVideoDurationConstraint = sd2FastValidation.getSd2FastDurationConstraint;
+
+export function resolveVideoProfileParameters(profile, provider, resolution) {
+    if (!profile) return profile;
+    const fields = typeof resolution === 'object' && resolution !== null ? resolution : { resolutionTier: resolution };
+    const request = { ...fields, resolutionTier: fields.resolutionTier || fields.resolution || profile.defaultResolution,
+        ratio: fields.ratio || profile.defaultRatio, duration: fields.duration ?? profile.defaultDuration };
+    if (profile.parameterRuleEntry) {
+        const resolved = parameterRules.resolveModelParameterRules(profile.parameterRuleEntry, request);
+        if (resolved.issues.length) return { ...profile, durations: [], parameterRuleIssues: resolved.issues };
+        const result = { ...profile, referenceLimits: { ...profile.referenceLimits }, parameterRuleIssues: [] };
+        for (const [field, valuesKey, defaultKey] of [['resolutionTier', 'resolutions', 'defaultResolution'],
+            ['ratio', 'ratios', 'defaultRatio'], ['duration', 'durations', 'defaultDuration']]) {
+            const option = resolved.entry.options?.[field];
+            if (!option) continue;
+            let values;
+            if (option.type === 'enum') values = [...(option.allowAuto ? [field === 'duration' ? -1 : 'adaptive'] : []), ...option.values];
+            else if (option.type === 'fixed') values = [option.value];
+            else if (option.type === 'range' && field === 'duration') {
+                const step = option.step || 1;
+                const length = Math.min(10000, Math.floor((option.max - option.min) / step) + 1);
+                values = Array.from({ length }, (_, index) => Number((option.min + index * step).toFixed(6)));
+            }
+            if (!values) continue;
+            result[valuesKey] = values;
+            result[defaultKey] = values.includes(option.default) ? option.default
+                : values.includes(profile[defaultKey]) ? profile[defaultKey] : values[0] ?? null;
+            if (field === 'duration') {
+                result.durationControl = option.type === 'range' ? 'slider' : option.type === 'fixed' ? 'fixed' : 'segmented';
+                result.durationConstraint = option.type === 'range' ? { ...option, resolution: request.resolutionTier } : null;
+                result.durationStep = option.step || 1;
+            }
+        }
+        for (const [field, kind] of Object.entries({ referenceImages: 'image', referenceVideos: 'video', referenceAudios: 'audio' })) {
+            const capability = resolved.entry.capabilities?.[field];
+            if (capability?.supported === false) result.referenceLimits[kind] = 0;
+            else if (Number.isFinite(capability?.max)) result.referenceLimits[kind] = capability.max;
+        }
+        return result;
+    }
+    const constraint = getVideoDurationConstraint(provider, request.resolutionTier);
+    if (!constraint) return profile;
+    const durations = (profile.durations || []).filter(value => Number.isInteger(value)
+        && value >= constraint.min && value <= constraint.max);
+    return { ...profile, durations, durationConstraint: constraint,
+        defaultDuration: durations.includes(profile.defaultDuration) ? profile.defaultDuration : (durations[0] ?? null) };
+}
+
+export const constrainVideoProfileDuration = resolveVideoProfileParameters;
 
 export const VIDEO_MODEL_PROFILES = [
     {
@@ -50,7 +102,7 @@ export const VIDEO_MODEL_PROFILES = [
         matchModel: /^ch0107-sd-2\.5-720p$/i,
         label: 'Seedance 2.5 720p',
         routeLabel: 'StarFrame CH0107',
-        ratios: ['16:9'],
+        ratios: ['16:9', '9:16'],
         resolutions: ['720p'],
         durations: Array.from({ length: 27 }, (_, index) => index + 4),
         durationControl: 'slider',

@@ -9,3 +9,31 @@
 .diagnostics-errors::-webkit-scrollbar { width: 5px; height: 5px; }
 .diagnostics-errors::-webkit-scrollbar-thumb { background: #50535a; border-radius: 3px; }
 .diagnostics-status { overflow-wrap: anywhere; font-size: 11px; color: #969ba4; }
+.diagnostics-actions { flex-wrap: wrap; }
+.diagnostics-actions .diagnostics-submit-button { display: flex; width: auto; flex-basis: auto; padding: 0 9px; gap: 5px; white-space: nowrap; }
+#diagnosticsReportDialog { box-sizing: border-box; width: min(540px, calc(100vw - 32px)); max-height: calc(100vh - 48px); margin: auto; overflow: auto; padding: 20px; border: 1px solid #494b50; border-radius: 8px; background: #202124; color: #e5e7eb; box-shadow: 0 18px 60px #0009; font: 13px/1.5 sans-serif; -webkit-app-region: no-drag; }
+#diagnosticsReportDialog::backdrop { background: #0007; }
+.diagnostics-report-form { display: grid; gap: 13px; min-width: 0; }
+.diagnostics-report-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.diagnostics-report-heading h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.diagnostics-report-form label { display: grid; gap: 5px; color: #c5c8cf; min-width: 0; }
+.diagnostics-report-form input, .diagnostics-report-form select, .diagnostics-report-form textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid #4b4d54; border-radius: 5px; background: #292b30; color: #e5e7eb; font: inherit; }
+.diagnostics-report-form textarea { min-height: 92px; max-height: 220px; resize: vertical; }
+.diagnostics-report-form :is(input, select, textarea):focus { outline: 2px solid #649fbc; outline-offset: 1px; }
+.diagnostics-report-form :is(input, select, textarea):disabled { opacity: .7; }
+.diagnostics-report-form button { display: inline-flex; justify-content: center; align-items: center; gap: 7px; min-height: 32px; padding: 6px 10px; border: 1px solid #4b4d54; border-radius: 5px; background: #303238; color: #e5e7eb; font: inherit; cursor: pointer; }
+.diagnostics-report-form button:hover { background: #3c3f46; }
+.diagnostics-report-form button:disabled { opacity: .6; cursor: default; }
+.diagnostics-report-form button[data-report-close], .diagnostics-report-form button[data-report-copy] { width: 32px; height: 32px; padding: 7px; flex: 0 0 32px; }
+.diagnostics-report-context { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 130px; overflow: auto; color: #b3b9c2; font-size: 12px; }
+.diagnostics-report-disclosure { margin: 0; color: #999fa9; font-size: 12px; }
+.diagnostics-report-status { color: #98d4b7; overflow-wrap: anywhere; }
+.diagnostics-report-status:empty { display: none; }
+.diagnostics-report-status.is-error { color: #f0aaaa; }
+.diagnostics-report-receipt { display: flex; align-items: center; gap: 8px; color: #bde5d1; }
+.diagnostics-report-receipt[hidden] { display: none; }
+.diagnostics-report-receipt code { overflow-wrap: anywhere; min-width: 0; flex: 1; user-select: text; }
+.diagnostics-report-footer { display: flex; justify-content: flex-end; }
+.diagnostics-report-footer button { background: #315346; border-color: #527363; min-width: 116px; }
+.diagnostics-report-footer button:hover { background: #3c6453; }
+@media (max-width: 520px) { #diagnosticsReportDialog { padding: 15px; } }

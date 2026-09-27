@@ -1,6 +1,7 @@
 // 模型配置后台启动与生成请求校验文案。
 import { modelConfigStore } from './model-config.js';
 import { validateModelRequest } from './model-config-capabilities.js';
+import parameterRules from '../shared/model-parameter-rules.cjs';
 
 // ── 提交前校验 ───────────────────────────────────────────────
 /**
@@ -33,7 +34,7 @@ export function formatModelRequestIssues(result) {
 export function assertModelRequest(options) {
     const result = checkModelRequest(options);
     if (!result.ok) {
-        throw new Error(`当前模型参数不被支持：${result.errors.map(item => item.message).join('；')}`);
+        throw parameterRules.createParameterValidationError(result.errors);
     }
     return result;
 }

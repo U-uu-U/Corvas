@@ -1,12 +1,13 @@
-const { app, ipcMain, dialog, clipboard } = require('electron');
+const { app, ipcMain, dialog, clipboard, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const { DiagnosticLog, setDiagnosticLog } = require('./diagnostics.cjs');
+const { createErrorReportClient, safeRequestParameters, errorReportContext, classifyErrorReportSite } = require('./error-report-client.cjs');
 const appVersion = require('../package.json').version;
 
-function installDiagnostics({ getWindow, getTasks, getSecrets }) {
+function installDiagnostics({ getWindow, getTasks, getSecrets, getConfigStatus }) {
     const knownSecrets = new Set();
     const remember = value => {
         if (typeof value !== 'string' || value.length < 4) return;
@@ -53,6 +54,8 @@ function installDiagnostics({ getWindow, getTasks, getSecrets }) {
         const context = { invocationId: crypto.randomUUID(), channel, projectId: request.projectId,
             nodeId: request.nodeId, clientTaskId: request.clientTaskId, taskId: request.taskId, runId: request.runId,
             providerId: request.providerConfig?.id, model: request.providerConfig?.model || request.model,
+            site: classifyErrorReportSite(request.providerConfig?.endpoint || request.endpoint),
+            parameters: safeRequestParameters(request),
             ...(/^(thumb|asset|image):/.test(channel) && typeof args[0] === 'string' ? {
                 assetRef: crypto.createHash('sha256').update(args[0]).digest('hex').slice(0, 16),
                 extension: path.extname(args[0]).slice(0, 12)
@@ -65,6 +68,8 @@ function installDiagnostics({ getWindow, getTasks, getSecrets }) {
             if (tracked || failed) log.record(failed ? 'error' : 'info', 'ipc.end', { ...context,
                 elapsedMs: Date.now() - started, status: failed ? 'failed' : 'completed',
                 error: result?.error, code: result?.code, canceled: result?.canceled,
+                requestId: result?.requestId, stage: result?.stage, submissionState: result?.submissionState,
+                category: result?.category, parameterIssues: result?.parameterIssues,
                 taskId: result?.taskId || context.taskId });
             return result;
         } catch (error) {
@@ -77,7 +82,13 @@ function installDiagnostics({ getWindow, getTasks, getSecrets }) {
         const tasks = [...(getTasks?.() || [])].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))).slice(0, 200).map(task => ({ clientTaskId: task.clientTaskId,
             projectId: task.projectId, nodeId: task.nodeId, taskId: task.taskId, kind: task.kind,
             model: task.model, endpoint: task.endpoint, state: task.state, createdAt: task.createdAt,
-            updatedAt: task.updatedAt, requestDiagnostic: task.requestDiagnostic, hasLocalResult: Boolean(task.filePath) }));
+            updatedAt: task.updatedAt, requestDiagnostic: task.requestDiagnostic, hasLocalResult: Boolean(task.filePath),
+            site: classifyErrorReportSite(task.endpoint), requestId: task.requestId,
+            error: task.error, code: task.errorCode || task.code, stage: task.stage, category: task.category,
+            params: safeRequestParameters(task.params || {}),
+            referenceCounts: { images: task.sourcePaths?.length || 0, videos: task.params?.videoSourcePaths?.length || 0,
+                audios: task.params?.audioSourcePaths?.length || 0 },
+            submissionState: task.submissionState, parameterIssues: task.parameterIssues }));
         return log.clean({ formatVersion: 1, exportedAt: new Date().toISOString(), sessionId: log.sessionId,
             environment: { app: appVersion, electron: process.versions.electron, chrome: process.versions.chrome,
                 node: process.versions.node, platform: process.platform, arch: process.arch, osRelease: os.release(),
@@ -85,13 +96,32 @@ function installDiagnostics({ getWindow, getTasks, getSecrets }) {
                 freeMemory: os.freemem(), totalMemory: os.totalmem(), http2Disabled: app.commandLine.hasSwitch('disable-http2') },
             droppedEvents: log.dropped, writeError: log.writeError, tasks, events });
     };
+    const reportClient = createErrorReportClient({ directory: path.join(app.getPath('userData'), 'diagnostics', 'error-submissions'),
+        fetchImpl: (...args) => net.fetch(...args), getReport: async () => {
+        const data = report();
+        try { data.config = log.clean(await getConfigStatus?.()); }
+        catch { data.config = { unavailable: true }; }
+        return data;
+    }, getSecrets: () => {
+        try { (getSecrets?.() || []).forEach(remember); } catch { /* Retain the last known secrets. */ }
+        return [...knownSecrets];
+    } });
     const trusted = event => event.sender === getWindow()?.webContents;
     ipcMain.handle('diagnostics:summary', event => {
         if (!trusted(event)) throw new Error('Invalid sender');
         const data = report();
         return { version: data.environment.app, platform: data.environment.platform, arch: data.environment.arch,
             eventCount: data.events.length, droppedEvents: data.droppedEvents, writeError: data.writeError,
-            errors: data.events.filter(entry => entry.level === 'error').slice(-12) };
+            errors: data.events.filter(entry => entry.level === 'error').slice(-30),
+            ...reportClient.summary(),
+            reportErrors: data.events.filter(entry => entry.level === 'error').slice(-30).reverse().map(errorReportContext),
+            tasks: data.tasks.filter(task => task.state === 'failed' || task.error).slice(0, 30).map(errorReportContext) };
+    });
+    ipcMain.handle('diagnostics:submit', async (event, input) => {
+        if (!trusted(event)) throw new Error('Invalid sender');
+        const receipt = await reportClient.submit(input);
+        log.record('info', 'diagnostics.submitted', { reportId: receipt.reportId, requestId: input?.requestId });
+        return receipt;
     });
     ipcMain.handle('diagnostics:copy', event => {
         if (!trusted(event)) throw new Error('Invalid sender');

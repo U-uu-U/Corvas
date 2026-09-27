@@ -17,7 +17,7 @@
 //   · 零框架、零构建：只用 node:http + 原生模块，拷到服务器 `node server.mjs` 就能跑；
 //     唯一可选依赖是 ajv（用于跑客户端那份 JSON Schema，装了才有完整校验）。
 //   · 默认只监听 127.0.0.1：TLS 与域名交给前面的 nginx/caddy 反代，进程本身不直接暴露。
-//   · 所有写操作都要「会话 cookie + CSRF token + Origin 同源」三件套。
+//   · 管理写操作需要「会话 cookie + CSRF token + Origin 同源」；客户报错单独限流且只返回回执。
 //   · /config 带 ETag：客户端暂时不发 If-None-Match，但 CDN/反代可以据此省流量。
 import fs from 'node:fs';
 import http from 'node:http';
@@ -25,17 +25,21 @@ import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
+import { isIP } from 'node:net';
 import { createConfigStore, normalizeConfigChannel } from './lib/store.mjs';
 import { createValidator } from './lib/validate.mjs';
 import { createAuth, hashPassword, parseCookies, serializeCookie, SESSION_COOKIE, AUTH_LIMITS } from './lib/auth.mjs';
 import { adminPage, loginPage, landingPage, escapeHtml } from './lib/pages.mjs';
 import { createAdminBalances } from './lib/admin-balances.mjs';
 import { projectAdminModelCosts } from './lib/admin-model-costs.mjs';
+import { withCatalogSalePrices } from './lib/catalog-sale-prices.mjs';
+import { createAdminRequestDiagnostics } from './lib/admin-request-diagnostics.mjs';
+import { createCustomerErrorReports } from './lib/customer-error-reports.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_PORT = 8087;
-const EDITOR_ASSETS = new Map(['admin-editor.mjs', 'admin-editor-model.mjs', 'admin-catalog-model.mjs', 'admin-catalog-view.mjs', 'admin-balances-client.mjs']
+const EDITOR_ASSETS = new Map(['admin-editor.mjs', 'admin-editor-model.mjs', 'admin-catalog-model.mjs', 'admin-catalog-view.mjs', 'admin-balances-client.mjs', 'admin-request-diagnostics-client.mjs', 'customer-error-reports-client.mjs']
     .map(name => [`/admin/assets/${name}`, path.join(HERE, 'lib', name)]));
 EDITOR_ASSETS.set('/admin/assets/flow-icons.svg', path.join(HERE, 'assets', 'flow-icons.svg'));
 
@@ -109,7 +113,8 @@ function redirect(res, location, extraHeaders = {}) {
 }
 
 function adminLocation(channel, params = {}) {
-    const query = new URLSearchParams({ ...(channel === 'preview' ? { channel } : {}), ...params });
+    normalizeConfigChannel(channel);
+    const query = new URLSearchParams(params);
     return `/admin${query.size ? `?${query}` : ''}`;
 }
 
@@ -158,6 +163,39 @@ function sameOrigin(req, config) {
     }
 }
 
+function reportClientIp(req) {
+    const peer = req.socket?.remoteAddress || 'unknown';
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer)) return peer;
+    const forwarded = String(req.headers['x-forwarded-for'] || '').split(',').at(-1)?.trim();
+    return isIP(forwarded || '') ? forwarded : peer;
+}
+
+function readReportBody(req) {
+    const maximum = 2 * 1024 * 1024;
+    const tooLarge = () => Object.assign(new Error('错误提交不能超过 2 MiB'), { status: 413 });
+    if (Number(req.headers['content-length']) > maximum) {
+        req.resume();
+        return Promise.reject(tooLarge());
+    }
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        let bytes = 0;
+        let failed = false;
+        req.on('data', chunk => {
+            if (failed) return;
+            bytes += chunk.length;
+            if (bytes > maximum) {
+                failed = true;
+                chunks.length = 0;
+                reject(tooLarge());
+            } else chunks.push(chunk);
+        });
+        req.once('end', () => { if (!failed) resolve(Buffer.concat(chunks).toString('utf8')); });
+        req.once('error', () => reject(Object.assign(new Error('错误提交传输中断'), { status: 400 })));
+        req.once('aborted', () => reject(Object.assign(new Error('错误提交传输中断'), { status: 400 })));
+    });
+}
+
 function projectAdminModelPrices(value) {
     const object = item => item !== null && typeof item === 'object' && !Array.isArray(item);
     const text = item => typeof item === 'string';
@@ -202,6 +240,7 @@ export async function createConfigServer(options = {}) {
     const env = options.env || process.env;
     const config = { ...resolveServerConfig(env), ...options };
     const logger = options.logger || console;
+    const requestDiagnostics = options.requestDiagnostics || createAdminRequestDiagnostics({ dataDir: config.dataDir });
     const passwordRecord = options.passwordRecord || resolvePasswordRecord(config, env);
     if (!passwordRecord) {
         throw new Error('未配置管理密码：请设置 CONFIG_ADMIN_PASSWORD，或运行 `node server.mjs --hash-password` 后把结果写入 <data>/admin.json');
@@ -218,6 +257,8 @@ export async function createConfigServer(options = {}) {
     const balances = options.balances || createAdminBalances({ dataDir: config.dataDir,
         seedPath: path.join(HERE, 'seed', 'admin-balance-accounts.json') });
     const startedAt = Date.now();
+    const customerReports = options.customerReports || createCustomerErrorReports({ dataDir: config.dataDir,
+        requestDiagnostics, limits: options.customerReportLimits });
 
     if (validator.mode !== 'schema') {
         logger.warn(`[configserver] ${validator.note}（建议在 configserver 目录执行 npm install 装上 ajv）`);
@@ -233,11 +274,11 @@ export async function createConfigServer(options = {}) {
         return { token, session: auth.session(token) };
     }
 
-    function requireAdmin(req, res, channel = 'stable') {
+    function requireAdmin(req, res) {
         const { token, session } = currentSession(req);
         if (!session) {
             if (wantsJson(req)) json(res, 401, { success: false, error: '未登录' });
-            else redirect(res, channel === 'preview' ? '/admin/login?channel=preview' : '/admin/login');
+            else redirect(res, '/admin/login');
             return null;
         }
         return { token, session };
@@ -259,7 +300,10 @@ export async function createConfigServer(options = {}) {
             json(res, 404, { success: false, error: '尚未发布任何 CONFIG 版本' });
             return;
         }
-        const etag = `"${crypto.createHash('sha256').update(active.text).digest('hex').slice(0, 32)}"`;
+        let prices = null;
+        try { prices = readAdminModelPrices(); } catch { /* Unavailable snapshots remain explicitly unknown. */ }
+        const text = `${JSON.stringify(withCatalogSalePrices(active.config, prices), null, 2)}\n`;
+        const etag = `"${crypto.createHash('sha256').update(text).digest('hex').slice(0, 32)}"`;
         if (req.headers['if-none-match'] === etag) {
             res.writeHead(304, { etag, 'cache-control': 'no-cache' });
             res.end();
@@ -267,13 +311,20 @@ export async function createConfigServer(options = {}) {
         }
         res.writeHead(200, {
             'content-type': 'application/json; charset=utf-8',
-            'content-length': Buffer.byteLength(active.text),
+            'content-length': Buffer.byteLength(text),
             'cache-control': 'no-cache',
             etag,
             // /config 是设计上公开的只读接口，放开 CORS 方便浏览器/调试工具直接查看。
             'access-control-allow-origin': '*'
         });
-        res.end(active.text);
+        res.end(text);
+    }
+
+    function readAdminModelPrices() {
+        const localPath = path.join(config.dataDir, 'admin-model-prices.json');
+        const prices = JSON.parse(fs.readFileSync(fs.existsSync(localPath)
+            ? localPath : path.join(HERE, 'seed', 'admin-model-prices.json'), 'utf8'));
+        return projectAdminModelPrices(prices);
     }
 
     function renderAdmin(res, { csrf = '', flash = '', error = '', requestedVersion = '', channel = 'stable' } = {}) {
@@ -286,7 +337,7 @@ export async function createConfigServer(options = {}) {
                 editorText = file.text;
                 editingName = file.name;
             } else {
-                const active = current || (channel === 'preview' ? store.current() : null);
+                const active = current;
                 if (active) {
                     editorText = active.text;
                     editingName = active.name;
@@ -307,7 +358,7 @@ export async function createConfigServer(options = {}) {
             csrf,
             validatorMode: validator.mode,
             validatorNote: validator.mode === 'schema' ? '' : `${validator.note}：当前只做结构校验，强烈建议安装 ajv。`,
-            publicConfigPath: channel === 'preview' ? '/config/preview' : '/config',
+            publicConfigPath: '/config',
             publicOrigin: config.publicOrigin
         }));
     }
@@ -317,12 +368,75 @@ export async function createConfigServer(options = {}) {
         const pathname = url.pathname.replace(/\/+$/, '') || '/';
         const method = req.method || 'GET';
 
+        if (method === 'POST' && pathname === '/error-reports') {
+            res.setHeader('cache-control', 'no-store');
+            res.setHeader('x-content-type-options', 'nosniff');
+            try { customerReports.admit(reportClientIp(req)); }
+            catch (error) {
+                req.resume();
+                if (error.status === 429) res.setHeader('retry-after', '3600');
+                return json(res, error.status === 429 ? 429 : 503,
+                    { success: false, error: error.status === 429 ? '提交过于频繁，请稍后重试' : '错误提交暂时无法保存，请稍后重试' });
+            }
+            if (!/^application\/json(?:\s*;\s*charset\s*=\s*utf-8)?\s*$/i.test(String(req.headers['content-type'] || ''))
+                || (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity')) {
+                req.resume();
+                return json(res, 415, { success: false, error: '请使用 application/json 提交错误' });
+            }
+            try {
+                const input = JSON.parse(await readReportBody(req));
+                return json(res, 200, customerReports.submit(input, reportClientIp(req), { rateChecked: true }));
+            } catch (error) {
+                const status = [400, 413, 429, 503].includes(error.status) ? error.status : error instanceof SyntaxError ? 400 : 500;
+                if (status === 429) res.setHeader('retry-after', '3600');
+                const message = status === 500 ? '错误提交暂时无法保存，请稍后重试'
+                    : error instanceof SyntaxError ? '错误提交 JSON 格式无效' : error.message;
+                return json(res, status, { success: false, error: message });
+            }
+        }
+
+        const reportRoute = pathname.match(/^\/admin\/error-reports(?:\/(er_[a-f0-9]{32})(?:\/(status|refresh))?)?$/);
+        if (reportRoute && ['GET', 'POST'].includes(method)) {
+            res.setHeader('cache-control', 'no-store');
+            if (!requireAdmin(req, res)) return;
+            const [, id, operation] = reportRoute;
+            try {
+                if (method === 'GET' && !operation) {
+                    const data = id ? customerReports.get(id) : customerReports.list({ status: url.searchParams.get('status') || '',
+                        q: url.searchParams.get('q') || '', offset: url.searchParams.get('offset') || 0 });
+                    if (id && url.searchParams.get('download') === '1') {
+                        res.setHeader('content-disposition', `attachment; filename="${id}.json"`);
+                    }
+                    return json(res, 200, data);
+                }
+                if (method !== 'POST' || !id || !operation) return json(res, 405, { error: '请求方法无效' });
+                if (!sameOrigin(req, config)) return json(res, 403, { error: 'Origin 校验失败' });
+                if (!requireCsrf(req, res)) return;
+                if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) {
+                    return json(res, 415, { error: '请使用 application/json' });
+                }
+                const body = JSON.parse(await readBody(req));
+                const data = operation === 'status' ? customerReports.setStatus(id, body) : await customerReports.refresh(id);
+                return json(res, 200, data);
+            } catch (error) {
+                return json(res, [400, 404, 503].includes(error.status) ? error.status : error instanceof SyntaxError ? 400 : 500,
+                    { error: error.status ? error.message : '错误提交操作失败，请稍后重试' });
+            }
+        }
+
         if (method === 'GET' && EDITOR_ASSETS.has(pathname)) {
             if (!requireAdmin(req, res)) return;
             const body = fs.readFileSync(EDITOR_ASSETS.get(pathname));
             res.writeHead(200, { 'content-type': pathname.endsWith('.svg') ? 'image/svg+xml' : 'text/javascript; charset=utf-8', 'content-length': body.length,
                 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
             return res.end(body);
+        }
+
+        if (method === 'GET' && pathname === '/admin/request-diagnostics') {
+            res.setHeader('cache-control', 'no-store');
+            if (!requireAdmin(req, res)) return;
+            const result = await requestDiagnostics.get(url.searchParams.get('site'), url.searchParams.get('requestId'));
+            return json(res, result.status, result.body);
         }
 
         if (method === 'GET' && pathname === '/admin/model-sources') {
@@ -342,11 +456,8 @@ export async function createConfigServer(options = {}) {
         if (method === 'GET' && pathname === '/admin/model-prices') {
             res.setHeader('cache-control', 'no-store');
             if (!requireAdmin(req, res)) return;
-            const localPath = path.join(config.dataDir, 'admin-model-prices.json');
             try {
-                const prices = JSON.parse(fs.readFileSync(fs.existsSync(localPath)
-                    ? localPath : path.join(HERE, 'seed', 'admin-model-prices.json'), 'utf8'));
-                return json(res, 200, projectAdminModelPrices(prices));
+                return json(res, 200, readAdminModelPrices());
             } catch {
                 return json(res, 500, { error: '无法读取中转站价格资料' });
             }
@@ -397,18 +508,16 @@ export async function createConfigServer(options = {}) {
         if (method === 'GET' && pathname === '/admin/login') {
             const code = url.searchParams.get('error');
             const message = code === '2' ? '尝试过于频繁，请稍后再试' : (code === '1' ? '账号或密码不正确' : '');
-            const channel = url.searchParams.get('channel') === 'preview' ? 'preview' : 'stable';
-            return html(res, 200, loginPage({ error: message, channel,
-                publicConfigPath: channel === 'preview' ? '/config/preview' : '/config' }));
+            return html(res, 200, loginPage({ error: message }));
         }
         if (method === 'POST' && pathname === '/admin/login') {
             const body = await readBody(req);
             const form = parseForm(body);
-            const channel = form.channel === 'preview' ? 'preview' : 'stable';
+            const channel = 'stable';
             const result = auth.login(form.password || '', { ip: clientIp(req), username: form.username || '' });
             if (!result.ok) {
                 logger.warn(`[configserver] 登录失败 ip=${clientIp(req)}：${result.error}`);
-                return redirect(res, `/admin/login?error=${result.retryAfter ? 2 : 1}${channel === 'preview' ? '&channel=preview' : ''}`);
+                return redirect(res, `/admin/login?error=${result.retryAfter ? 2 : 1}`);
             }
             const secure = config.cookieSecure || Boolean(config.tlsKey) || String(req.headers['x-forwarded-proto'] || '') === 'https';
             logger.log(`[configserver] 登录成功 ip=${clientIp(req)}`);
@@ -426,7 +535,7 @@ export async function createConfigServer(options = {}) {
             return redirect(res, '/admin/login', { 'set-cookie': serializeCookie(SESSION_COOKIE, '', { maxAgeSeconds: 0 }) });
         }
         if (method === 'GET' && pathname === '/admin') {
-            const guard = requireAdmin(req, res, url.searchParams.get('channel') === 'preview' ? 'preview' : 'stable');
+            const guard = requireAdmin(req, res);
             if (!guard) return;
             const channel = requestChannel(url.searchParams.get('channel'), res);
             if (!channel) return;
@@ -490,7 +599,7 @@ export async function createConfigServer(options = {}) {
                     validatorMode: validator.mode,
                     validatorNote: validator.mode === 'schema' ? '' : `${validator.note}：当前只做结构校验，建议安装 ajv。`,
                     publicOrigin: config.publicOrigin,
-                    publicConfigPath: channel === 'preview' ? '/config/preview' : '/config'
+                    publicConfigPath: '/config'
                 }));
             }
             const applied = form.draft !== '1';
@@ -594,7 +703,8 @@ export async function createConfigServer(options = {}) {
         validator,
         config,
         auth,
-        close: () => new Promise(resolve => server.close(() => resolve()))
+        customerReports,
+        close: async () => { await customerReports.close(); await new Promise(resolve => server.close(() => resolve())); }
     };
 }
 

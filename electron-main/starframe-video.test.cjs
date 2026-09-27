@@ -7,7 +7,7 @@ test('StarFrame uses references mode with singular and plural fields instead of 
     const media = 'https://media.test/asset';
     const base = { clientTaskId: 'request-1', prompt: 'test', duration: 5 };
     const text = buildStarFrameBody(base);
-    assert.deepEqual(text, { model: STARFRAME_MODEL, prompt: 'test', client_task_id: 'request-1', mode: 'references', duration: 5, resolution: '720p' });
+    assert.deepEqual(text, { model: STARFRAME_MODEL, prompt: 'test', client_task_id: 'request-1', mode: 'references', duration: 5, resolution: '720p', aspect_ratio: '16:9' });
     const mixed = buildStarFrameBody({ ...base, referenceImages: [media], referenceVideos: [media, media], referenceAudios: [media] });
     assert.deepEqual(mixed.references, { image: media, videos: [media, media], audio: media });
     assert.equal('frames' in mixed || 'image_urls' in mixed || 'seconds' in mixed, false);
@@ -16,6 +16,14 @@ test('StarFrame uses references mode with singular and plural fields instead of 
     for (const invalid of [{ resolution: '1080p' }, { duration: 3 }, { duration: 31 }, { duration: 5.5 }, { clientTaskId: '' }, { aspectRatio: '0:0' },
         { referenceImages: [ 'data:image/png;base64,AAAA' ] }, { referenceImages: Array(31).fill(media) },
         { referenceVideos: Array(11).fill(media) }, { referenceAudios: Array(11).fill(media) }]) assert.throws(() => buildStarFrameBody({ ...base, ...invalid }));
+});
+
+test('CH0107 always sends its required aspect ratio and preserves portrait selection', () => {
+    const base = { clientTaskId: 'request-ratio', prompt: 'test' };
+    for (const aspectRatio of [undefined, null, '', '   ']) {
+        assert.equal(buildStarFrameBody({ ...base, aspectRatio }).aspect_ratio, '16:9');
+    }
+    assert.equal(buildStarFrameBody({ ...base, aspectRatio: '9:16' }).aspect_ratio, '9:16');
 });
 
 test('CH1401 keeps its model ID and rejects unsupported audio/video references', () => {

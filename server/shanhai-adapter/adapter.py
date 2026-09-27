@@ -43,6 +43,14 @@ MODEL_RULES = {
         "image_limit": 10,
         "default_duration": 15,
     },
+    "oc-model-r5cfh8": {
+        "durations": {30},
+        "resolutions": {"720p"},
+        "image_limit": 10,
+        "video_limit": 0,
+        "audio_limit": 0,
+        "default_duration": 30,
+    },
     "oc-model-1iq31f": {
         "min_duration": 5,
         "max_duration": 15,
@@ -175,6 +183,10 @@ def build_request(body):
     audios = _media_values(body, ("audio_urls", "reference_audios"), "音频参考")
     if "image_limit" in rules and len(images) > rules["image_limit"]:
         raise ValueError(f"当前模型最多支持 {rules['image_limit']} 张参考图片")
+    if rules.get("video_limit") == 0 and (videos or body.get("videos")):
+        raise ValueError("当前模型不支持视频参考")
+    if rules.get("audio_limit") == 0 and audios:
+        raise ValueError("当前模型不支持音频参考")
     if rules.get("no_references") and images + videos + audios:
         raise ValueError("当前模型不支持参考素材")
     if len(images) + len(videos) + len(audios) > 10:

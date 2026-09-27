@@ -41,6 +41,21 @@ const remoteConfig = {
     }]
 };
 
+test('remote default model identifiers survive loading and caching without accepting malformed values', async () => {
+    const configured = { ...remoteConfig, catalogMode: 'remote', defaultModels: { video: 'test.model' } };
+    assert.deepEqual(readModelConfig(configured).defaultModels, configured.defaultModels);
+    for (const invalid of [[], { video: '' }, { video: 3 }, { unknown: 'test.model' }]) {
+        assert.equal(readModelConfig({ ...remoteConfig, defaultModels: invalid }), null);
+    }
+    const storage = createStorage();
+    const store = createModelConfigStore({ storage, loadRemote: async () => ({ ok: true, raw: configured }) });
+    await store.refresh({ force: true });
+    const cached = createModelConfigStore({ storage });
+    cached.start({ refreshOnStart: false });
+    assert.deepEqual(cached.getConfig().defaultModels, configured.defaultModels);
+    cached.stop();
+});
+
 test('retired templates do not return from cached or remote config', async () => {
     const retired = ['video-template.seedance-1.5', 'video-template.wan', 'video-template.kling', 'video-template.tencent-vidu'];
     const legacy = structuredClone(DEFAULT_MODEL_CONFIG);

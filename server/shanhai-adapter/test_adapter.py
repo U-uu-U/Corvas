@@ -101,6 +101,36 @@ class ContractTests(unittest.TestCase):
                                           "ratio": "adaptive"})
         self.assertEqual(adaptive["options"]["aspect_ratio"], "16:9")
 
+    def test_dola_30_fixed_duration_and_ten_image_contract(self):
+        images = [f"https://images.example/{index}.png" for index in range(10)]
+        for ratio in ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]:
+            with self.subTest(ratio=ratio):
+                body = adapter.build_request({
+                    "model": "oc-model-r5cfh8", "prompt": " fixture ",
+                    "image_urls": images, "aspect_ratio": ratio,
+                })
+                self.assertEqual(body, {
+                    "model": "oc-model-r5cfh8", "prompt": "fixture", "media_type": "video",
+                    "inputs": [{"type": "image", "url": url} for url in images],
+                    "options": {"duration": "30", "resolution": "720p", "aspect_ratio": ratio},
+                })
+
+    def test_dola_30_rejects_unsupported_parameters(self):
+        invalid = [
+            ({"duration": 15}, "时长"),
+            ({"duration": 31}, "时长"),
+            ({"resolution": "480p"}, "分辨率"),
+            ({"resolution": "1080p"}, "分辨率"),
+            ({"ratio": "2:1"}, "aspect_ratio"),
+            ({"image_urls": [f"https://images.example/{index}.png" for index in range(11)]}, "10 张参考图片"),
+            ({"video_urls": ["https://videos.example/a.mp4"]}, "不支持视频参考"),
+            ({"videos": ["https://videos.example/a.mp4"]}, "不支持视频参考"),
+            ({"audio_urls": ["https://audio.example/a.mp3"]}, "不支持音频参考"),
+        ]
+        for overrides, message in invalid:
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(ValueError, message):
+                adapter.build_request({"model": "oc-model-r5cfh8", "prompt": "fixture", **overrides})
+
     def test_no_redirect_helper_never_carries_auth(self):
         self.assertIsNone(adapter.NoRedirect().redirect_request(None, None, 302, "", {}, "https://other.example"))
 
@@ -173,6 +203,41 @@ class IntegrationTests(unittest.TestCase):
             self.assertIn("结果未知", payload["error"]["message"])
             self.assertEqual(payload["error"]["code"], "submission_unknown")
             self.assertEqual(request.call_count, 1)
+
+    def test_dola_30_submit_and_resume_does_not_resubmit(self):
+        images = [f"https://images.example/{index}.png" for index in range(10)]
+        submitted = self.call("/v1/video/generations", {
+            "model": "oc-model-r5cfh8", "prompt": "fixture", "seconds": "30",
+            "ratio": "21:9", "resolution": "720p", "images": [{"url": url} for url in images],
+        })
+        self.assertEqual(submitted["task_id"], "shan-task-1")
+        self.assertEqual(self.upstream.calls[0][3], {
+            "model": "oc-model-r5cfh8", "prompt": "fixture", "media_type": "video",
+            "inputs": [{"type": "image", "url": url} for url in images],
+            "options": {"duration": "30", "resolution": "720p", "aspect_ratio": "21:9"},
+        })
+        self.upstream.status = "succeeded"
+        self.upstream.output_url = self.upstream.base + "/files/result.mp4"
+        with patch.object(adapter, "POLL_CACHE_SECONDS", 0):
+            result = self.call("/v1/videos/shan-task-1")
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result["video_url"].startswith("https://relay.example/fc-media/files/"))
+        call_count = len(self.upstream.calls)
+        self.assertEqual(self.call("/v1/tasks/shan-task-1")["status"], "completed")
+        self.assertEqual(len(self.upstream.calls), call_count)
+        self.assertEqual(sum(call[0] == "POST" for call in self.upstream.calls), 1)
+
+    def test_dola_30_invalid_references_are_rejected_without_upstream_requests(self):
+        for field, values in [
+            ("image_urls", [f"https://images.example/{index}.png" for index in range(11)]),
+            ("video_urls", ["https://videos.example/a.mp4"]),
+            ("videos", ["https://videos.example/a.mp4"]),
+            ("audio_urls", ["https://audio.example/a.mp3"]),
+        ]:
+            with self.subTest(field=field), self.assertRaises(urllib.error.HTTPError) as error:
+                self.call("/v1/videos", {"model": "oc-model-r5cfh8", "prompt": "fixture", field: values})
+            self.assertEqual(error.exception.code, 400)
+        self.assertEqual(self.upstream.calls, [])
 
     def test_poll_status_is_cached_and_auth_is_partitioned(self):
         self.call("/v1/videos", {"model": "oc-model-qbdmeb", "prompt": "fixture", "duration": 5})

@@ -70,6 +70,8 @@ test('StarFrame keeps host-specific per-second sales with or without a remote ca
             assert.equal(profile.price.currency, 'CNY');
             assert.deepEqual(profile.referenceLimits, { image: 30, video: 10, audio: 10 });
             assert.deepEqual(profile.resolutions, ['720p']);
+            assert.deepEqual(profile.ratios, ['16:9', '9:16']);
+            assert.equal(profile.defaultRatio, '16:9');
             assert.equal(profile.durations[0], 4);
             assert.equal(profile.durations.at(-1), 30);
             assert.doesNotMatch(describeVideoModelProfile(profile, { includePrice: false }), /[¥$]|元|费用/);

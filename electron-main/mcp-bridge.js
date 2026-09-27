@@ -11,7 +11,8 @@ const { HANDOFF_TOOL_DEFINITIONS } = require('../shared/handoff-tools.cjs');
 const { createModelConfigSnapshotReader } = require('./model-config-service.cjs');
 const { isGlobalAiOpcModel, buildGlobalAiOpcBody, GlobalAiOpcAssets, LIMITS: GLOBALAIOPC_LIMITS } = require('./globalaiopc-video.cjs');
 const { isStarFrameModel, buildStarFrameBody, starFrameContentUrl, starFrameDownloadRequest, starFrameLimits } = require('./starframe-video.cjs');
-const { isShanhaiEndpoint, isShanhaiModel, shanhaiReferenceLimits, generateShanhaiVideo, resumeShanhaiVideo } = require('./shanhai-video.cjs');
+const { isShanhaiEndpoint, isShanhaiModel, isShanhaiDola30Model, shanhaiReferenceLimits,
+    buildShanhaiGenerationBody, generateShanhaiVideo, resumeShanhaiVideo } = require('./shanhai-video.cjs');
 const {
     appendMidjourneyParameters,
     buildImageEditMultipart,
@@ -44,6 +45,9 @@ const {
 } = require('./openai-image-request');
 const { ReferenceCache } = require('./reference-cache');
 const { GenerationRecoveryStore } = require('./generation-recovery-store.cjs');
+const { normalizePublicDetail } = require('../shared/public-error-detail.cjs');
+const parameterRules = require('../shared/model-parameter-rules.cjs');
+const { classifyErrorReportSite } = require('../shared/error-report-contract.cjs');
 const { imageRequestFailure } = require('./image-request-diagnostics.cjs');
 const { namingPrompt, writeGeneratedMedia } = require('./generated-media-names.cjs');
 const { diagnostic: recordDiagnostic } = require('./diagnostics.cjs');
@@ -52,6 +56,9 @@ const { describeServiceRole } = require('../shared/error-redaction.cjs');
 const {
     buildMiniMaxH3RequestBody,
     buildSeedance25RequestBody,
+    assertZhuboVideoReferenceFile,
+    getZhuboVideoModelSpec,
+    buildYueqiFastRequestBody,
     buildVideoGenerationEndpoint,
     getVideoPayloadError,
     getVideoResultUrl,
@@ -63,6 +70,7 @@ const {
     isMiniMaxH3PerSecondEndpoint,
     isMiniMaxH3UnavailableResponse,
     isSeedanceVideoModel,
+    isYueqiFastModel,
     seedanceReferenceLimits,
     resolveSeedance25AspectRatio
 } = require('./video-provider-adapters');
@@ -259,6 +267,7 @@ class FlowCanvasBridge {
             recordDiagnostic('info', 'generation.complete', { clientTaskId: id, taskId: result?.taskId });
             return result;
         } catch (error) {
+            if (!error.requestId) error.requestId = `fc_${crypto.randomBytes(16).toString('hex')}`;
             recordDiagnostic('error', 'generation.failed', { clientTaskId: id, canceled: controller.signal.aborted, error });
             if (error.confirmedFailure === true && !controller.signal.aborted
                 && this.activeGenerationRequests.get(id) === controller && this.recoveryStore.get(recordId)) {
@@ -295,7 +304,7 @@ class FlowCanvasBridge {
             projectId: body.projectId || this.store.load().activeGroupId || null };
         recordDiagnostic('info', 'generation.prepare', { kind, clientTaskId: request.clientTaskId,
             projectId: request.projectId, nodeId: body.nodeId, model: body.providerConfig?.model || body.model,
-            endpoint: body.providerConfig?.endpoint, imageCount: body.sourceReferences?.length || 0,
+            endpoint: body.providerConfig?.endpoint, site: classifyErrorReportSite(body.providerConfig?.endpoint), imageCount: body.sourceReferences?.length || 0,
             videoCount: body.videoReferences?.length || 0, audioCount: body.audioReferences?.length || 0,
             size: body.size, duration: body.duration, resolution: body.resolution, stream: body.stream });
         const params = Object.fromEntries(['size', 'quality', 'responseFormat', 'historyDisabled', 'stream',
@@ -1000,6 +1009,7 @@ class FlowCanvasBridge {
             });
             if (!result?.success && (body.provider || body.providerConfig)) {
                 throw Object.assign(new Error(result?.error || 'Image generation API failed'), {
+                    ...(normalizePublicDetail(result) || {}),
                     code: result?.code, submissionUnknown: result?.submissionUnknown === true, requestId: result?.requestId,
                     confirmedFailure: result?.confirmedFailure === true
                 });
@@ -1118,6 +1128,9 @@ class FlowCanvasBridge {
         const audioSourceContext = collectAudioSourceReferences(data, body.audioReferences);
         if ((isGlobalAiOpcModel(body?.providerConfig?.model || body?.model)
             || isStarFrameModel(body?.providerConfig?.model || body?.model)
+            || isYueqiFastModel(body?.providerConfig?.model || body?.model, body?.providerConfig?.endpoint)
+            || getZhuboVideoModelSpec(body?.providerConfig?.model || body?.model, body?.providerConfig?.endpoint)
+            || isShanhaiDola30Model(body?.providerConfig?.model || body?.model, body?.providerConfig?.endpoint)
             || (isShanhaiEndpoint(body?.providerConfig?.endpoint) && isShanhaiModel(body?.providerConfig?.model || body?.model)))
             && [...sourceContext.missing, ...videoSourceContext.missing, ...audioSourceContext.missing].length) {
             throw new Error('参考素材不存在或格式不支持，请重新选择后再提交');
@@ -1147,8 +1160,9 @@ class FlowCanvasBridge {
         });
         throwIfGenerationCanceled(signal);
         if (!result?.success) throw Object.assign(new Error(result?.error || '\u89c6\u9891\u751f\u6210 API \u8bf7\u6c42\u5931\u8d25'), {
+            ...(normalizePublicDetail(result) || {}),
             code: result?.code, submissionUnknown: result?.submissionUnknown === true, requestId: result?.requestId,
-            confirmedFailure: result?.confirmedFailure === true
+            confirmedFailure: result?.confirmedFailure === true, retryable: result?.retryable
         });
         this.notifyTaskCompleted?.({
             clientTaskId: body.clientTaskId || null,
@@ -1421,7 +1435,8 @@ class FlowCanvasBridge {
                 model,
                 clientTaskId: body.clientTaskId,
                 signal,
-                preferVideoTaskEndpoint: isMiniMaxH3Model(model) || isSeedanceVideoModel(model),
+                preferVideoTaskEndpoint: isMiniMaxH3Model(model) || isSeedanceVideoModel(model) || isYueqiFastModel(model, endpoint)
+                    || isShanhaiDola30Model(model, endpoint),
                 onTaskIdResolved: (resolvedTaskId) => this._rememberSubmitted(body, {
                     clientTaskId: body.clientTaskId || null,
                     remoteTaskId: resolvedTaskId,
@@ -1445,7 +1460,8 @@ class FlowCanvasBridge {
             apiKey,
             model,
             taskId: resolvedTaskId,
-            preferVideoTaskEndpoint: isMiniMaxH3Model(model) || isSeedanceVideoModel(model),
+            preferVideoTaskEndpoint: isMiniMaxH3Model(model) || isSeedanceVideoModel(model) || isYueqiFastModel(model, endpoint)
+                || isShanhaiDola30Model(model, endpoint),
             signal,
             onProgress: progress => this.notifyVideoProgress?.({ clientTaskId: body.clientTaskId || null, ...progress })
         });
@@ -2260,7 +2276,8 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
                 }))
             };
             options.onRequestDiagnostic?.({ ...diagnostic, phase });
-            recordDiagnostic('info', 'image.request', { ...diagnostic, endpoint, model });
+            recordDiagnostic('info', 'image.request', { ...diagnostic, endpoint, site: classifyErrorReportSite(endpoint), model,
+                params: { size: requestBody.size, quality: requestBody.quality, n: requestBody.n, stream: requestBody.stream } });
             try {
                 res = await net.fetch(endpoint, {
                     method: 'POST',
@@ -2526,6 +2543,7 @@ function remoteConnectionError(stage, endpoint, error, attempts = 1) {
     // 结果未知的语义必须透传，否则渲染层会把它当成可重试的普通失败并建议重新提交。
     if (error?.submissionUnknown === true) failure.submissionUnknown = true;
     if (error?.timedOut === true) failure.timedOut = true;
+    Object.assign(failure, normalizePublicDetail(error) || {});
     for (const key of ['code', 'requestId', 'taskId', 'retryable', 'status']) {
         if (error?.[key] !== undefined) failure[key] = error[key];
     }
@@ -3518,18 +3536,38 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
 
         const { assertVideoGenerationAvailable } = await import('../shared/video-generation-availability.mjs');
         assertVideoGenerationAvailable({ model, endpoint }, options[GENERATION_MODEL_CONFIG]);
+        const { resolveModelConfigEntry } = await import('../src/model-config-capabilities.js');
+        const modelConfigEntry = options[GENERATION_MODEL_CONFIG]
+            ? resolveModelConfigEntry(options[GENERATION_MODEL_CONFIG], { model, endpoint, kind: 'video' }).entry : null;
+        const checkedParameters = modelConfigEntry?.parameterRules === undefined ? null
+            : parameterRules.validateModelParameterRequest(modelConfigEntry,
+                { resolutionTier: options.resolution, ratio: options.ratio, duration: options.duration,
+                    quality: options.quality, n: options.n ?? 1 },
+                { image: options.sourceReferences?.length || 0, video: options.videoReferences?.length || 0,
+                    audio: options.audioReferences?.length || 0 });
+        if (checkedParameters && !checkedParameters.ok) throw parameterRules.createParameterValidationError(checkedParameters.issues);
 
         const isMiniMaxH3 = isMiniMaxH3Model(model);
         const isSeedance = isSeedanceVideoModel(model);
+        const isYueqiFast = isYueqiFastModel(model, endpoint);
+        const zhuboSpec = getZhuboVideoModelSpec(model, endpoint);
+        const isShanhaiDola30 = isShanhaiDola30Model(model, rawEndpoint);
         const isGlobalAiOpc = isGlobalAiOpcModel(model);
         const isStarFrame = isStarFrameModel(model);
-        const referenceLimits = isShanhai ? shanhaiReferenceLimits(model)
-            : isStarFrame ? starFrameLimits(model) : isGlobalAiOpc ? GLOBALAIOPC_LIMITS : isSeedance ? seedanceReferenceLimits(model, endpoint) : { image: 9, video: 3, audio: 3 };
+        const referenceLimits = { ...(isShanhai || isShanhaiDola30 ? shanhaiReferenceLimits(model)
+            : isStarFrame ? starFrameLimits(model) : isGlobalAiOpc ? GLOBALAIOPC_LIMITS : isSeedance || isYueqiFast ? seedanceReferenceLimits(model, endpoint) : { image: 9, video: 3, audio: 3 }) };
+        if (checkedParameters) {
+            for (const [key, kind] of [['referenceImages', 'image'], ['referenceVideos', 'video'], ['referenceAudios', 'audio']]) {
+                const capability = checkedParameters.entry.capabilities?.[key];
+                if (capability?.supported === false) referenceLimits[kind] = 0;
+                else if (Number.isInteger(capability?.max)) referenceLimits[kind] = capability.max;
+            }
+        }
         const body = { model, prompt };
         const resolution = String(options.resolution || '').trim();
         let ratio = String(options.ratio || '').trim();
         const duration = Number(options.duration);
-        if (isSeedance && (!ratio || ratio === 'adaptive')) {
+        if ((isSeedance || isYueqiFast) && (!ratio || ratio === 'adaptive')) {
             const firstReference = options.sourceReferences?.[0] || null;
             let width = Number(firstReference?.width);
             let height = Number(firstReference?.height);
@@ -3544,8 +3582,14 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             resolution: resolution || '720p', seed: options.seed ?? -1, generateAudio: options.generateAudio ?? true };
         const starFrameParams = { model, prompt, clientTaskId: options.clientTaskId, duration: options.duration ?? 4,
             resolution: resolution || '720p', aspectRatio: ratio || undefined };
+        const shanhaiDola30Params = { model, prompt, duration: options.duration,
+            aspectRatio: ratio || '16:9', resolution: resolution || '720p' };
+        const shanhaiDola30Body = isShanhaiDola30 ? buildShanhaiGenerationBody(shanhaiDola30Params) : null;
         if (isShanhai) {
             // Shanhai uses its own /generations contract; the final body is built after public reference URLs are ready.
+        } else if (isShanhaiDola30) {
+            Object.assign(body, { duration: Number(shanhaiDola30Body.options.duration),
+                resolution: shanhaiDola30Body.options.resolution, aspect_ratio: shanhaiDola30Body.options.aspect_ratio });
         } else if (isStarFrame) {
             Object.assign(body, buildStarFrameBody(starFrameParams));
         } else if (isGlobalAiOpc) {
@@ -3559,12 +3603,15 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 aspectRatio: ratio || undefined,
                 resolution: resolution || undefined
             }));
+        } else if (isYueqiFast) {
+            Object.assign(body, buildYueqiFastRequestBody({ endpoint, model, prompt, modelConfigEntry,
+                duration: options.duration, resolution: resolution || undefined, aspectRatio: ratio }));
         } else if (isSeedance) {
             Object.assign(body, buildSeedance25RequestBody({
                 endpoint,
                 model,
                 prompt,
-                duration: Number.isInteger(duration) ? duration : undefined,
+                duration: zhuboSpec ? options.duration : Number.isInteger(duration) ? duration : undefined,
                 resolution: resolution || undefined,
                 aspectRatio: ratio || undefined
             }));
@@ -3580,6 +3627,13 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         }
 
         const videoReferences = options.videoReferences || [];
+        if (zhuboSpec) {
+            for (const [mediaType, references] of [['image', options.sourceReferences || []], ['audio', options.audioReferences || []]]) {
+                for (const reference of references) assertZhuboVideoReferenceFile(model, endpoint, {
+                    mediaType, filePath: reference.filePath, size: fs.statSync(reference.filePath).size
+                });
+            }
+        }
         const images = await collectVideoReferenceImages(
             options.sourceReferences || [],
             options.compressReferenceImages === true,
@@ -3608,7 +3662,8 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 }
             }
         }
-        const uploadReferences = isShanhai || isGlobalAiOpc || isStarFrame ? uploadTemporaryReferences : uploadVideoReferencesOrUseOriginals;
+        const uploadReferences = isShanhai || isShanhaiDola30 || isGlobalAiOpc || isStarFrame || isYueqiFast || zhuboSpec
+            ? uploadTemporaryReferences : uploadVideoReferencesOrUseOriginals;
         const imageUrls = await uploadReferences(
             images.map(image => image.url),
             '参考图片',
@@ -3633,7 +3688,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             }
             return await generateShanhaiVideo({
                 endpoint, providerConfig, apiKey, model, prompt,
-                duration: Number.isInteger(duration) ? duration : undefined,
+                duration: isShanhaiDola30 ? Number(shanhaiDola30Body.options.duration) : Number.isInteger(duration) ? duration : undefined,
                 ratio: ratio || '16:9', resolution: resolution || '720p',
                 imageUrls, videoUrls: referenceVideoUrls, audioUrls: referenceAudioUrls,
                 targetDir, signal: options.signal, net, fetchImpl: options.fetchImpl,
@@ -3642,6 +3697,10 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 onDownloaded: options.onDownloaded,
                 onProgress: options.onProgress
             });
+        } else if (isShanhaiDola30) {
+            const validated = buildShanhaiGenerationBody({ ...shanhaiDola30Params, imageUrls,
+                videoUrls: referenceVideoUrls, audioUrls: referenceAudioUrls });
+            if (validated.inputs?.length) body.image_urls = validated.inputs.map(input => input.url);
         } else if (isStarFrame) {
             Object.assign(body, buildStarFrameBody({ ...starFrameParams, referenceImages: imageUrls,
                 referenceVideos: referenceVideoUrls, referenceAudios: referenceAudioUrls }));
@@ -3662,12 +3721,16 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 referenceVideos: referenceVideoUrls,
                 referenceAudios: referenceAudioUrls
             }));
+        } else if (isYueqiFast) {
+            Object.assign(body, buildYueqiFastRequestBody({ endpoint, model, prompt, modelConfigEntry,
+                duration: options.duration, resolution: resolution || undefined, aspectRatio: ratio,
+                referenceImages: imageUrls, referenceVideos: referenceVideoUrls, referenceAudios: referenceAudioUrls }));
         } else if (isSeedance) {
             Object.assign(body, buildSeedance25RequestBody({
                 endpoint,
                 model,
                 prompt,
-                duration: Number.isInteger(duration) ? duration : undefined,
+                duration: zhuboSpec ? options.duration : Number.isInteger(duration) ? duration : undefined,
                 resolution: resolution || undefined,
                 aspectRatio: ratio || undefined,
                 referenceImages: imageUrls,
@@ -3692,6 +3755,9 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         let recoveringSubmission = false;
         options.onProgress?.({ stage: 'submit' });
         console.info('[FlowCanvasBridge] Video request:', JSON.stringify(summarizeVideoRequest(endpoint, body, recoveryId)));
+        recordDiagnostic('info', 'video.request', { ...summarizeVideoRequest(endpoint, body, recoveryId),
+            site: classifyErrorReportSite(endpoint), requestId: recoveryId, stage: 'submit',
+            clientTaskId: options.clientTaskId, projectId: options.projectId, nodeId: options.nodeId, model });
         const submissionTimeout = isGlobalAiOpc || isStarFrame ? createLinkedAbortController(options.signal, isStarFrame ? 120000 : 45000) : null;
         try {
             response = await net.fetch(endpoint, {
@@ -3706,6 +3772,9 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 redirect: isGlobalAiOpc || isStarFrame ? 'error' : 'follow',
                 signal: submissionTimeout?.controller.signal || options.signal
             });
+            recordDiagnostic('info', 'video.responseHeaders', { requestId: recoveryId, clientTaskId: options.clientTaskId,
+                site: classifyErrorReportSite(endpoint), status: response.status,
+                serverRequestId: response.headers?.get?.('x-request-id') || response.headers?.get?.('x-log-id') });
             text = await response.text();
         } catch (error) {
             throwIfGenerationCanceled(options.signal);
@@ -3795,7 +3864,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         const completed = await pollOpenAiVideoTask(endpoint, apiKey, taskId, initialResponse, {
             model,
             clientTaskId: options.clientTaskId,
-            preferVideoTaskEndpoint: isMiniMaxH3 || isSeedance,
+            preferVideoTaskEndpoint: isMiniMaxH3 || isSeedance || isYueqiFast || isShanhaiDola30,
             signal: options.signal,
             onTaskIdResolved: (resolvedTaskId, payload) => options.onTaskSubmitted?.({
                 taskId: resolvedTaskId,
@@ -3812,7 +3881,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             apiKey,
             model,
             taskId: completed.taskId || taskId,
-            preferVideoTaskEndpoint: isMiniMaxH3 || isSeedance,
+            preferVideoTaskEndpoint: isMiniMaxH3 || isSeedance || isYueqiFast || isShanhaiDola30,
             signal: options.signal,
             onProgress: options.onProgress
         });
@@ -3830,7 +3899,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             height: Number(options.height) || undefined
         };
     } catch (error) {
-        return { success: false, error: error.message || String(error), code: error.code,
+        return { success: false, ...(normalizePublicDetail(error) || {}), error: error.message || String(error), code: error.code,
             submissionUnknown: error.submissionUnknown === true, requestId: error.requestId,
             confirmedFailure: error.confirmedFailure === true, retryable: error.retryable, taskId: error.taskId };
     }

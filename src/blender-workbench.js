@@ -1,4 +1,5 @@
 import { mountExternalHandoff } from './external-handoff.js';
+import { creativeAppIcon } from './creative-app-icons.js';
 
 export function createBlenderPanel({ onClose, onHandoff, getProjectId = () => null }) {
     const host = document.getElementById('agentSidebarWrapper');
@@ -6,7 +7,7 @@ export function createBlenderPanel({ onClose, onHandoff, getProjectId = () => nu
     const root = document.createElement('aside');
     root.id = 'blenderWorkbenchPanel'; root.className = 'hunyuan-accounts-panel blender-workbench-panel'; root.hidden = true;
     root.setAttribute('aria-label', 'Blender 工作台');
-    root.innerHTML = `<header class="hunyuan-panel-head"><div><span class="corvas-blender-mark">B</span><h2>Blender</h2></div>
+    root.innerHTML = `<header class="hunyuan-panel-head"><div>${creativeAppIcon('blender')}<h2>Blender</h2></div>
         <button type="button" data-action="close" aria-label="关闭 Blender 侧栏">×</button></header>
         <div class="blender-workbench-content"><div class="hunyuan-panel-intro"><strong>动画与场景编辑</strong><p>Codex · Blender MCP</p></div>
         <section class="blender-connection-card"><div class="blender-connection-state"><i></i><strong data-state>未连接</strong><span data-tools></span></div>

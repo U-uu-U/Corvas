@@ -12,7 +12,7 @@ Supported relay routes:
 - `GET /v1/videos/{task}`, `/v1/video/generations/{task}`, `/v1/tasks/{task}`
 - `GET /health`
 
-The four public model IDs are kept unchanged: `oc-model-qbdmeb`,
+The public model IDs are kept unchanged: `oc-model-qbdmeb`, `oc-model-r5cfh8`,
 `oc-model-1iq31f`, `oc-model-bkb50q`, and `oc-model-c6ws7e`. The adapter accepts
 the usual `duration`/`seconds`, `aspect_ratio`/`ratio`, `resolution`, and image,
 video, and audio reference aliases. Reference URLs must already be public
@@ -22,6 +22,10 @@ request reaches this service.
 The model limits enforced here are:
 
 - `oc-model-qbdmeb`: 5, 10, or 15 seconds; 720p; at most 10 images.
+- `oc-model-r5cfh8` (dola 9-image/30-second): exactly 30 seconds; 720p; at most
+  10 images; no video or audio references. Ratios: 21:9, 16:9, 4:3, 1:1, 3:4,
+  or 9:16. The authenticated `/api/v1/models` response on 2026-09-24 reports
+  `max_reference_images: 10`, despite the 9-image display name.
 - `oc-model-1iq31f`: 5-15 seconds; 480p, 720p, or 1080p; at most 9 images.
 - `oc-model-bkb50q` and `oc-model-c6ws7e`: 4-15 seconds; 720p; no references.
 

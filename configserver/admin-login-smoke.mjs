@@ -28,14 +28,14 @@ try {
     await page.getByLabel('账号', { exact: true }).fill('other');
     await page.getByLabel('密码', { exact: true }).fill('login-local-check');
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await page.waitForURL('**/admin/login?error=1&channel=preview');
+    await page.waitForURL('**/admin/login?error=1');
     assert.ok(await page.getByText('账号或密码不正确', { exact: true }).isVisible());
     await page.getByLabel('账号', { exact: true }).fill('admin');
     await page.getByLabel('密码', { exact: true }).fill('login-local-check');
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await page.waitForURL('**/admin?channel=preview');
+    await page.waitForURL('**/admin');
     await page.locator('#catalogPane').waitFor({ state: 'visible' });
-    console.log('PASS admin username/password login, autofill attributes, wrong username rejection, preview return, desktop/mobile.');
+    console.log('PASS admin username/password login, autofill attributes, wrong username rejection, unified legacy preview entry, desktop/mobile.');
 } finally {
     await browser?.close();
     await server?.close();

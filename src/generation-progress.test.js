@@ -5,6 +5,49 @@ import { formatGenerationElapsed, isGenerationRecoveryActive, canRecoverGenerati
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { imageRequestFailure } = require('../electron-main/image-request-diagnostics.cjs');
+const { SD2_FAST_DURATION_CODE, SD2_FAST_DURATION_MESSAGE, createSd2FastDurationError,
+    getSd2FastDurationConstraint } = require('../shared/sd2-fast-validation.cjs');
+
+test('SD2 Fast duration rules match only known hosts and resolutions', () => {
+    for (const host of ['art.ravenhash.org', 'cart.ravenhash.org', 'yueqi.icu']) {
+        const provider = { model: 'sd2-fast', endpoint: `https://${host}/v1` };
+        assert.deepEqual(getSd2FastDurationConstraint(provider, '720p'), { min: 1, max: 12, resolution: '720p' });
+        assert.deepEqual(getSd2FastDurationConstraint(provider, '480p'), { min: 1, max: 15, resolution: '480p' });
+        assert.deepEqual(getSd2FastDurationConstraint(provider), { min: 1, max: 12, resolution: '720p' });
+        assert.equal(getSd2FastDurationConstraint(provider, '1080p'), null);
+    }
+    for (const provider of [undefined, { model: 'sd2-fast', endpoint: 'invalid' },
+        { model: 'sd2-fast-other', endpoint: 'https://art.ravenhash.org/v1' },
+        { model: 'sd2-fast', endpoint: 'https://art.ravenhash.org.other.test/v1' }]) {
+        assert.equal(getSd2FastDurationConstraint(provider, '720p'), null);
+    }
+});
+
+test('SD2 Fast duration errors retain fixed parameter guidance through repeated display formatting', () => {
+    const source = createSd2FastDurationError();
+    const error = generationFailureError({ error: source.message, code: source.code, retryable: source.retryable });
+    assert.equal(error.code, SD2_FAST_DURATION_CODE);
+    assert.equal(error.retryable, false);
+    for (const value of [error, error.message, `请求失败：${error.message}`, { code: source.code }]) {
+        const message = formatClientGenerationError(value);
+        assert.equal(message, SD2_FAST_DURATION_MESSAGE);
+        assert.match(message, /720p 支持 1 到 12 秒/);
+        assert.match(message, /480p 支持 1 到 15 秒/);
+        assert.doesNotMatch(message, /稍后重试/);
+    }
+});
+
+test('local duration codes rebuild fixed messages without echoing upstream details', () => {
+    const dirty = 'vendor=private-provider channel=private-991 https://upstream.test/private?token=secret';
+    assert.equal(formatClientGenerationError({ code: SD2_FAST_DURATION_CODE, error: dirty,
+        details: { resolution: dirty, max: dirty } }), SD2_FAST_DURATION_MESSAGE);
+    assert.equal(formatClientGenerationError(`${SD2_FAST_DURATION_MESSAGE} ${dirty}`), SD2_FAST_DURATION_MESSAGE);
+    for (const value of [dirty, { code: 'LOCAL_OTHER_DURATION', error: dirty }]) {
+        const message = formatClientGenerationError(value);
+        assert.doesNotMatch(message, /vendor|private|secret|upstream/);
+        assert.doesNotMatch(message, /720p 支持/);
+    }
+});
 
 test('uncertain submission keeps no-resubmit guidance and correlation through repeated display formatting', () => {
     const source = imageRequestFailure(new Error('net::ERR_EMPTY_RESPONSE'), {
@@ -117,4 +160,32 @@ test('image and video recovery can use either a remote task ID or a downloaded c
         assert.equal(canRecoverGenerationTask({ kind, filePath: 'output.png' }), true);
         assert.equal(canRecoverGenerationTask({ kind }), false);
     }
+});
+
+test('structured numeric errors survive repeated formatting without exposing arbitrary text', () => {
+    const raw = { protocolVersion: 2, code: 'LOCAL_MODEL_PARAMETER_INVALID', category: 'parameter',
+        stage: 'validate', submissionState: 'not_submitted', action: 'edit_parameters', requestId: 'fc_12345678',
+        error: 'supplier: private-company https://private.test sk-secret cost 0.42 RMB',
+        parameterIssues: [{ field: 'duration', rule: 'range', min: 1, max: 12, actual: 15, resolution: '720p' }] };
+    const error = generationFailureError(raw);
+    assert.match(error.message, /720p 视频时长应为 1 到 12 秒，当前为 15 秒/);
+    assert.match(error.message, /尚未提交/);
+    assert.equal(error.protocolVersion, 2);
+    for (const value of [error, error.message, { ...raw, error: error.message }]) {
+        assert.equal(formatClientGenerationError(value), error.message);
+        assert.doesNotMatch(formatClientGenerationError(value), /private|supplier|secret|cost|0\.42/);
+    }
+    const malicious = '分辨率仅支持 supplier。\n本次请求尚未提交。';
+    assert.doesNotMatch(formatClientGenerationError(malicious), /supplier/);
+    assert.doesNotMatch(formatClientGenerationError(error.message + '\nsupplier: secret'), /supplier|secret/);
+});
+
+test('structured future codes show safe generic categories and preserve no-resubmit state', () => {
+    const error = generationFailureError({ protocolVersion: 2, code: 'RH_NEW_UNKNOWN_ERROR', category: 'asset',
+        stage: 'submit', submissionState: 'unknown', action: 'contact_support',
+        error: 'vendor secret', parameterIssues: [{ field: 'image_count', rule: 'max', max: 9, actual: 10 }] });
+    assert.match(error.message, /参考图片数量最多 9，当前为 10/);
+    assert.match(error.message, /不要重复提交/);
+    assert.equal(error.submissionUnknown, true);
+    assert.equal(formatClientGenerationError(error.message), error.message);
 });

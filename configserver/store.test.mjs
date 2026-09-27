@@ -154,7 +154,7 @@ test('同秒内连续保存不会互相覆盖', () => {
     }
 });
 
-test('源码预览兼容旧 state，发布清空及回滚均不改变正式配置', () => {
+test('旧 preview 入口与正式入口共用发布、草稿和回滚，历史版本仍可读取', () => {
     const { store, dataDir, cleanup } = tempStore();
     try {
         store.ensureSeed();
@@ -163,41 +163,40 @@ test('源码预览兼容旧 state，发布清空及回滚均不改变正式配�
         delete legacyState.preview;
         delete legacyState.previewAppliedAt;
         fs.writeFileSync(store.statePath, JSON.stringify(legacyState));
-        assert.equal(store.current('preview'), null);
+        assert.equal(store.current('preview').name, stable.name);
 
         const first = store.save(sampleConfig(3), { channel: 'preview' });
         const empty = store.save({ schemaVersion: 1, catalogMode: 'remote', models: [] }, { channel: 'preview' });
         assert.equal(empty.revision, first.revision + 1);
         assert.deepEqual(store.current('preview').config.models, []);
-        assert.equal(store.current().name, stable.name);
-        assert.equal(store.current().text, stable.text);
-        assert.equal(store.readState().appliedAt, legacyState.appliedAt);
+        assert.equal(store.current().name, empty.name);
+        assert.equal(store.current().text, store.current('preview').text);
 
         store.apply(first.name, { channel: 'preview' });
         assert.equal(store.current('preview').name, first.name);
-        assert.equal(store.current().text, stable.text);
-        const previewTime = store.readState().previewAppliedAt;
+        assert.equal(store.current().name, first.name);
+        const draft = store.save(sampleConfig(8), { channel: 'preview', apply: false });
+        assert.equal(store.current().name, first.name);
+        assert.equal(store.current('preview').name, first.name);
         const nextStable = store.save(sampleConfig(4));
-        assert.equal(nextStable.revision, empty.revision + 1);
-        assert.equal(store.readState().previewAppliedAt, previewTime);
-        assert.equal(store.current('preview').name, first.name);
+        assert.equal(nextStable.revision, draft.revision + 1);
+        assert.equal(store.current('preview').name, nextStable.name);
         store.remove(empty.name);
-        assert.equal(store.current('preview').name, first.name);
-        assert.throws(() => store.remove(first.name), /不能删除当前正在生效的版本/);
+        assert.equal(store.current('preview').name, nextStable.name);
         assert.throws(() => store.remove(nextStable.name), /不能删除当前正在生效的版本/);
-        assert.equal(store.list().find(item => item.name === first.name).preview, true);
+        assert.equal(store.list().find(item => item.name === first.name).preview, false);
         assert.equal(store.list().find(item => item.name === nextStable.name).current, true);
 
         const reopened = createConfigStore({ dataDir, seedPath: SEED, logger: SILENT });
         reopened.ensureSeed();
-        assert.equal(reopened.current('preview').name, first.name);
+        assert.equal(reopened.current('preview').name, nextStable.name);
         assert.equal(reopened.current().name, nextStable.name);
         reopened.apply(first.name);
         const both = reopened.list().find(item => item.name === first.name);
         assert.equal(both.current, true);
         assert.equal(both.preview, true);
         assert.throws(() => reopened.save(sampleConfig(5), { channel: 'typo' }), /配置通道/);
-        assert.equal(reopened.list().length, 3);
+        assert.equal(reopened.list().length, 4);
     } finally {
         cleanup();
     }
@@ -208,16 +207,16 @@ test('正式指针损坏时不会把最新源码预览自动发布为正式配�
     try {
         store.ensureSeed();
         const stableName = store.current().name;
-        const preview = store.save({ schemaVersion: 1, catalogMode: 'remote', models: [] }, { channel: 'preview' });
-        const state = { ...store.readState(), current: '20000101T000000-r999.json' };
+        const preview = store.save({ schemaVersion: 1, catalogMode: 'remote', models: [] }, { apply: false });
+        const state = { ...store.readState(), current: '20000101T000000-r999.json', preview: preview.name };
         fs.writeFileSync(store.statePath, JSON.stringify(state));
         store.ensureSeed();
         assert.equal(store.current(), null);
         assert.equal(store.readState().current, state.current);
-        assert.equal(store.current('preview').name, preview.name);
+        assert.equal(store.current('preview'), null);
         store.apply(stableName);
         assert.equal(store.current().name, stableName);
-        assert.equal(store.current('preview').name, preview.name);
+        assert.equal(store.current('preview').name, stableName);
     } finally {
         cleanup();
     }

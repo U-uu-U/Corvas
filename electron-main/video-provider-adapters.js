@@ -1,5 +1,36 @@
 const { isGlobalAiOpcModel, globalAiOpcEndpoint } = require('./globalaiopc-video.cjs');
 const { isStarFrameModel, starFrameEndpoint } = require('./starframe-video.cjs');
+const path = require('node:path');
+const { isSd2FastProvider, getSd2FastDurationConstraint, createSd2FastDurationError } = require('../shared/sd2-fast-validation.cjs');
+const modelParameterRules = require('../shared/model-parameter-rules.cjs');
+
+const ZHUBO_VIDEO_MODELS = Object.freeze({
+    'LongXia-video-seedance2_5-standard-480p-express-PerSecond': { resolution: '480p', maxDuration: 25, audioMegabytes: 15, audioExtensions: ['.mp3'] },
+    'LongXia-video-seedance2_5-standard-720p-express-PerSecond': { resolution: '720p', maxDuration: 25, audioMegabytes: 15, audioExtensions: ['.mp3'] },
+    'seedance-2.5-480p': { resolution: '480p', maxDuration: 30, audioMegabytes: 20, audioExtensions: ['.mp3', '.wav'] },
+    'seedance-2.5-720p': { resolution: '720p', maxDuration: 30, audioMegabytes: 20, audioExtensions: ['.mp3', '.wav'] },
+    'seedance-2.5-1080p': { resolution: '1080p', maxDuration: 30, audioMegabytes: 20, audioExtensions: ['.mp3', '.wav'] }
+});
+
+function getZhuboVideoModelSpec(model, endpoint) {
+    const id = String(model || '').trim();
+    if (!Object.hasOwn(ZHUBO_VIDEO_MODELS, id)) return null;
+    try {
+        return ['art.ravenhash.org', 'cart.ravenhash.org', 'video.zhubo.asia']
+            .includes(new URL(String(endpoint || '').trim()).hostname.toLowerCase()) ? ZHUBO_VIDEO_MODELS[id] : null;
+    } catch { return null; }
+}
+
+function assertZhuboVideoReferenceFile(model, endpoint, { filePath, size, mediaType }) {
+    const spec = getZhuboVideoModelSpec(model, endpoint);
+    if (!spec) return;
+    if (mediaType === 'image' && size > 20 * 1024 * 1024) throw new Error('主播参考图片不能超过 20 MB');
+    if (mediaType !== 'audio') return;
+    if (!spec.audioExtensions.includes(path.extname(filePath).toLowerCase())) {
+        throw new Error(`主播音频参考仅支持 ${spec.audioExtensions.map(extension => extension.slice(1).toUpperCase()).join(' 或 ')}`);
+    }
+    if (size > spec.audioMegabytes * 1024 * 1024) throw new Error(`主播音频参考不能超过 ${spec.audioMegabytes} MB`);
+}
 
 function isMiniMaxH3Model(model) {
     return /minimax[^a-z0-9]*h3/i.test(String(model || ''));
@@ -26,8 +57,14 @@ function isYueqiPro720Model(model, endpoint) {
     } catch { return false; }
 }
 
+function isYueqiFastModel(model, endpoint) {
+    return isSd2FastProvider({ model, endpoint });
+}
+
 function seedanceReferenceLimits(model, endpoint) {
     const id = String(model || '').trim().toLowerCase();
+    if (getZhuboVideoModelSpec(model, endpoint)) return { image: 30, video: 0, audio: 10 };
+    if (isYueqiFastModel(model, endpoint)) return { image: 9, video: 3, audio: 0 };
     if (isYueqiPro720Model(model, endpoint)) return { image: 30, video: 10, audio: 10 };
     if (id === 'seedance-2.5-pro') return { image: 30, video: 10, audio: 10 };
     if (id === 'seedance_v2.0-933') return { image: 9, video: 3, audio: 3 };
@@ -208,8 +245,9 @@ function buildSeedance25RequestBody({
     } = {}) {
     const label = /^seedance_v2\.0-933$/i.test(String(model || '').trim()) ? 'Seedance 2.0' : 'Seedance 2.5';
     const isYueqiPro720 = isYueqiPro720Model(model, endpoint);
+    const zhuboSpec = getZhuboVideoModelSpec(model, endpoint);
     const minDuration = isYueqiPro720 ? 1 : 4;
-    const maxDuration = isYueqiPro720 ? 60 : label === 'Seedance 2.0' ? 15 : 30;
+    const maxDuration = zhuboSpec?.maxDuration ?? (isYueqiPro720 ? 60 : label === 'Seedance 2.0' ? 15 : 30);
     const promptValue = String(prompt || '').trim();
     if (!promptValue) throw new Error(`${label} 提示词不能为空`);
 
@@ -251,14 +289,73 @@ function buildSeedance25RequestBody({
     if (isYueqiPro720 && resolution && resolution !== '720p') {
         throw new Error('Seedance 2.5 Pro 720 仅支持 720p');
     }
+    if (zhuboSpec && resolution && resolution !== zhuboSpec.resolution) {
+        throw new Error(`主播当前模型仅支持 ${zhuboSpec.resolution}`);
+    }
     const body = {
         model: String(model || '').trim(),
         prompt: promptValue,
-        resolution: String(model).toLowerCase() === 'seedance-2.5-pro' ? (resolution || '720p') : '720p',
+        resolution: zhuboSpec?.resolution ?? (String(model).toLowerCase() === 'seedance-2.5-pro' ? (resolution || '720p') : '720p'),
         seconds: durationValue
     };
-    if (!['480p', '720p'].includes(body.resolution)) throw new Error(`${label} Pro 仅支持 480p 或 720p`);
+    if (!zhuboSpec && !['480p', '720p'].includes(body.resolution)) throw new Error(`${label} Pro 仅支持 480p 或 720p`);
     if (ratioValue) body.ratio = ratioValue;
+    if (images.length > 0) body.image_urls = images;
+    if (videos.length > 0) body.video_urls = videos;
+    if (audios.length > 0) body.audio_urls = audios;
+    return body;
+}
+
+function buildYueqiFastRequestBody({
+    endpoint,
+    model,
+    prompt,
+    duration,
+    aspectRatio,
+    resolution,
+    modelConfigEntry,
+    referenceImages = [],
+    referenceVideos = [],
+    referenceAudios = []
+} = {}) {
+    if (!isYueqiFastModel(model, endpoint)) throw new Error('SD2 Fast 不支持当前模型或 API 地址');
+    const promptValue = String(prompt || '').trim();
+    if (!promptValue) throw new Error('SD2 Fast 提示词不能为空');
+    const resolutionValue = String(resolution || '720p').trim().toLowerCase();
+    const remoteRules = modelConfigEntry?.parameterRules !== undefined;
+    if (!remoteRules && !['480p', '720p'].includes(resolutionValue)) throw new Error('SD2 Fast 仅支持 480p 或 720p');
+    const durationConstraint = getSd2FastDurationConstraint({ model, endpoint }, resolutionValue);
+    const durationValue = duration === undefined || duration === null || duration === '' ? 10 : Number(duration);
+    if (!remoteRules && (!Number.isInteger(durationValue) || durationValue < durationConstraint.min || durationValue > durationConstraint.max)) {
+        throw createSd2FastDurationError();
+    }
+    const ratioValue = String(aspectRatio || '16:9').trim();
+    if (!remoteRules && !['16:9', '9:16', '1:1', '4:3', '3:4'].includes(ratioValue)) {
+        throw new Error(`SD2 Fast 不支持画幅比例 ${ratioValue}`);
+    }
+    const urls = values => (Array.isArray(values) ? values : [])
+        .map(value => String(typeof value === 'string' ? value : value?.url || '').trim()).filter(Boolean);
+    const images = urls(referenceImages);
+    const videos = urls(referenceVideos);
+    const audios = urls(referenceAudios);
+    if (remoteRules) {
+        const result = modelParameterRules.validateModelParameterRequest(modelConfigEntry,
+            { resolutionTier: resolutionValue, duration: durationValue, ratio: ratioValue },
+            { image: images.length, video: videos.length, audio: audios.length });
+        if (!result.ok) throw modelParameterRules.createParameterValidationError(result.issues);
+    } else {
+        if (images.length > 9) throw new Error('SD2 Fast 最多支持 9 张参考图片');
+        if (videos.length > 3) throw new Error('SD2 Fast 最多支持 3 个参考视频');
+        if (audios.length > 0) throw new Error('SD2 Fast 不支持参考音频');
+    }
+    const body = {
+        model: String(model).trim(),
+        prompt: promptValue,
+        resolution: resolutionValue,
+        aspect_ratio: ratioValue,
+        duration: durationValue,
+        seconds: String(durationValue)
+    };
     if (images.length > 0) body.image_urls = images;
     if (videos.length > 0) body.video_urls = videos;
     if (audios.length > 0) body.audio_urls = audios;
@@ -351,6 +448,17 @@ function buildUnifiedVideoEndpoint(endpoint) {
 function buildVideoGenerationEndpoint(endpoint, model) {
     if (isStarFrameModel(model)) return starFrameEndpoint(endpoint);
     if (isGlobalAiOpcModel(model)) return globalAiOpcEndpoint(endpoint);
+    if (isYueqiFastModel(model, endpoint)) {
+        return new URL(String(endpoint).trim()).hostname.toLowerCase() === 'yueqi.icu'
+            ? buildUnifiedVideoEndpoint(endpoint)
+            : buildOpenAiVideoEndpoint(endpoint);
+    }
+    if (getZhuboVideoModelSpec(model, endpoint)) {
+        const url = new URL(String(endpoint).trim());
+        if (url.hostname.toLowerCase() === 'video.zhubo.asia') return buildUnifiedVideoEndpoint(endpoint);
+        url.pathname = url.pathname.replace(/\/videos\/?$/i, '/video/generations');
+        return buildOpenAiVideoEndpoint(url.toString());
+    }
     if (isSeedanceVideoModel(model)) {
         try {
             const url = new URL(String(endpoint || '').trim());
@@ -560,16 +668,19 @@ function isMiniMaxH3UnavailableResponse(statusCode, responseText = '') {
 }
 
 module.exports = {
+    assertZhuboVideoReferenceFile,
     buildMiniMaxH3RequestBody,
     buildMiniMaxH3TaskEndpoint,
     buildOpenAiVideoEndpoint,
     buildSeedance25RequestBody,
+    buildYueqiFastRequestBody,
     buildVideoGenerationEndpoint,
     getVideoPayloadError,
     getVideoResultUrl,
     getVideoTaskId,
     getVideoTaskProgress,
     getVideoTaskStatus,
+    getZhuboVideoModelSpec,
     isMiniMaxH3Model,
     isMiniMaxH3NativeEndpoint,
     isMiniMaxH3PerSecondEndpoint,
@@ -577,6 +688,7 @@ module.exports = {
     isSeedance25BackupModel,
     isSeedance25Model,
     isSeedanceVideoModel,
+    isYueqiFastModel,
     seedanceReferenceLimits,
     normalizeMiniMaxH3RequestModel,
     resolveSeedance25AspectRatio,

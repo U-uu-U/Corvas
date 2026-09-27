@@ -73,6 +73,7 @@ try {
     await page.locator('#catalogDialogLabel').fill('测试渠道组');
     await page.locator('#catalogDialogConfirm').click();
     await page.locator('#catalogGroups [data-catalog-group]').waitFor({ state: 'visible' });
+    await page.locator('#catalogUngrouped [data-model-action="move"]').click();
     assert.ok((await page.locator('#catalogGroups').textContent()).includes('当前使用：测试视频渠道'));
     await page.locator('#renameGroupBtn').click();
     await page.locator('#catalogDialogLabel').fill('备用分组测试');
@@ -107,21 +108,21 @@ try {
     assert.equal(published.models[1].presentation.label, '独立视频模型');
     const stableText = server.store.current().text;
     const stableName = server.store.current().name;
-    assert.equal((await fetch(`${server.url}/config/preview`)).status, 404);
-    await page.getByRole('link', { name: '源码预览', exact: true }).click();
+    assert.equal(await fetch(`${server.url}/config/preview`).then(response => response.text()), stableText);
+    await page.goto(`${server.url}/admin?channel=preview`);
     await page.waitForURL('**/admin?channel=preview');
     await page.locator('#catalogPane').waitFor({ state: 'visible' });
-    assert.equal(await page.locator('.channel-nav a[aria-current="page"]').textContent(), '源码预览');
-    assert.equal(await page.locator('#configForm input[name="channel"]').inputValue(), 'preview');
+    assert.equal(await page.locator('.channel-nav').count(), 0);
+    assert.equal(await page.locator('#configForm input[name="channel"]').inputValue(), 'stable');
     assert.deepEqual((await snapshot()).models, published.models);
     await page.locator('#clearCatalogBtn').click();
     await page.locator('#catalogDialogConfirm').click();
     await page.locator('#saveBtn').click();
-    await page.waitForURL(url => url.pathname === '/admin' && url.searchParams.get('channel') === 'preview'
+    await page.waitForURL(url => url.pathname === '/admin' && !url.searchParams.has('channel')
         && url.searchParams.has('flash'));
     const emptyPreview = server.store.current('preview').name;
     assert.deepEqual((await fetch(`${server.url}/config/preview`).then(response => response.json())).models, []);
-    assert.equal(await fetch(`${server.url}/config`).then(response => response.text()), stableText);
+    assert.deepEqual((await fetch(`${server.url}/config`).then(response => response.json())).models, []);
     await page.locator('#addModelBtn').click();
     await page.locator('#catalogDialogLabel').fill('Seedance 2.5 源码预览');
     await page.locator('#catalogDialogModel').fill('preview.seedance-2.5');
@@ -131,29 +132,30 @@ try {
     await page.locator('#createGroupBtn').click();
     await page.locator('#catalogDialogLabel').fill('Seedance 2.5 推荐渠道');
     await page.locator('#catalogDialogConfirm').click();
+    await page.locator('#catalogUngrouped [data-model-action="move"]').click();
     await page.locator('#saveBtn').click();
-    await page.waitForURL(url => url.pathname === '/admin' && url.searchParams.get('channel') === 'preview'
+    await page.waitForURL(url => url.pathname === '/admin' && !url.searchParams.has('channel')
         && url.searchParams.has('flash'));
     assert.equal(server.store.current('preview').config.models[0].catalog.model, 'preview.seedance-2.5');
-    assert.equal(server.store.current().name, stableName);
-    assert.equal(server.store.current().text, stableText);
+    assert.notEqual(server.store.current().name, stableName);
+    assert.equal(server.store.current().text, server.store.current('preview').text);
     await page.locator('#resetBtn').click();
-    await page.waitForURL('**/admin?channel=preview');
+    await page.waitForURL('**/admin');
     await page.locator('#catalogPane').waitFor({ state: 'visible' });
     assert.equal((await snapshot()).models.length, 1);
-    assert.equal(await page.locator('.channel-nav a[aria-current="page"]').textContent(), '源码预览');
+    assert.equal(await page.locator('.channel-nav').count(), 0);
     await assertLayout();
     await page.screenshot({ path: path.join(screenshots, 'config-preview-admin-desktop.png') });
-    await page.locator(`a[href="/admin?channel=preview&version=${emptyPreview}"]`).click();
-    await page.waitForURL(url => url.searchParams.get('channel') === 'preview' && url.searchParams.get('version') === emptyPreview);
+    await page.locator(`a[href="/admin?version=${emptyPreview}"]`).click();
+    await page.waitForURL(url => url.searchParams.get('version') === emptyPreview);
     assert.deepEqual((await snapshot()).models, []);
     await page.locator(`form[action="/admin/apply"]:has(input[value="${emptyPreview}"]) button`).click();
-    await page.waitForURL(url => url.pathname === '/admin' && url.searchParams.get('channel') === 'preview'
+    await page.waitForURL(url => url.pathname === '/admin' && !url.searchParams.has('channel')
         && url.searchParams.has('flash'));
     assert.equal(server.store.current('preview').name, emptyPreview);
-    assert.equal(server.store.current().text, stableText);
+    assert.equal(server.store.current().text, server.store.current('preview').text);
     assert.deepEqual(errors, []);
-    console.log('PASS catalog operation: desktop/mobile, clear/undo/redo, add/copy, group/rename/move, visibility, form/JSON, validate/publish, isolated preview clear/add/reset/rollback.');
+    console.log('PASS catalog operation: desktop/mobile, clear/undo/redo, add/copy, group/rename/move, visibility, form/JSON, validate/publish, unified legacy preview clear/add/reset/rollback.');
 } finally {
     await browser?.close();
     await server?.close();

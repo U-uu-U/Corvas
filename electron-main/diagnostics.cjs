@@ -15,7 +15,9 @@ function sanitize(value, secrets = [], seen = new WeakSet(), depth = 0) {
             .replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/gi, '[MEDIA REDACTED]')
             .slice(0, 6000);
     }
-    if (value instanceof Error) return sanitize({ name: value.name, code: value.code, message: value.message, stack: value.stack }, secrets, seen, depth + 1);
+    if (value instanceof Error) return sanitize({ name: value.name, code: value.code, message: value.message, stack: value.stack,
+        requestId: value.requestId, taskId: value.taskId, stage: value.stage, category: value.category,
+        submissionState: value.submissionState, parameterIssues: value.parameterIssues }, secrets, seen, depth + 1);
     if (!value || typeof value !== 'object') return value;
     if (Buffer.isBuffer(value)) return `[Buffer ${value.length} bytes]`;
     if (seen.has(value)) return '[Circular]';

@@ -9,6 +9,7 @@
 // 全部写入都是「临时文件 + rename」：进程被杀不会留下半个 JSON，客户端不会读到截断内容。
 import fs from 'node:fs';
 import path from 'node:path';
+import { normalizeCatalogWorkspace } from './admin-catalog-model.mjs';
 
 // 版本文件名：20260911T230012-r7.json（同日同秒冲突时加 -01 后缀）
 export const VERSION_FILE_PATTERN = /^\d{8}T\d{6}(?:-\d{2})?-r\d+\.json$/;
@@ -41,14 +42,14 @@ function readJson(filePath) {
 const AUDIT_LIMIT = 300;
 
 export function normalizeConfigChannel(channel = 'stable') {
-    if (channel === 'stable' || channel === 'preview') return channel;
+    // Keep legacy preview callers compatible with the single published catalog.
+    if (channel === 'stable' || channel === 'preview') return 'stable';
     throw new Error('配置通道必须是 stable 或 preview');
 }
 
 function channelFields(channel) {
-    return normalizeConfigChannel(channel) === 'preview'
-        ? { pointer: 'preview', appliedAt: 'previewAppliedAt' }
-        : { pointer: 'current', appliedAt: 'appliedAt' };
+    normalizeConfigChannel(channel);
+    return { pointer: 'current', appliedAt: 'appliedAt' };
 }
 
 export function createConfigStore({ dataDir, seedPath = '', now = () => new Date(), logger = console } = {}) {
@@ -161,7 +162,7 @@ export function createConfigStore({ dataDir, seedPath = '', now = () => new Date
                 config = file.config;
                 size = Buffer.byteLength(file.text, 'utf8');
             } catch (_) {
-                return { name, broken: true, revision: null, modelCount: 0, size: 0, current: name === state.current, preview: name === state.preview };
+                return { name, broken: true, revision: null, modelCount: 0, size: 0, current: name === state.current, preview: name === state.current };
             }
             return {
                 name,
@@ -173,7 +174,7 @@ export function createConfigStore({ dataDir, seedPath = '', now = () => new Date
                 size,
                 mtimeMs: fs.statSync(versionPath(name)).mtimeMs,
                 current: name === state.current,
-                preview: name === state.preview
+                preview: name === state.current
             };
         });
     }
@@ -196,11 +197,12 @@ export function createConfigStore({ dataDir, seedPath = '', now = () => new Date
      *   revision / updatedAt / source 由服务端盖章，避免管理员手改导致客户端版本号混乱。
      */
     function save(config, { actor = 'admin', apply = true, note = '', source = 'server:artconfig.ravenhash.org', channel = 'stable' } = {}) {
+        channel = normalizeConfigChannel(channel);
         const fields = channelFields(channel);
         const date = now();
         const revision = maxRevision() + 1;
         const stamped = {
-            ...config,
+            ...normalizeCatalogWorkspace(config),
             schemaVersion: Number(config.schemaVersion) || 1,
             revision,
             updatedAt: date.toISOString(),
@@ -220,6 +222,7 @@ export function createConfigStore({ dataDir, seedPath = '', now = () => new Date
 
     // 「一键应用老的到现行」：只改指针，不碰文件内容。
     function apply(name, { actor = 'admin', note = '', channel = 'stable' } = {}) {
+        channel = normalizeConfigChannel(channel);
         const fields = channelFields(channel);
         const file = readConfigFile(name); // 顺带验证文件存在且是合法 JSON
         const state = readState();
@@ -232,7 +235,7 @@ export function createConfigStore({ dataDir, seedPath = '', now = () => new Date
 
     function remove(name, { actor = 'admin' } = {}) {
         const state = readState();
-        if (name === state.current || name === state.preview) throw new Error('不能删除当前正在生效的版本，请先切换正式配置或源码预览到其它版本');
+        if (name === state.current) throw new Error('不能删除当前正在生效的版本，请先切换到其它版本');
         const filePath = versionPath(name);
         if (!fs.existsSync(filePath)) throw new Error('版本不存在');
         fs.unlinkSync(filePath);

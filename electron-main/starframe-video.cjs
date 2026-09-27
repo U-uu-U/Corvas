@@ -57,10 +57,11 @@ function buildStarFrameBody({ model = STARFRAME_MODEL, clientTaskId, prompt, dur
     const audios = urls(referenceAudios, limits.audio, '参考音频');
     const body = { model: normalizedModel, client_task_id: starFrameClientId(clientTaskId), prompt: text,
         mode: 'references', duration: Number(duration), resolution: '720p' };
-    if (aspectRatio) {
-        if (!/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(aspectRatio)
-            || String(aspectRatio).split(':').some(value => !(Number(value) > 0))) throw new Error('StarFrame 画幅比例格式无效');
-        body.aspect_ratio = aspectRatio;
+    const ratio = String(aspectRatio || '').trim() || (normalizedModel === STARFRAME_MODEL ? '16:9' : '');
+    if (ratio) {
+        if (!/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(ratio)
+            || ratio.split(':').some(value => !(Number(value) > 0))) throw new Error('StarFrame 画幅比例格式无效');
+        body.aspect_ratio = ratio;
     }
     const references = {};
     for (const [singular, plural, values] of [['image', 'images', images], ['video', 'videos', videos], ['audio', 'audios', audios]]) {

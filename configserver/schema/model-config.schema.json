@@ -11,6 +11,14 @@
         "updatedAt": { "type": "string" },
         "source": { "type": "string" },
         "catalogMode": { "enum": ["fallback", "remote"] },
+        "defaultModels": {
+            "type": "object", "additionalProperties": false,
+            "properties": {
+                "video": { "type": "string", "minLength": 1, "maxLength": 200 },
+                "image": { "type": "string", "minLength": 1, "maxLength": 200 },
+                "text": { "type": "string", "minLength": 1, "maxLength": 200 }
+            }
+        },
         "catalogScope": {
             "type": "object", "additionalProperties": false,
             "required": ["hosts", "kinds"],
@@ -157,6 +165,85 @@
                 }
             ]
         },
+        "parameterRuleScalar": {
+            "oneOf": [
+                { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+                { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_.:+/-]+$" }
+            ]
+        },
+        "parameterRuleConstraint": {
+            "type": "object", "additionalProperties": false, "required": ["type"],
+            "properties": {
+                "type": { "enum": ["range", "fixed", "enum"] },
+                "min": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+                "max": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+                "integer": { "type": "boolean" },
+                "step": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000 },
+                "default": { "$ref": "#/definitions/parameterRuleScalar" },
+                "allowAuto": { "type": "boolean" },
+                "value": { "$ref": "#/definitions/parameterRuleScalar" },
+                "values": { "type": "array", "minItems": 1, "maxItems": 120, "uniqueItems": true,
+                    "items": { "$ref": "#/definitions/parameterRuleScalar" } }
+            },
+            "allOf": [
+                { "if": { "properties": { "type": { "const": "range" } } }, "then": { "required": ["min", "max"] } },
+                { "if": { "properties": { "type": { "const": "fixed" } } }, "then": { "required": ["value"] } },
+                { "if": { "properties": { "type": { "const": "enum" } } }, "then": { "required": ["values"] } }
+            ]
+        },
+        "parameterRuleOptions": {
+            "type": "object", "additionalProperties": false, "minProperties": 1,
+            "properties": {
+                "resolutionTier": { "$ref": "#/definitions/parameterRuleConstraint" },
+                "ratio": { "$ref": "#/definitions/parameterRuleConstraint" },
+                "duration": { "$ref": "#/definitions/parameterRuleConstraint" },
+                "quality": { "$ref": "#/definitions/parameterRuleConstraint" },
+                "n": { "$ref": "#/definitions/parameterRuleConstraint" }
+            }
+        },
+        "parameterRuleReference": {
+            "type": "object", "additionalProperties": false, "required": ["supported"],
+            "properties": {
+                "supported": { "type": "boolean" },
+                "min": { "type": "integer", "minimum": 0, "maximum": 1073741824 },
+                "max": { "type": "integer", "minimum": 0, "maximum": 1073741824 },
+                "maxBytesPerImage": { "type": "integer", "minimum": 0, "maximum": 1073741824 }
+            }
+        },
+        "parameterRules": {
+            "type": "object", "additionalProperties": false, "required": ["version", "rules"],
+            "properties": {
+                "version": { "type": "integer", "minimum": 1 },
+                "rules": {
+                    "type": "array", "maxItems": 64,
+                    "items": {
+                        "type": "object", "additionalProperties": false, "required": ["when"],
+                        "anyOf": [{ "required": ["options"] }, { "required": ["capabilities"] }],
+                        "properties": {
+                            "when": {
+                                "type": "object", "additionalProperties": false, "minProperties": 1,
+                                "properties": {
+                                    "resolutionTier": { "$ref": "#/definitions/parameterRuleScalar" },
+                                    "ratio": { "$ref": "#/definitions/parameterRuleScalar" },
+                                    "duration": { "$ref": "#/definitions/parameterRuleScalar" },
+                                    "quality": { "$ref": "#/definitions/parameterRuleScalar" },
+                                    "n": { "$ref": "#/definitions/parameterRuleScalar" }
+                                }
+                            },
+                            "options": { "$ref": "#/definitions/parameterRuleOptions" },
+                            "capabilities": {
+                                "type": "object", "additionalProperties": false, "minProperties": 1,
+                                "properties": {
+                                    "referenceImages": { "$ref": "#/definitions/parameterRuleReference" },
+                                    "referenceVideos": { "$ref": "#/definitions/parameterRuleReference" },
+                                    "referenceAudios": { "$ref": "#/definitions/parameterRuleReference" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "capability": {
             "type": "object",
             "required": ["supported"],
@@ -220,6 +307,44 @@
                 }
             ]
         },
+        "salePrices": {
+            "type": "array", "maxItems": 2, "uniqueItems": true,
+            "items": { "$ref": "#/definitions/siteSalePrice" },
+            "if": { "minItems": 2 },
+            "then": {
+                "allOf": [
+                    { "contains": { "properties": { "host": { "const": "art.ravenhash.org" } } } },
+                    { "contains": { "properties": { "host": { "const": "cart.ravenhash.org" } } } }
+                ]
+            }
+        },
+        "siteSalePrice": {
+            "type": "object", "additionalProperties": false,
+            "required": ["host", "status", "currency", "kind", "source", "updatedAt", "prices"],
+            "properties": {
+                "host": { "enum": ["art.ravenhash.org", "cart.ravenhash.org"] },
+                "status": { "enum": ["known", "unknown"] },
+                "currency": { "enum": ["CNY", "USD"] },
+                "kind": { "const": "sale" },
+                "source": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
+                "updatedAt": { "type": "string", "format": "date-time" },
+                "note": { "type": "string", "maxLength": 2000 },
+                "prices": {
+                    "type": "array", "maxItems": 100,
+                    "items": {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["label", "amount", "unit"],
+                        "properties": {
+                            "label": { "type": "string", "maxLength": 200 },
+                            "amount": { "type": "number", "minimum": 0 },
+                            "unit": { "enum": ["request", "second", "image", "million_tokens"] }
+                        }
+                    }
+                }
+            },
+            "if": { "properties": { "status": { "const": "known" } } },
+            "then": { "properties": { "prices": { "minItems": 1 } } }
+        },
         "model": {
             "type": "object",
             "required": ["id", "kind", "match"],
@@ -237,6 +362,7 @@
                     }
                 },
                 "pricing": { "$ref": "#/definitions/pricing" },
+                "salePrices": { "$ref": "#/definitions/salePrices" },
                 "kind": { "enum": ["image", "video", "text"] },
                 "channel": { "type": "string" },
                 "route": { "type": "string" },
@@ -257,6 +383,7 @@
                         "required": { "$ref": "#/definitions/stringList" }
                     }
                 },
+                "parameterRules": { "$ref": "#/definitions/parameterRules" },
                 "options": {
                     "type": "object",
                     "additionalProperties": { "$ref": "#/definitions/constraint" }

@@ -13,9 +13,10 @@
 //     因为猜错线路而误拦，也不会放过所有线路都禁止的参数。
 import { IMAGE_RESOLUTION_TIERS, inferImageResolutionTier } from './image-node-settings.js';
 import { getModelPresentation } from '../shared/model-presentation.mjs';
-import { getVideoModelProfile, getVideoModelGroup, DEFAULT_VIDEO_MODEL_PROFILE } from '../shared/video-model-profiles.mjs';
+import { getVideoModelProfile, getVideoModelGroup, getVideoDurationConstraint, DEFAULT_VIDEO_MODEL_PROFILE } from '../shared/video-model-profiles.mjs';
 import { DEFAULT_MODEL_CONFIG } from './model-config-default.js';
 import { isCatalogManaged, findCatalogEntry } from '../shared/model-catalog.mjs';
+import parameterRules from '../shared/model-parameter-rules.cjs';
 
 export const MODEL_CONFIG_ISSUE_CODES = Object.freeze({
     PROMPT_REQUIRED: 'PROMPT_REQUIRED',
@@ -418,6 +419,9 @@ function resolveTierValue(config, field, value) {
 
 // 单条候选线路的校验结果。
 function collectEntryIssues(config, entry, request) {
+    const resolved = parameterRules.resolveModelParameterRules(entry, request.fields);
+    if (resolved.issues.length) return resolved.issues.map(issue => ({ ...issue, message: parameterRules.formatParameterIssue(issue) }));
+    entry = resolved.entry;
     const issues = [];
     const prompt = String(request.prompt ?? '').trim();
     const promptConfig = entry.prompt || {};
@@ -432,6 +436,7 @@ function collectEntryIssues(config, entry, request) {
         issues.push({
             code: MODEL_CONFIG_ISSUE_CODES.PROMPT_TOO_LONG,
             field: 'prompt',
+            max: Number(promptConfig.maxLength), actual: prompt.length,
             message: `提示词最长 ${promptConfig.maxLength} 字，当前 ${prompt.length} 字`
         });
     }
@@ -448,7 +453,10 @@ function collectEntryIssues(config, entry, request) {
             });
             continue;
         }
-        checkFieldConstraint(config, entry, field, value, issues);
+        const safeIssue = parameterRules.constraintIssue(field, entry.options?.[field], entry.options?.[field]?.type === 'tier'
+            ? resolveTierValue(config, field, value) : value);
+        if (safeIssue) issues.push({ ...safeIssue, message: parameterRules.formatParameterIssue(safeIssue) });
+        else checkFieldConstraint(config, entry, field, value, issues);
     }
 
     for (const [feature, field] of Object.entries(FEATURE_FIELDS)) {
@@ -472,13 +480,18 @@ function collectEntryIssues(config, entry, request) {
 
     for (const [key, definition] of Object.entries(REFERENCE_KINDS)) {
         const input = normalizeReferenceInput(request.references, key);
-        if (!input || input.count <= 0) continue;
         const declared = entry.capabilities?.[key];
+        if (declared?.supported === true && Number.isFinite(declared.min) && (input?.count || 0) < declared.min) {
+            const issue = { code: 'REFERENCE_REQUIRED', field: key, min: declared.min, actual: input?.count || 0 };
+            issues.push({ ...issue, message: parameterRules.formatParameterIssue(issue) });
+        }
+        if (!input || input.count <= 0) continue;
         if (declared?.supported === false) {
             issues.push({
                 code: MODEL_CONFIG_ISSUE_CODES.FEATURE_UNSUPPORTED,
                 field: key,
                 feature: key,
+                max: 0, actual: input.count,
                 message: `${definition.label}：${normalizeText(declared.reason) || '该模型不支持'}`,
                 suggestion: 0
             });
@@ -491,6 +504,7 @@ function collectEntryIssues(config, entry, request) {
                 code: MODEL_CONFIG_ISSUE_CODES.REFERENCE_LIMIT,
                 field: key,
                 feature: key,
+                max, actual: input.count,
                 message: `${definition.label}最多 ${max}${definition.unit}，当前 ${input.count}${definition.unit}`,
                 suggestion: max
             });
@@ -501,6 +515,7 @@ function collectEntryIssues(config, entry, request) {
                 code: MODEL_CONFIG_ISSUE_CODES.REFERENCE_TOO_LARGE,
                 field: key,
                 feature: key,
+                max: maxBytes,
                 message: `${definition.label}单张最大 ${Math.round(maxBytes / (1024 * 1024))}MB`
             });
         }
@@ -576,9 +591,20 @@ export function validateModelRequest(options = {}) {
 
     const errors = [];
     const warnings = [];
+    const durationConstraint = provider.kind === 'video' && !candidates.some(entry => entry.parameterRules !== undefined)
+        ? getVideoDurationConstraint(provider, fields.resolutionTier || fields.resolution) : null;
+    if (durationConstraint && fields.duration !== undefined && fields.duration !== null && fields.duration !== '') {
+        const duration = Number(fields.duration);
+        if (!Number.isInteger(duration) || duration < durationConstraint.min || duration > durationConstraint.max) {
+            errors.push({ code: MODEL_CONFIG_ISSUE_CODES.VALUE_OUT_OF_RANGE, field: 'duration',
+                min: durationConstraint.min, max: durationConstraint.max, integer: true, actual: duration,
+                message: `${durationConstraint.resolution} 时长仅支持 ${durationConstraint.min} 到 ${durationConstraint.max} 秒的整数`,
+                suggestion: Math.min(durationConstraint.max, Math.max(durationConstraint.min, Math.round(duration) || durationConstraint.min)) });
+        }
+    }
     const total = Math.max(1, perCandidate.length);
     for (const record of tally.values()) {
-        const item = { code: record.code, field: record.field, message: record.sample?.message || '' };
+        const item = { ...record.sample, code: record.code, field: record.field, message: record.sample?.message || '' };
         if (record.sample?.suggestion !== undefined) item.suggestion = record.sample.suggestion;
         if (record.code === MODEL_CONFIG_ISSUE_CODES.PARAM_UNVERIFIED || record.count < total) {
             warnings.push({ ...item, message: record.count < total ? `${item.message}（部分线路限制）` : item.message });
@@ -602,8 +628,11 @@ export function validateModelRequest(options = {}) {
 // 渲染层已有大量基于 video-model-profiles / image model profile 的裁剪逻辑（算力都花在
 // 「按 profile 隐藏控件、回落非法值、断开超额连线」上）。与其另起一套，不如把 CONFIG
 // 翻译成同样的形状，让既有逻辑自动生效。
-export function toVideoProfileOverrides(config, entry, provider = {}) {
+export function toVideoProfileOverrides(config, entry, provider = {}, fields = {}) {
     if (!entry || entry.kind !== 'video') return null;
+    const baseEntry = entry;
+    const resolved = parameterRules.resolveModelParameterRules(entry, fields);
+    entry = resolved.entry;
     const ratioOption = entry.options?.ratio;
     const durationOption = entry.options?.duration;
     const resolutionOption = entry.options?.resolutionTier;
@@ -612,6 +641,10 @@ export function toVideoProfileOverrides(config, entry, provider = {}) {
         capabilitySource: 'config',
         configId: entry.id
     };
+    if (baseEntry.parameterRules !== undefined) {
+        overrides.parameterRuleEntry = baseEntry;
+        overrides.parameterRuleIssues = resolved.issues;
+    }
     // Missing or unknown constraints must not erase working controls or references.
     if (['enum', 'fixed', 'unsupported'].includes(ratioOption?.type)) {
         const ratios = resolutionValues(ratioOption);

@@ -138,7 +138,7 @@ export function applyCatalogFields(entry, values) {
     return next;
 }
 
-export function catalogGroups(config, { kind = '', query = '', includeHidden = true, includeDisabled = false, includeLegacy = true } = {}) {
+export function catalogGroups(config, { kind = '', query = '', includeHidden = true, includeDisabled = false, includeLegacy = true, includeEmpty = false, includeUnassigned = false } = {}) {
     const groups = new Map();
     config.models.forEach((entry, index) => {
         if (kind && kind !== entry.kind) return;
@@ -150,6 +150,12 @@ export function catalogGroups(config, { kind = '', query = '', includeHidden = t
         const group = groups.get(key);
         group.entries.push({ entry, index });
     });
+    // Empty groups are editor metadata; canvas clients still read each model's presentation.
+    for (const group of config.catalogGroups || []) {
+        if (!group.id || !['image', 'video', 'text'].includes(group.kind) || (kind && kind !== group.kind)) continue;
+        const key = `${group.kind}:${group.id}`;
+        if (!groups.has(key)) groups.set(key, { ...group, key, index: config.models.length + groups.size, entries: [] });
+    }
     const normalized = String(query).trim().toLowerCase();
     return [...groups.values()].map(group => {
         const members = group.entries.sort((a, b) => order(a.entry.presentation?.routeOrder, 0)
@@ -157,12 +163,13 @@ export function catalogGroups(config, { kind = '', query = '', includeHidden = t
             || ((a.entry.presentation?.routeLabel || '') < (b.entry.presentation?.routeLabel || '') ? -1
                 : (a.entry.presentation?.routeLabel || '') > (b.entry.presentation?.routeLabel || '') ? 1 : 0)
             || a.index - b.index).map(item => item.entry);
-        const entries = members.filter(entry => includeHidden || (entry.presentation?.visible !== false
+        const entries = members.filter(entry => includeHidden || (includeUnassigned && !entry.presentation?.routeGroup) || (entry.presentation?.visible !== false
             && (includeDisabled || entry.catalog?.enabled !== false)));
         const disabledCount = members.filter(entry => entry.catalog?.enabled === false).length;
         return { ...group, entries, disabledCount, totalCount: members.length,
-            disabled: disabledCount === members.length, order: order(entries[0]?.presentation?.routeGroupOrder, 0) };
-    }).filter(group => group.entries.length).sort((a, b) => a.order - b.order || a.index - b.index)
+            disabled: members.length > 0 && disabledCount === members.length,
+            order: order(entries[0]?.presentation?.routeGroupOrder, group.order) };
+    }).filter(group => group.entries.length || (includeEmpty && group.totalCount === 0)).sort((a, b) => a.order - b.order || a.index - b.index)
         .filter(group => !normalized || [group.label, ...group.entries.flatMap(entry =>
         [name(entry), entry.catalog?.model, entry.id, ...(entry.catalog?.hosts || [])])].join(' ').toLowerCase().includes(normalized));
 }
@@ -193,52 +200,170 @@ export function addCatalogModel(config, { model, hosts, label, kind = 'video', s
     return { config: moveCatalogModel(next, id, groupKey), id };
 }
 
-export function moveCatalogModel(config, id, groupKey) {
+function rememberCatalogGroup(config, group) {
+    if (!group?.id) return;
+    const first = group.entries[0]?.presentation || {};
+    const record = { id: group.id, kind: group.kind, label: group.label, order: group.order,
+        scope: first.routeGroupScope || group.scope || 'catalog',
+        description: first.routeGroupDescription || group.description || '' };
+    config.catalogGroups = (config.catalogGroups || []).filter(item => item.id !== group.id || item.kind !== group.kind);
+    config.catalogGroups.push(record);
+}
+
+export function normalizeCatalogWorkspace(config) {
     const next = copy(config);
-    const entry = requireEntry(next, id);
-    const group = catalogGroups(next).find(group => group.key === groupKey && group.id);
-    if (groupKey && !group) throw new Error('目标分组已不存在');
-    if (group && group.kind !== entry.kind) throw new Error('模型只能移动到相同类型的分组');
-    const display = { ...entry.presentation };
-    if (group) {
-        const template = group.entries[0].presentation;
-        Object.assign(display, { routeGroup: group.id, routeGroupLabel: group.label,
-            routeLabel: display.routeLabel || name(entry),
-            routeGroupScope: template.routeGroupScope || 'catalog', routeGroupAlways: true,
-            routeGroupOrder: group.order,
-            routeOrder: Math.max(...group.entries.map(model => order(model.presentation?.routeOrder, 0))) + 1 });
-    } else {
-        Object.assign(display, { routeGroup: '', routeGroupLabel: '', routeGroupAlways: false, routeOrder: 0 });
+    for (const entry of Array.isArray(next.catalogGroups) ? next.models : []) {
+        if (!entry.catalog || entry.kind !== 'video') continue;
+        const groupId = entry.presentation?.routeGroup;
+        if (!groupId) entry.presentation = { ...entry.presentation, visible: false };
+        else {
+            const group = next.catalogGroups.find(group => group.id === groupId && group.kind === entry.kind);
+            if (group) entry.presentation = { ...entry.presentation, routeGroupScope: group.scope || 'catalog' };
+        }
     }
-    entry.presentation = display;
+    for (const [kind, id] of Object.entries(next.defaultModels || {})) {
+        if (!next.models.some(entry => entry.id === id && entry.kind === kind && entry.catalog
+            && entry.catalog.enabled !== false && entry.presentation?.visible !== false)) delete next.defaultModels[kind];
+    }
+    if (next.defaultModels && !Object.keys(next.defaultModels).length) delete next.defaultModels;
     return next;
 }
 
-export function createCatalogGroup(config, id, label) {
+export function setCatalogDefaultModel(config, kind, id) {
+    if (!['video', 'image', 'text'].includes(kind)) throw new Error('请选择模型类型');
+    const next = normalizeCatalogWorkspace(config);
+    if (!id) {
+        if (next.defaultModels) delete next.defaultModels[kind];
+    } else {
+        const entry = requireEntry(next, id);
+        if (entry.kind !== kind || !entry.catalog || entry.catalog.enabled === false || entry.presentation?.visible === false) {
+            throw new Error('默认模型必须已加入画布且允许调用');
+        }
+        next.defaultModels = { ...next.defaultModels, [kind]: id };
+    }
+    return normalizeCatalogWorkspace(next);
+}
+
+export function moveCatalogModel(config, id, groupKey, targetId = '', placement = 'before') {
     const next = copy(config);
     const entry = requireEntry(next, id);
+    const groups = catalogGroups(next, { includeEmpty: true });
+    const group = groups.find(group => group.key === groupKey && group.id);
+    if (groupKey && !group) throw new Error('目标分组已不存在');
+    if (group && group.kind !== entry.kind) throw new Error('模型只能移动到相同类型的分组');
+    if (targetId === id) return next;
+    if (targetId && !group?.entries.some(model => model.id === targetId)) throw new Error('目标模型已不在该分组');
+    rememberCatalogGroup(next, groups.find(group => group.key === catalogGroupKey(entry)));
+    rememberCatalogGroup(next, group);
+    const display = { ...entry.presentation };
+    if (group) {
+        const template = group.entries[0]?.presentation || {};
+        Object.assign(display, { routeGroup: group.id, routeGroupLabel: group.label,
+            routeLabel: display.routeLabel || name(entry),
+            routeGroupScope: template.routeGroupScope || group.scope || 'catalog', routeGroupAlways: true,
+            routeGroupDescription: template.routeGroupDescription || group.description || '',
+            routeGroupOrder: group.order,
+            routeOrder: Math.max(-1, ...group.entries.map(model => order(model.presentation?.routeOrder, 0))) + 1 });
+        if (!entry.presentation?.routeGroup && entry.kind === 'video') display.visible = true;
+    } else {
+        Object.assign(display, { routeGroup: '', routeGroupLabel: '', routeGroupAlways: false, routeOrder: 0 });
+        delete display.routeGroupDescription;
+        delete display.routeGroupScope;
+    }
+    entry.presentation = display;
+    if (group && targetId) {
+        const members = group.entries.filter(model => model.id !== id);
+        members.splice(members.findIndex(model => model.id === targetId) + (placement === 'after' ? 1 : 0), 0, entry);
+        members.forEach((model, index) => { model.presentation = { ...model.presentation, routeOrder: index }; });
+    }
+    return normalizeCatalogWorkspace(next);
+}
+
+export function createCatalogGroup(config, id, label, kind = 'video') {
+    const next = copy(config);
+    const entry = id ? requireEntry(next, id) : null;
+    kind = entry?.kind || kind;
+    if (!['image', 'video', 'text'].includes(kind)) throw new Error('请选择分组类型');
     const title = String(label || '').trim();
     if (!title || title.length > 100) throw new Error('分组名需要 1 到 100 个字符');
-    if (catalogGroups(next).some(group => group.kind === entry.kind && group.id && group.label === title)) {
+    const groups = catalogGroups(next, { includeEmpty: true });
+    if (groups.some(group => group.kind === kind && group.id && group.label === title)) {
         throw new Error('同类型中已有这个分组名');
     }
     let index = 1;
     let groupId = `group-${next.models.length}`;
-    while (next.models.some(model => model.presentation?.routeGroup === groupId)) groupId = `group-${next.models.length}-${++index}`;
-    entry.presentation = { ...entry.presentation, routeGroup: groupId, routeGroupLabel: title,
-        routeLabel: entry.presentation?.routeLabel || name(entry),
-        routeGroupScope: 'catalog', routeGroupAlways: true,
-        routeGroupOrder: Math.max(-1, ...catalogGroups(next).map(group => group.order)) + 1, routeOrder: 0 };
-    return next;
+    while (groups.some(group => group.id === groupId)) groupId = `group-${next.models.length}-${++index}`;
+    rememberCatalogGroup(next, { id: groupId, kind, label: title,
+        order: Math.max(-1, ...groups.map(group => group.order)) + 1, entries: [] });
+    return entry ? moveCatalogModel(next, id, `${kind}:${groupId}`) : next;
+}
+
+export function groupCatalogModel(config, id) {
+    const entry = requireEntry(config, id);
+    const groups = catalogGroups(config, { kind: entry.kind, includeEmpty: true });
+    const current = groups.find(group => group.key === catalogGroupKey(entry));
+    if (current?.id && current.totalCount === 1) return copy(config);
+    const base = String(name(entry)).trim().slice(0, 100);
+    let title = base;
+    let index = 1;
+    while (groups.some(group => group.id && group.label === title)) {
+        const suffix = ` (${++index})`;
+        title = base.slice(0, 100 - suffix.length) + suffix;
+    }
+    return createCatalogGroup(config, id, title);
 }
 
 export function renameCatalogGroup(config, groupKey, label) {
     const title = String(label || '').trim();
     if (!title || title.length > 100) throw new Error('分组名需要 1 到 100 个字符');
     const next = copy(config);
-    const group = catalogGroups(next).find(group => group.key === groupKey && group.id);
+    const groups = catalogGroups(next, { includeEmpty: true });
+    const group = groups.find(group => group.key === groupKey && group.id);
     if (!group) throw new Error('请选择一个分组');
+    if (groups.some(item => item.id && item.key !== groupKey && item.kind === group.kind && item.label === title)) {
+        throw new Error('同类型中已有这个分组名');
+    }
     for (const entry of group.entries) entry.presentation = { ...entry.presentation, routeGroupLabel: title };
+    rememberCatalogGroup(next, { ...group, label: title });
+    return next;
+}
+
+export function deleteCatalogGroup(config, groupKey) {
+    const group = catalogGroups(config, { includeEmpty: true }).find(group => group.key === groupKey && group.id);
+    if (!group) throw new Error('请选择一个分组');
+    let next = copy(config);
+    for (const entry of group.entries) next = moveCatalogModel(next, entry.id, '');
+    next.catalogGroups = (next.catalogGroups || []).filter(item => `${item.kind}:${item.id}` !== groupKey);
+    return next;
+}
+
+export function reorderCatalogGroup(config, groupKey, direction) {
+    const all = catalogGroups(config, { includeEmpty: true });
+    const selected = all.find(group => group.key === groupKey && group.id);
+    if (!selected) throw new Error('请选择一个分组');
+    const groups = all.filter(group => group.kind === selected.kind && group.id);
+    const index = groups.findIndex(group => group.key === groupKey);
+    const target = index + (direction < 0 ? -1 : 1);
+    if (target < 0 || target >= groups.length) return copy(config);
+    return placeCatalogGroup(config, groupKey, groups[target].key, direction < 0 ? 'before' : 'after');
+}
+
+export function placeCatalogGroup(config, groupKey, targetKey, placement = 'before') {
+    const next = copy(config);
+    const all = catalogGroups(next, { includeEmpty: true });
+    const selected = all.find(group => group.key === groupKey && group.id);
+    const target = all.find(group => group.key === targetKey && group.id);
+    if (!selected || !target) throw new Error('拖动的分组或目标分组已不存在');
+    if (selected.kind !== target.kind) throw new Error('分组只能在相同类型中排序');
+    if (groupKey === targetKey) return next;
+    const groups = all.filter(group => group.kind === selected.kind && group.id && group.key !== groupKey);
+    groups.splice(groups.findIndex(group => group.key === targetKey) + (placement === 'after' ? 1 : 0), 0, selected);
+    const positions = groups.map(group => group.order).sort((a, b) => a - b);
+    groups.forEach((group, index) => {
+        group.order = Math.max(positions[index], index ? groups[index - 1].order + 1 : positions[index]);
+        group.entries.forEach(model => { model.presentation = { ...model.presentation, routeGroupOrder: group.order }; });
+        rememberCatalogGroup(next, group);
+    });
     return next;
 }
 
@@ -279,7 +404,10 @@ export function setCatalogEnabled(config, id, enabled) {
 
 export function deleteCatalogModel(config, id) {
     requireEntry(config, id);
-    return { ...copy(config), models: config.models.filter(entry => entry.id !== id).map(copy) };
+    const next = copy(config);
+    rememberCatalogGroup(next, catalogGroups(next).find(group => group.entries.some(entry => entry.id === id)));
+    next.models = next.models.filter(entry => entry.id !== id);
+    return next;
 }
 
 export function createCatalogHistory(initial, limit = 60) {

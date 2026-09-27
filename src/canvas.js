@@ -73,6 +73,7 @@ import {
 } from './reference-citations.js';
 import { isGptImage2Model, isMidjourneyImageModel } from './provider-capabilities.js';
 import { assertModelRequest, checkModelRequest } from './model-config-ui.js';
+import { formatModelSalePrice } from '../shared/model-presentation.mjs';
 import { getThemeColor } from './theme.js';
 import { showStatusNotification } from './status-notification.js';
 import { ICONAMOON_GLYPHS } from './iconamoon-glyphs.js';
@@ -5418,14 +5419,18 @@ export class CanvasManager {
     }
 
     duplicateItems(itemIds = [], { offset = 30 } = {}) {
-        const sourceIds = (Array.isArray(itemIds) && itemIds.length ? itemIds : [...this.selectedItems])
+        const sourceIds = [...new Set(Array.isArray(itemIds) && itemIds.length ? itemIds : [...this.selectedItems])]
             .filter(id => this.items.has(id));
         if (!sourceIds.length) return [];
+        const incomingConnections = (this.graphView?.connections || [])
+            .filter(connection => sourceIds.includes(connection.to?.nodeId));
+        const nodeIds = new Map();
 
         const clones = sourceIds.map((id, index) => {
             const source = this.items.get(id);
             const data = JSON.parse(JSON.stringify(source.data || {}));
             data.id = `${data.kind === 'op' ? 'op' : 'item'}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+            nodeIds.set(id, data.id);
             data.x = Math.round(source.group.x() + offset + (offset ? index * 6 : 0));
             data.y = Math.round(source.group.y() + offset + (offset ? index * 6 : 0));
             data.addedAt = Date.now();
@@ -5441,6 +5446,53 @@ export class CanvasManager {
             else void this._createCard(data);
             return data;
         });
+
+        // Reconnect inputs after every clone exists, preserving source order and edge kind.
+        const connectionIds = new Map();
+        for (const connection of incomingConnections) {
+            const copied = this.graphView.connect(
+                { ...connection.from, nodeId: nodeIds.get(connection.from.nodeId) || connection.from.nodeId },
+                { ...connection.to, nodeId: nodeIds.get(connection.to.nodeId) },
+                { kind: connection.kind, silent: true }
+            );
+            if (copied) connectionIds.set(connection.id, copied.id);
+        }
+        for (const data of clones) {
+            const records = [...new Set([data.generation,
+                ...getGeneratorResultEntries(data).map(entry => entry.item?.generation)].filter(Boolean))];
+            for (const record of records) {
+                for (const reference of [record.references, record.referenceBindings].flatMap(value => Array.isArray(value) ? value : [])) {
+                    if (!reference || typeof reference !== 'object') continue;
+                    for (const key of ['itemId', 'sourceNodeId']) {
+                        if (nodeIds.has(reference[key])) reference[key] = nodeIds.get(reference[key]);
+                    }
+                    if (Array.isArray(reference.sourceNodeIds)) {
+                        reference.sourceNodeIds = reference.sourceNodeIds.map(id => nodeIds.get(id) || id);
+                    }
+                    if (connectionIds.has(reference.connectionId)) reference.connectionId = connectionIds.get(reference.connectionId);
+                }
+            }
+            for (const config of [data.config, data.generationPromptDraft,
+                ...records.flatMap(record => [record.config, record.promptDraftConfig])]) {
+                if (!config) continue;
+                if (Array.isArray(config.referenceCitationIds)) {
+                    config.referenceCitationIds = config.referenceCitationIds.map(id => connectionIds.get(id) || id);
+                }
+                if (Array.isArray(config.referenceCitationOccurrences)) {
+                    config.referenceCitationOccurrences = config.referenceCitationOccurrences.map(entry => entry && ({
+                        ...entry,
+                        connectionId: connectionIds.get(entry.connectionId) || entry.connectionId,
+                        ...(entry.sourceNodeId ? { sourceNodeId: nodeIds.get(entry.sourceNodeId) || entry.sourceNodeId } : {})
+                    }));
+                }
+                for (const key of ['referenceCitationOffsets', 'referenceCitationAnnotations']) {
+                    if (config[key] && typeof config[key] === 'object') {
+                        config[key] = Object.fromEntries(Object.entries(config[key])
+                            .map(([id, value]) => [connectionIds.get(id) || id, value]));
+                    }
+                }
+            }
+        }
 
         this.clearSelection();
         clones.forEach(data => this.selectItem(data.id, true));
@@ -7460,7 +7512,7 @@ export class CanvasManager {
     }
 
     _normalizeVideoConfigForProfile(config) {
-        const profile = this.options.getVideoModelProfile?.(config);
+        let profile = this.options.getVideoModelProfile?.(config);
         if (!profile) return null;
         const hasRatioMode = config.ratioMode === 'auto' || config.ratioMode === 'manual';
         if (profile.resolveAdaptiveRatio === true && !hasRatioMode) {
@@ -7485,6 +7537,13 @@ export class CanvasManager {
             config.ratioMode = 'auto';
         }
         syncChoice('resolution', profile.resolutions, profile.defaultResolution);
+        profile = this.options.getVideoModelProfile?.(config) || profile;
+        const seconds = Number(config.duration);
+        if (profile.durationConstraint && profile.durations?.length && Number.isFinite(seconds)
+            && !profile.durations.includes(seconds)) {
+            config.duration = profile.durations.reduce((best, value) => Math.abs(value - seconds) < Math.abs(best - seconds) ? value : best);
+            this._showCanvasStatus(`${config.resolution} 已调整为 ${config.duration} 秒，请核对提示词时长`);
+        }
         syncChoice('duration', profile.durations, profile.defaultDuration);
         if (profile.supportsCameraFixed === false) config.cameraFixed = false;
         if (profile.supportsGeneratedAudio === false) config.generateAudio = false;
@@ -7567,6 +7626,13 @@ export class CanvasManager {
                 const marker = document.createElement('span');
                 marker.textContent = isSelected ? '当前' : '›';
                 button.append(model, source, marker);
+                if (provider.priceText) {
+                    const price = document.createElement('small');
+                    price.className = 'generation-composer-model-price';
+                    price.textContent = provider.priceText === '售价待配置' ? provider.priceText : `售价 ${provider.priceText}`;
+                    price.title = provider.priceDetails || '';
+                    button.appendChild(price);
+                }
                 button.addEventListener('click', () => {
                     data.config = data.config || {};
                     this._applyImageGenerationProviderSelection(data, provider);
@@ -7625,6 +7691,7 @@ export class CanvasManager {
                         data.config.ratioMode = value === 'adaptive' ? 'auto' : 'manual';
                     }
                     options.querySelectorAll('button').forEach(candidate => candidate.classList.toggle('selected', candidate === button));
+                    if (data.nodeType === 'video' && ['resolution', 'ratio', 'duration'].includes(key)) this._showOpParameterMenu(nodeId, event);
                     commit();
                 });
                 options.appendChild(button);
@@ -8699,6 +8766,9 @@ export class CanvasManager {
                     </svg>
                 </button>
             </div>
+            <div class="generation-composer-sale-price" data-sale-price hidden>
+                <span data-sale-site></span><strong data-sale-value></strong>
+            </div>
             <div class="generation-composer-message" data-message aria-live="polite"></div>
         `;
         document.body.appendChild(composer);
@@ -9034,6 +9104,7 @@ export class CanvasManager {
         host.appendChild(add);
         this._renderGenerationComposerCitations(nodeId, references);
         this._syncGenerationComposerPromptMergeButton(nodeId);
+        this._syncGenerationComposerSalePrice(nodeId);
         this._positionGenerationComposer();
     }
 
@@ -9351,6 +9422,31 @@ export class CanvasManager {
             ? `${selected.name || '未命名 API'} · ${selected.model || '未命名模型'}`
             : (providers.length ? '选择 API 和模型' : '请先在设置中添加 API');
         button.classList.toggle('is-empty', !selected && !data.config?.model);
+        this._syncGenerationComposerSalePrice(nodeId, selected);
+    }
+
+    _syncGenerationComposerSalePrice(nodeId, selectedProvider) {
+        const active = this._generationComposer;
+        const data = this.items.get(nodeId)?.data;
+        if (active?.nodeId !== nodeId || !data) return;
+        const host = active.element.querySelector('[data-sale-price]');
+        if (!host) return;
+        const providers = selectedProvider ? [] : this.options.getGenerationProviders?.(data.nodeType) || [];
+        const selected = selectedProvider || providers.find(provider =>
+            provider.id === data.config?.providerId
+            || (provider.sourceProviderId === (data.config?.sourceProviderId || data.config?.providerId)
+                && provider.model === data.config?.model)
+        );
+        host.hidden = !selected?.priceText;
+        if (host.hidden) return;
+        const price = formatModelSalePrice(selected.salePricing, {
+            resolution: data.config?.resolution || data.config?.resolutionTier,
+            hasVideoReference: this._opReferenceEntries(data).some(({ source }) => this._getItemMediaType(source) === 'video')
+        });
+        host.querySelector('[data-sale-site]').textContent = '售价';
+        host.querySelector('[data-sale-site]').hidden = price === '售价待配置';
+        host.querySelector('[data-sale-value]').textContent = price;
+        host.title = selected.priceDetails || '';
     }
 
     _syncGenerationComposerCount(nodeId) {
@@ -9393,7 +9489,18 @@ export class CanvasManager {
         const active = this._generationComposer;
         if (!active) return;
         this._syncGenerationComposerModelButton(active.nodeId);
+        const data = this.items.get(active.nodeId)?.data;
+        if (data?.nodeType === 'video') {
+            const signature = JSON.stringify(this.options.getVideoModelProfile?.(data.config));
+            if (signature !== active.parameterProfileSignature) {
+                const before = JSON.stringify(data.config);
+                if (active.popover?.anchor?.closest('[data-parameters]')) this._closeGenerationComposerPopover(active);
+                this._renderGenerationComposerParameters(active.nodeId);
+                if (before !== JSON.stringify(data.config)) { active.changed = true; this.emit('change'); }
+            }
+        }
         active.popover?.refreshModels?.();
+        this._positionGenerationComposer();
     }
 
     _showGenerationComposerModelMenu(nodeId, anchor) {
@@ -9593,6 +9700,13 @@ export class CanvasManager {
                         : provider.description || provider.name || '未命名 API';
                     if (provider.description) source.className = 'generation-composer-model-description';
                     copy.append(model, source);
+                    if (provider.priceText) {
+                        const price = document.createElement('small');
+                        price.className = 'generation-composer-model-price';
+                        price.textContent = provider.priceText === '售价待配置' ? provider.priceText : `售价 ${provider.priceText}`;
+                        price.title = provider.priceDetails || '';
+                        copy.appendChild(price);
+                    }
                     const marker = document.createElement('span');
                     marker.textContent = selected ? '当前' : '›';
                     button.append(copy, marker);
@@ -9975,6 +10089,7 @@ export class CanvasManager {
             active.changed = true;
             this._syncGenerationComposerImageButtons(nodeId);
             this.refreshOpNode(nodeId);
+            this._syncGenerationComposerSalePrice(nodeId);
             this.emit('change');
         };
         const qualityHost = popover.querySelector('[data-quality]');
@@ -10267,7 +10382,11 @@ export class CanvasManager {
                         ));
                     }
                     active.changed = true;
+                    if (data.nodeType === 'video' && ['resolution', 'ratio', 'duration'].includes(key)) {
+                        this._renderGenerationComposerParameters(nodeId);
+                    }
                     this.refreshOpNode(nodeId);
+                    this._syncGenerationComposerSalePrice(nodeId);
                     this.emit('change');
                 }
             });
@@ -10308,6 +10427,7 @@ export class CanvasManager {
                 this.refreshOpNode(nodeId);
                 this.emit('change');
             });
+            range.addEventListener('change', () => this._renderGenerationComposerParameters(nodeId));
             label.append(range, output);
             parent.appendChild(label);
             syncDuration(range.value);
@@ -10435,7 +10555,9 @@ export class CanvasManager {
             });
         }
         optionRow.hidden = !optionRow.childElementCount;
+        if (data.nodeType === 'video') active.parameterProfileSignature = JSON.stringify(this.options.getVideoModelProfile?.(data.config));
         this._syncGenerationComposerCount(nodeId);
+        this._syncGenerationComposerSalePrice(nodeId);
         this._positionGenerationComposer();
     }
 

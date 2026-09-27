@@ -12,21 +12,37 @@ export const CATALOG_STYLE = `
 .catalog-actions button, .catalog-local-actions button { display:inline-flex; align-items:center; justify-content:center; gap:6px; }
 .catalog-icon { width:17px; height:17px; flex:0 0 17px; fill:currentColor; }
 .catalog-icon.icon-right { transform:rotate(90deg); }
+.catalog-icon.icon-left { transform:rotate(-90deg); }
 .catalog-icon.icon-down { transform:rotate(180deg); }
 .catalog-icon.icon-mirror { transform:scaleX(-1); }
 .group-order-command { padding:0 8px; font-size:12px; }
 .catalog-actions button, .catalog-local-actions button { border-radius:6px; min-height:34px; }
 .catalog-local-actions { padding:12px 0; border-bottom:1px solid #404144; margin-bottom:12px; }
 .catalog-local-actions select { flex:1 1 160px; width:100%; min-width:0; }
-.is-operation .editor-grid { grid-template-columns:minmax(420px,1.35fr) minmax(310px,1fr); }
+.is-operation .editor-grid { grid-template-columns:minmax(0,1fr); }
 .is-operation .model-browser { display:none; }
-.catalog-pane { min-width:0; padding:18px 20px 20px 0; border-right:1px solid #404144; }
+.is-operation .model-details { display:none; }
+.catalog-pane { min-width:0; padding:18px 0 20px; }
 .catalog-filter { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 14px; }
 .catalog-filter input[type=search] { flex:1 1 200px; width:100%; min-width:0; }
 .catalog-filter select { flex:0 1 116px; }
 .catalog-filter label { display:flex; align-items:center; gap:5px; font-size:12px; color:#b1b4b8; }
-.catalog-preview { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:start; gap:8px; }
-.catalog-groups, .catalog-models { min-width:0; display:flex; flex-direction:column; gap:6px; max-height:700px; overflow:auto; scrollbar-width:thin; }
+.catalog-preview { display:grid; grid-template-columns:minmax(180px,.7fr) minmax(0,1fr) minmax(0,1fr); align-items:start; gap:16px; }
+.catalog-column { min-width:0; }
+.catalog-column + .catalog-column { border-left:1px solid #404144; padding-left:16px; }
+.catalog-column-heading { display:flex; justify-content:space-between; gap:8px; min-height:30px; align-items:start; }
+.catalog-column-heading h3 { overflow-wrap:anywhere; }
+.catalog-count { color:#93969d; font-size:12px; font-variant-numeric:tabular-nums; }
+.catalog-groups, .catalog-models { min-width:0; display:flex; flex-direction:column; gap:6px; min-height:180px; max-height:700px; overflow:auto; scrollbar-width:thin; }
+.catalog-model-actions { display:flex; justify-content:flex-end; gap:5px; padding:6px 0 2px; }
+.catalog-model-actions button { width:30px; height:28px; padding:0; display:inline-flex; align-items:center; justify-content:center; }
+.catalog-tile[draggable=true] { cursor:grab; }
+.catalog-tile.is-dragging { opacity:.45; }
+[data-drop-group].is-drop-target { outline:2px solid #75b69b; outline-offset:-2px; background:#2a3631; }
+[data-drop-group].is-drop-target[data-drop-position] { outline:0; background:transparent; }
+[data-drop-position]::before { content:''; position:absolute; left:0; right:0; height:3px; background:#91d1b4; z-index:3; pointer-events:none; }
+[data-drop-position=before]::before { top:0; }
+[data-drop-position=after]::before { bottom:0; }
 .catalog-tile { position:relative; display:flex; flex-shrink:0; gap:10px; align-items:center; width:100%; min-height:70px; text-align:left; background:#292a2d; border:1px solid transparent; border-radius:7px; padding:12px; color:#d1d3d7; }
 .catalog-tile .tile-copy { min-width:0; flex:1; }
 .catalog-item { position:relative; min-width:0; flex-shrink:0; }
@@ -72,14 +88,21 @@ export const CATALOG_STYLE = `
 .editor-tabs [aria-selected=true] { background:#37393d; color:#eef0f2; border-color:#62666d; }
 .editor-grid, .model-browser, .form-section { border-color:#3c3e43; }
 input[type=number], input[type=search], input[type=text], select, textarea { background:#202225; border-color:#45484d; color:#d8dade; }
-@media(max-width:1100px) {
+@media(max-width:900px) {
  .is-operation .editor-grid { grid-template-columns:minmax(0,1fr); }
  .catalog-pane { padding:16px 0; border-right:0; border-bottom:1px solid #404144; }
  .is-operation .model-details { padding:18px 0; }
  .catalog-groups,.catalog-models { max-height:500px; }
+ .catalog-preview { grid-template-columns:minmax(150px,.65fr) minmax(0,1fr); }
+ .catalog-unassigned-column { grid-column:1/-1; border-top:1px solid #404144; padding-top:16px; }
+ .catalog-column.catalog-unassigned-column { border-left:0; padding-left:0; }
+ #catalogUngrouped { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-content:start; }
 }
 @media(max-width:520px) {
  .catalog-preview { grid-template-columns:minmax(0,1fr); }
+ .catalog-column + .catalog-column { border-left:0; padding-left:0; }
+ .catalog-unassigned-column { grid-column:auto; }
+ #catalogUngrouped { display:flex; }
  .catalog-groups { max-height:270px; }
  .catalog-models { max-height:310px; border-top:1px solid #4c4f55; padding-top:8px; }
  .catalog-tile { min-height:66px; padding:10px; }
@@ -111,17 +134,24 @@ export function catalogPaneMarkup() {
         <label id="catalogShowLegacyLabel"><input id="catalogShowLegacy" type="checkbox">未纳入目录</label>
       </div>
       <div class="catalog-local-actions">
-        <select id="catalogMoveGroup" aria-label="模型所属分组"></select>
-        <button type="button" id="createGroupBtn">${icon('folder-add')}分组</button>
-        <button type="button" id="renameGroupBtn">${icon('tag')}改组名</button>
+        <button type="button" id="createGroupBtn">${icon('folder-add')}新增分组</button>
+        <button type="button" id="renameGroupBtn" class="icon-command" title="修改分组名" aria-label="修改分组名">${icon('tag')}</button>
+        <button type="button" id="deleteGroupBtn" class="icon-command" title="删除分组" aria-label="删除分组">${icon('trash')}</button>
+        <button type="button" id="moveGroupUpBtn" class="icon-command" title="分组上移" aria-label="分组上移">${icon('arrow-up')}</button>
+        <button type="button" id="moveGroupDownBtn" class="icon-command" title="分组下移" aria-label="分组下移">${icon('arrow-up', 'icon-down')}</button>
       </div>
-      <div class="catalog-preview"><div id="catalogGroups" class="catalog-groups" role="listbox" aria-label="模型与渠道组"></div>
-        <div id="catalogModels" class="catalog-models" role="listbox" aria-label="组内模型"></div></div>
+      <div class="catalog-preview">
+        <section class="catalog-column"><div class="catalog-column-heading"><h3>渠道分组</h3><span id="catalogGroupCount" class="catalog-count"></span></div>
+          <div id="catalogGroups" class="catalog-groups" role="listbox" aria-label="渠道分组"></div></section>
+        <section class="catalog-column"><div class="catalog-column-heading"><h3 id="catalogModelsTitle">组内模型</h3><span id="catalogMemberCount" class="catalog-count"></span></div>
+          <div id="catalogModels" class="catalog-models" role="listbox" aria-label="组内模型"></div></section>
+        <section class="catalog-column catalog-unassigned-column"><div class="catalog-column-heading"><h3>未分组模型</h3><span id="catalogUngroupedCount" class="catalog-count"></span></div>
+          <div id="catalogUngrouped" class="catalog-models" role="listbox" aria-label="未分组模型"></div></section>
+      </div>
       <div class="catalog-local-actions">
+        <select id="catalogMoveGroup" aria-label="模型所属分组"></select>
         <button type="button" id="moveModelUpBtn" class="icon-command" title="模型上移" aria-label="模型上移">${icon('arrow-up')}</button>
         <button type="button" id="moveModelDownBtn" class="icon-command" title="模型下移" aria-label="模型下移">${icon('arrow-up', 'icon-down')}</button>
-        <button type="button" id="moveGroupUpBtn" class="group-order-command" title="整个组上移" aria-label="整个组上移">${icon('arrow-up')}组</button>
-        <button type="button" id="moveGroupDownBtn" class="group-order-command" title="整个组下移" aria-label="整个组下移">${icon('arrow-up', 'icon-down')}组</button>
         <label><input id="catalogVisible" type="checkbox">显示模型</label>
       </div>
       <div id="catalogSelection" class="catalog-selection"></div>
@@ -231,66 +261,206 @@ function tile(document, entry, { label, detail, selected, arrow = false, hidden 
     return button;
 }
 
-export function renderCatalog(document, config, selectedId, onSelect, sources, prices, costs, onToggle) {
+const dragType = 'application/x-flow-catalog-model';
+const groupDragType = 'application/x-flow-catalog-group';
+function clearDropTargets(document) {
+    document.querySelectorAll('.is-drop-target').forEach(element => {
+        element.classList.remove('is-drop-target');
+        delete element.dataset.dropPosition;
+    });
+}
+function draggableCard(element, type, id) {
+    element.draggable = true;
+    element.addEventListener('dragstart', event => {
+        event.dataTransfer.setData(type, id);
+        event.dataTransfer.effectAllowed = 'move';
+        element.classList.add('is-dragging');
+    });
+    element.addEventListener('dragend', () => {
+        element.classList.remove('is-dragging');
+        clearDropTargets(element.ownerDocument);
+    });
+}
+function dropTarget(element, { groupKey, onMove, targetId = '', onGroupMove }) {
+    element.dataset.dropGroup = groupKey;
+    const isGroupDrag = event => event.dataTransfer?.types.includes(groupDragType);
+    const position = event => event.clientY < element.getBoundingClientRect().top + element.getBoundingClientRect().height / 2 ? 'before' : 'after';
+    element.ondragover = event => {
+        if (isGroupDrag(event) ? !onGroupMove : !event.dataTransfer?.types.includes(dragType)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = 'move';
+        clearDropTargets(element.ownerDocument);
+        element.classList.add('is-drop-target');
+        if (targetId || isGroupDrag(event)) element.dataset.dropPosition = position(event);
+        const scroller = element.closest('.catalog-models,.catalog-groups');
+        if (scroller) {
+            const bounds = scroller.getBoundingClientRect();
+            if (event.clientY < bounds.top + 30) scroller.scrollTop -= 14;
+            else if (event.clientY > bounds.bottom - 30) scroller.scrollTop += 14;
+        }
+    };
+    element.ondragleave = event => {
+        if (!element.contains(event.relatedTarget)) {
+            element.classList.remove('is-drop-target');
+            delete element.dataset.dropPosition;
+        }
+    };
+    element.ondrop = event => {
+        clearDropTargets(element.ownerDocument);
+        const group = event.dataTransfer?.getData(groupDragType);
+        if (group && onGroupMove) {
+            event.preventDefault();
+            event.stopPropagation();
+            onGroupMove(group, groupKey, position(event));
+            return;
+        }
+        const id = event.dataTransfer?.getData(dragType);
+        if (!id) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onMove?.(id, groupKey, targetId, position(event));
+    };
+}
+
+export function renderCatalog(document, config, selectedId, onSelect, sources, prices, costs, onToggle, workspace = {}) {
     document.getElementById('catalogMode').value = config.catalogMode === 'remote' ? 'remote' : 'fallback';
+    let defaultModel = document.getElementById('catalogDefaultVideoModel');
+    if (!defaultModel) {
+        const label = document.createElement('label');
+        label.className = 'catalog-mode';
+        label.style.flexWrap = 'wrap';
+        const title = document.createElement('span');
+        title.textContent = '默认视频模型';
+        defaultModel = document.createElement('select');
+        defaultModel.id = 'catalogDefaultVideoModel';
+        defaultModel.setAttribute('aria-label', '默认视频模型');
+        defaultModel.style.width = '240px';
+        defaultModel.style.maxWidth = '100%';
+        label.append(title, defaultModel);
+        document.getElementById('catalogActions').insertBefore(label, document.getElementById('addModelBtn'));
+    }
+    defaultModel.replaceChildren();
+    const addDefault = (value, label) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        defaultModel.append(option);
+    };
+    addDefault('', '未指定');
+    for (const entry of config.models.filter(entry => entry.kind === 'video' && entry.catalog && modelVisible(entry)
+        && (!Array.isArray(config.catalogGroups) || entry.presentation?.routeGroup))) {
+        addDefault(entry.id, `${entry.presentation?.routeGroupLabel ? `${entry.presentation.routeGroupLabel} / ` : ''}${modelName(entry)}`);
+    }
+    defaultModel.value = config.defaultModels?.video || '';
+    defaultModel.onchange = event => workspace.onDefaultChange?.(event.target.value);
     const selected = config.models.find(entry => entry.id === selectedId);
     document.getElementById('catalogShowLegacyLabel').hidden = config.catalogMode !== 'remote';
     const groups = catalogGroups(config, { kind: document.getElementById('catalogKind').value,
         query: document.getElementById('catalogSearch').value, includeHidden: document.getElementById('catalogShowHidden').checked,
-        includeDisabled: true,
+        includeDisabled: true, includeEmpty: true, includeUnassigned: true,
         includeLegacy: config.catalogMode !== 'remote' || document.getElementById('catalogShowLegacy').checked });
     const groupList = document.getElementById('catalogGroups');
+    const groupColumn = groupList.closest('.catalog-column');
+    groupColumn.style.alignSelf = 'stretch';
+    dropTarget(groupColumn, { groupKey: 'new', onMove: id => workspace.onCreateGroup?.(id) });
     const modelList = document.getElementById('catalogModels');
-    const scroll = [groupList.scrollTop, modelList.scrollTop];
+    const ungroupedList = document.getElementById('catalogUngrouped');
+    const scroll = [groupList.scrollTop, modelList.scrollTop, ungroupedList.scrollTop];
     groupList.replaceChildren();
     modelList.replaceChildren();
-    const selectedGroup = groups.find(group => group.entries.some(entry => entry.id === selectedId));
-    const renderEntry = entry => tile(document, entry, { label: modelName(entry),
-        detail: [entry.presentation?.routeGroup ? entry.catalog?.model : '', catalogModelSummary(entry)].filter(Boolean).join(' · ')
+    ungroupedList.replaceChildren();
+    const namedGroups = groups.filter(group => group.id);
+    const selectedGroup = namedGroups.find(group => group.key === workspace.groupKey)
+        || namedGroups.find(group => group.entries.some(entry => entry.id === selectedId)) || namedGroups[0];
+    const renderEntry = entry => {
+        const card = tile(document, entry, { label: modelName(entry),
+        detail: [entry.catalog?.model, catalogModelSummary(entry)].filter(Boolean).join(' · ')
             || entry.presentation?.description || entry.catalog?.model || entry.id,
-        hidden: entry.presentation?.visible === false, disabled: entry.catalog?.enabled === false, selected: selectedId === entry.id,
-        status: entry.catalog?.enabled === false ? '已停用' : entry.presentation?.visible === false ? '已隐藏'
+        hidden: !!entry.presentation?.routeGroup && entry.presentation?.visible === false, disabled: entry.catalog?.enabled === false, selected: selectedId === entry.id,
+        status: entry.catalog?.enabled === false ? '已停用' : !entry.presentation?.routeGroup ? '未加入画布' : entry.presentation?.visible === false ? '已隐藏'
             : !entry.catalog ? '待补全模型 ID 与 API 主机' : selectedId === entry.id ? '当前' : '',
         warning: !entry.catalog, onClick: () => onSelect(entry.id), onToggle, sources, prices, costs });
-    for (const group of groups) {
-        if (!group.id) groupList.append(renderEntry(group.entries[0]));
-        else {
+        const wrapper = card.classList.contains('catalog-item') ? card : document.createElement('div');
+        if (wrapper !== card) { wrapper.className = 'catalog-item'; wrapper.append(card); }
+        const button = wrapper.querySelector('.catalog-tile');
+        draggableCard(button, dragType, entry.id);
+        if (entry.presentation?.routeGroup) dropTarget(wrapper, { groupKey: catalogGroupKey(entry), onMove: workspace.onMove, targetId: entry.id });
+        const actions = document.createElement('div');
+        actions.className = 'catalog-model-actions';
+        for (const [action, title, symbol, callback, disabled] of [
+            ['edit', '编辑模型参数', 'tag', () => workspace.onEdit?.(entry.id), false],
+            ['group', '独立成组', 'folder-add', () => workspace.onCreateGroup?.(entry.id), false],
+            ['move', entry.presentation?.routeGroup ? '移出分组' : '加入选中分组', 'arrow-up',
+                () => workspace.onMove?.(entry.id, entry.presentation?.routeGroup ? '' : selectedGroup?.key),
+                !entry.presentation?.routeGroup && (!selectedGroup || selectedGroup.kind !== entry.kind)]
+        ]) {
+            const actionButton = document.createElement('button');
+            actionButton.type = 'button';
+            actionButton.title = title;
+            actionButton.setAttribute('aria-label', `${modelName(entry)}${title}`);
+            actionButton.dataset.modelAction = action;
+            actionButton.dataset.actionModelId = entry.id;
+            actionButton.innerHTML = icon(symbol, action === 'move' ? (entry.presentation?.routeGroup ? 'icon-right' : 'icon-left') : '');
+            actionButton.disabled = disabled;
+            actionButton.addEventListener('click', callback);
+            actions.append(actionButton);
+        }
+        wrapper.append(actions);
+        return wrapper;
+    };
+    for (const group of namedGroups) {
             const current = group.entries.find(entry => entry.id === selectedId && modelVisible(entry))
                 || group.entries.find(modelVisible) || group.entries[0];
             const button = tile(document, null, { label: group.label,
-                detail: group.disabled ? '分组停用' : `当前使用：${modelName(current)}`,
+                detail: group.disabled ? '分组停用' : current ? `当前使用：${modelName(current)}` : '空分组',
                 status: !group.disabled && group.disabledCount ? `部分停用（${group.disabledCount}/${group.totalCount}）` : '',
                 warning: !group.disabled && group.disabledCount > 0, disabled: group.disabled,
                 selected: selectedGroup?.key === group.key, arrow: true,
-                hidden: group.entries.every(entry => entry.presentation?.visible === false),
-                onClick: () => onSelect(selectedGroup?.key === group.key ? selectedId : current.id) });
+                hidden: group.entries.length > 0 && group.entries.every(entry => entry.presentation?.visible === false),
+                onClick: () => workspace.onSelectGroup?.(group.key) });
             button.dataset.catalogGroup = group.key;
+            draggableCard(button, groupDragType, group.key);
+            dropTarget(button, { groupKey: group.key, onMove: workspace.onMove, onGroupMove: workspace.onGroupMove });
             groupList.append(button);
-        }
     }
     if (selectedGroup) selectedGroup.entries.forEach(entry => modelList.append(renderEntry(entry)));
-    if (!groups.length) {
+    const ungrouped = groups.filter(group => !group.id).flatMap(group => group.entries);
+    ungrouped.forEach(entry => ungroupedList.append(renderEntry(entry)));
+    modelList.ondragover = modelList.ondrop = modelList.ondragleave = null;
+    delete modelList.dataset.dropGroup;
+    if (selectedGroup) dropTarget(modelList, { groupKey: selectedGroup.key, onMove: workspace.onMove });
+    dropTarget(ungroupedList, { groupKey: '', onMove: workspace.onMove });
+    for (const [list, message] of [[groupList, '暂无分组'], [modelList, selectedGroup ? '暂无模型' : '未选择分组'], [ungroupedList, '暂无未分组模型']]) {
+        if (list.children.length) continue;
         const empty = document.createElement('p');
         empty.className = 'catalog-empty';
-        empty.textContent = config.models.length ? '没有匹配的模型' : '目录为空';
-        groupList.append(empty);
+        empty.textContent = message;
+        list.append(empty);
     }
+    document.getElementById('catalogModelsTitle').textContent = selectedGroup?.label || '组内模型';
+    document.getElementById('catalogGroupCount').textContent = namedGroups.length;
+    document.getElementById('catalogMemberCount').textContent = selectedGroup?.entries.length || 0;
+    document.getElementById('catalogUngroupedCount').textContent = ungrouped.length;
     groupList.scrollTop = scroll[0];
     modelList.scrollTop = scroll[1];
+    ungroupedList.scrollTop = scroll[2];
     const move = document.getElementById('catalogMoveGroup');
     move.replaceChildren();
     const addOption = (value, label) => { const option = document.createElement('option'); option.value = value; option.textContent = label; move.append(option); };
-    addOption('', '独立模型');
-    catalogGroups(config, { kind: selected?.kind || '' }).filter(group => group.id).forEach(group => addOption(group.key, group.label));
+    addOption('', '未分组');
+    catalogGroups(config, { kind: selected?.kind || '', includeEmpty: true }).filter(group => group.id).forEach(group => addOption(group.key, group.label));
     move.value = selected?.presentation?.routeGroup ? catalogGroupKey(selected) : '';
     move.disabled = !selected;
-    const controls = ['copyModelBtn', 'deleteModelBtn', 'createGroupBtn', 'moveModelUpBtn', 'moveModelDownBtn', 'catalogVisible'];
+    const controls = ['copyModelBtn', 'deleteModelBtn', 'catalogVisible'];
     controls.forEach(id => { document.getElementById(id).disabled = !selected; });
-    ['renameGroupBtn', 'moveGroupUpBtn', 'moveGroupDownBtn'].forEach(id => {
-        document.getElementById(id).disabled = !selected?.presentation?.routeGroup;
+    document.getElementById('catalogVisible').disabled = !selected || (selected.kind === 'video' && !selected.presentation?.routeGroup);
+    ['renameGroupBtn', 'deleteGroupBtn', 'moveGroupUpBtn', 'moveGroupDownBtn'].forEach(id => {
+        document.getElementById(id).disabled = !selectedGroup;
     });
+    ['moveModelUpBtn', 'moveModelDownBtn'].forEach(id => { document.getElementById(id).disabled = !selected?.presentation?.routeGroup; });
     document.getElementById('catalogVisible').checked = !!selected && selected.presentation?.visible !== false;
-    document.getElementById('clearCatalogBtn').disabled = !config.models.length;
+    document.getElementById('clearCatalogBtn').disabled = !config.models.length && !config.catalogGroups?.length;
     document.getElementById('catalogSelection').textContent = selected
         ? `${modelName(selected)} · ${selected.catalog?.hosts?.join(' / ') || '未纳入托管目录'}` : '';
 }

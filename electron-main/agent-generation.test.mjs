@@ -411,6 +411,33 @@ describe('AgentGeneration planning', () => {
 });
 
 describe('AgentGeneration effective CONFIG', () => {
+    test('remote conditional duration rules widen SD2 Fast requests and protect stale approvals', async t => {
+        const p = { ...provider('videos', 'video', 'sd2-fast'), endpoint: 'https://art.ravenhash.org/v1' };
+        const modelConfig = { schemaVersion: 1, models: [{ id: 'sd2-fast', kind: 'video', match: { model: ['^sd2-fast$'] },
+            options: { duration: { type: 'range', min: 1, max: 12, integer: true },
+                resolutionTier: { type: 'enum', values: ['480p', '720p'], default: '720p' },
+                ratio: { type: 'enum', values: ['16:9', '9:16'], default: '16:9' } },
+            parameterRules: { version: 1, rules: [{ when: { resolutionTier: '720p' },
+                options: { duration: { type: 'range', min: 1, max: 20, integer: true } } }] }
+        }] };
+        const h = await setup(t, { providers: [p], modelConfig,
+            items: [op('target', 'video', { duration: 20, resolution: '720p', ratio: '9:16' })] });
+        const run = h.plan(['target']);
+        await h.execute(run.steps[0], run);
+        assert.equal(h.requests.length, 1);
+        assert.equal(h.requests[0].body.duration, 20);
+        const stale = h.plan(['target']);
+        h.capabilities.current.models[0].parameterRules.rules[0].options.duration.max = 12;
+        const before = copy(h.projects.original);
+        await assert.rejects(h.execute(stale.steps[0], stale), error => {
+            assert.equal(error.submissionState, 'not_submitted');
+            assert.equal(error.parameterIssues[0].max, 12);
+            return true;
+        });
+        assert.equal(h.requests.length, 1);
+        assert.deepEqual(h.projects.original, before);
+    });
+
     test('scoped upgrade preserves legacy default models and out-of-scope accounts without switching a removed model', async t => {
         const video = { ...provider('videos', 'video', 'saved-model'), endpoint: 'https://relay.example/v1' };
         const modelConfig = { schemaVersion: 1, catalogMode: 'remote',
@@ -654,6 +681,97 @@ describe('AgentGeneration effective CONFIG', () => {
 });
 
 describe('AgentGeneration execution', () => {
+    test('Zhubo model preflight rejects unsupported references and parameters before creating output nodes', async t => {
+        const models = [
+            ['LongXia-video-seedance2_5-standard-480p-express-PerSecond', '480p', 25],
+            ['LongXia-video-seedance2_5-standard-720p-express-PerSecond', '720p', 25],
+            ['seedance-2.5-480p', '480p', 30], ['seedance-2.5-720p', '720p', 30], ['seedance-2.5-1080p', '1080p', 30]
+        ];
+        for (const [model, resolution, maxDuration] of models) {
+            const p = { ...provider('videos', 'video', model), endpoint: 'https://cart.ravenhash.org/v1' };
+            // A permissive catalog cannot override the verified upstream wire contract.
+            const modelConfig = { schemaVersion: 1, catalogMode: 'remote', models: [{ id: 'zhubo-test', kind: 'video',
+                match: { model: [`^${model.replaceAll('.', '\\.')}$`] }, catalog: { model, hosts: ['cart.ravenhash.org'] },
+                options: { duration: { type: 'range', min: 1, max: 60 },
+                    ratio: { type: 'enum', values: ['adaptive', '16:9', '9:16'] },
+                    resolutionTier: { type: 'enum', values: ['480p', '720p', '1080p'] } },
+                capabilities: { referenceImages: { supported: true, max: 40 }, referenceVideos: { supported: true, max: 3 },
+                    referenceAudios: { supported: true, max: 20 } }
+            }] };
+            for (const mode of ['valid', 'video', 'too-long', 'audio-format', 'audio-size', 'image-size']) {
+                const h = await setup(t, { providers: [p], modelConfig, items: [op('target', 'video', {
+                    duration: mode === 'too-long' ? maxDuration + 1 : maxDuration, resolution, ratio: 'adaptive'
+                })] });
+                for (const [mediaType, extension] of [['image', 'png'], [mode === 'video' ? 'video' : 'audio',
+                    mode === 'video' ? 'mp4' : mode === 'audio-format' ? 'aac' : 'mp3']]) {
+                    const filePath = await h.file(`reference.${extension}`);
+                    if (mode === 'audio-size' && mediaType === 'audio') await fs.truncate(filePath, (maxDuration === 25 ? 15 : 20) * 1024 * 1024 + 1);
+                    if (mode === 'image-size' && mediaType === 'image') await fs.truncate(filePath, 20 * 1024 * 1024 + 1);
+                    h.projects.original.items.push({ id: mediaType, kind: 'media', mediaType, filePath, width: 900, height: 1600 });
+                    h.projects.original.connections.push(edge(mediaType, 'target'));
+                }
+                const run = h.plan(['target']);
+                if (mode === 'valid') {
+                    await h.execute(run.steps[0], run);
+                    assert.equal(h.requests.length, 1);
+                    assert.equal(h.requests[0].body.ratio, '9:16');
+                    assert.equal(h.requests[0].body.resolution, resolution);
+                    assert.equal(h.requests[0].body.duration, maxDuration);
+                    assert.equal(h.requests[0].body.audioReferences.length, 1);
+                } else {
+                    const before = copy(h.projects.original);
+                    await assert.rejects(() => h.execute(run.steps[0], run), {
+                        video: /最多支持 0/, 'too-long': /时长/, 'audio-format': /仅支持/, 'audio-size': /音频参考不能超过/,
+                        'image-size': /图片不能超过 20/
+                    }[mode]);
+                    assert.equal(h.requests.length, 0);
+                    assert.deepEqual(h.projects.original, before, 'Invalid Zhubo inputs must not create output nodes');
+                }
+            }
+        }
+    });
+
+    test('SD2 Fast preflight enforces 930 and resolution duration limits before submitting', async t => {
+        const p = { ...provider('videos', 'video', 'sd2-fast'), endpoint: 'https://art.ravenhash.org/v1' };
+        const modelConfig = { schemaVersion: 1, catalogMode: 'remote', models: [{ id: 'sd2-fast', kind: 'video',
+            match: { model: ['^sd2-fast$'] }, catalog: { model: 'sd2-fast', hosts: ['art.ravenhash.org'] },
+            options: { duration: { type: 'range', min: 1, max: 15 },
+                ratio: { type: 'enum', values: ['adaptive', '16:9', '9:16'] },
+                resolutionTier: { type: 'enum', values: ['480p', '720p'] } },
+            capabilities: { referenceImages: { supported: true, max: 9 }, referenceVideos: { supported: true, max: 3 },
+                referenceAudios: { supported: true, max: 3 } }
+        }] };
+        for (const mode of ['valid', 'audio', 'too-long']) {
+            const h = await setup(t, { providers: [p], modelConfig,
+                items: [op('target', 'video', { duration: mode === 'too-long' ? 13 : 12, resolution: '720p', ratio: 'adaptive' })] });
+            for (const [mediaType, extension] of mode === 'audio' ? [['image', 'png'], ['audio', 'mp3']]
+                : [['image', 'png'], ['video', 'mp4']]) {
+                const filePath = await h.file(`reference.${extension}`);
+                h.projects.original.items.push({ id: mediaType, kind: 'media', mediaType, filePath, width: 900, height: 1600 });
+                h.projects.original.connections.push(edge(mediaType, 'target'));
+            }
+            if (mode === 'too-long') {
+                const before = copy(h.projects.original);
+                assert.throws(() => h.plan(['target']), { code: 'INVALID_DURATION', stage: 'validate', submissionState: 'not_submitted' });
+                assert.equal(h.requests.length, 0);
+                assert.deepEqual(h.projects.original, before, 'Invalid duration must be rejected during planning');
+                continue;
+            }
+            const run = h.plan(['target']);
+            if (mode === 'valid') {
+                await h.execute(run.steps[0], run);
+                assert.equal(h.requests.length, 1);
+                assert.equal(h.requests[0].body.ratio, '9:16');
+                assert.equal(h.requests[0].body.duration, 12);
+            } else {
+                const before = copy(h.projects.original);
+                await assert.rejects(() => h.execute(run.steps[0], run), mode === 'audio' ? /不支持参考音频/ : /720p.*12/);
+                assert.equal(h.requests.length, 0);
+                assert.deepEqual(h.projects.original, before, 'Invalid parameters must not create output nodes');
+            }
+        }
+    });
+
     test('Yueqi Pro 720 preserves endpoint-specific duration and media limits through Agent preflight', async t => {
         const model = 'seedance-2.5-pro-720';
         for (const host of ['art.ravenhash.org', 'cart.ravenhash.org', 'yueqi.icu']) {

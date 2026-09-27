@@ -2032,8 +2032,13 @@ export const DEFAULT_MODEL_CONFIG = {
                     "default": 4
                 },
                 "ratio": {
-                    "type": "unknown",
-                    "reason": "供应商未公开该模型比例枚举，当前界面使用文档示例16:9"
+                    "type": "enum",
+                    "values": [
+                        "16:9",
+                        "9:16"
+                    ],
+                    "default": "16:9",
+                    "field": "aspect_ratio"
                 },
                 "resolutionTier": {
                     "type": "enum",
@@ -2072,7 +2077,7 @@ export const DEFAULT_MODEL_CONFIG = {
             "prompt": {
                 "required": true
             },
-            "notes": "用户指定售价CNY1.06/秒；720p、4-30秒；最多30图/10视频/10音频，合计不超过50；references模式、公网URL；必传client_task_id；完成后鉴权下载content；比例枚举未公开"
+            "notes": "用户指定售价CNY1.06/秒；720p、4-30秒；最多30图/10视频/10音频，合计不超过50；references模式、公网URL；必传client_task_id；完成后鉴权下载content；官方工作台画幅16:9/9:16"
         },
         {
             "id": "starframe.ch1401-sd-2.5-720p",

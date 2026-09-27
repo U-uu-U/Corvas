@@ -38,14 +38,15 @@ import { requestRecoveryTaskId } from './generation-recovery-dialog.js';
 import { canRecoverGenerationTask, generationFailureError, formatClientGenerationError,
     isGenerationFailureConfirmed, getGenerationRejectionInfo } from './generation-progress.js';
 import { showStatusNotification } from './status-notification.js';
+import errorReportContract from '../shared/error-report-contract.cjs';
 import { createApplicationLauncher, createHunyuanPanel } from './hunyuan-accounts.js';
 import { createRhinoPanel } from './rhino-workbench.js';
 import { createBlenderPanel } from './blender-workbench.js';
-import { describeVideoModelProfile } from '../shared/video-model-profiles.mjs';
+import { describeVideoModelProfile, resolveVideoProfileParameters } from '../shared/video-model-profiles.mjs';
 import { isVideoGenerationAvailable } from '../shared/video-generation-availability.mjs';
-import { getModelPresentation, describeModelPresentation } from '../shared/model-presentation.mjs';
+import { getModelPresentation, describeModelPresentation, formatModelSalePrice, formatModelSalePriceDetails } from '../shared/model-presentation.mjs';
 import { modelConfigStore } from './model-config.js';
-import { catalogProviderKinds, expandCatalogProviders, getCatalogProviderEntries, isCatalogManaged, isRemoteCatalog } from '../shared/model-catalog.mjs';
+import { catalogProviderKinds, expandCatalogProviders, getCatalogProviderEntries, isCatalogManaged, isRemoteCatalog, resolveCatalogDefaultProvider } from '../shared/model-catalog.mjs';
 import {
     mergeImageProfile,
     resolveVideoModelProfile,
@@ -94,6 +95,20 @@ function normalizeRavenHashEndpoint(endpoint) {
         }
     } catch { /* Keep invalid input editable until save validation. */ }
     return value;
+}
+
+function providerSalePricePresentation(provider, profile) {
+    let host = '';
+    try { host = new URL(provider.endpoint).hostname.toLowerCase(); } catch { /* Unconfigured endpoint. */ }
+    const priceSiteLabel = { 'art.ravenhash.org': '老站', 'cart.ravenhash.org': '新站' }[host] || '';
+    const salePricing = profile?.salePricing || null;
+    if (!priceSiteLabel && !salePricing) return { salePricing, priceText: '', priceDetails: '', priceSiteLabel: '' };
+    return {
+        salePricing,
+        priceText: formatModelSalePrice(salePricing),
+        priceDetails: formatModelSalePriceDetails(salePricing, { includeSite: false }),
+        priceSiteLabel
+    };
 }
 
 const DEFAULT_IMAGE_SIZES = [
@@ -351,6 +366,11 @@ export class AgentSidebar {
         this.rhinoPanel = createRhinoPanel(handoffOptions('rhino'));
         this.blenderPanel = createBlenderPanel(handoffOptions('blender'));
         this.applicationLauncher = createApplicationLauncher({ onSelect: mode => {
+            if (mode === 'tripo' || mode === 'jimeng') {
+                const api = window.flowCanvas?.creativeWeb;
+                if (!api) throw new Error('请重启 Corvas 后打开网页创作平台');
+                return api.open(mode);
+            }
             this.setMode(mode);
             if (mode === 'rhino') this.rhinoPanel?.launch();
             if (mode === 'blender') this.blenderPanel?.launch();
@@ -1294,6 +1314,14 @@ export class AgentSidebar {
                 : describeModelPresentation(profile, provider.name || '未命名 API', { includePrice: false });
             if (kind === 'video') meta.className = 'generation-composer-model-description';
             copy.append(name, meta);
+            const pricing = providerSalePricePresentation(provider, profile);
+            if (pricing.priceText) {
+                const price = document.createElement('small');
+                price.className = 'generation-composer-model-price';
+                price.textContent = pricing.priceText === '售价待配置' ? pricing.priceText : `售价 ${pricing.priceText}`;
+                price.title = pricing.priceDetails;
+                copy.appendChild(price);
+            }
             const check = document.createElement('span');
             check.className = 'agent-composer-list-check';
             check.innerHTML = '<svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-check"></use></svg>';
@@ -2607,6 +2635,11 @@ export class AgentSidebar {
             this._renderGenerationTasks();
         });
         this.taskHistoryList?.addEventListener('click', (event) => {
+            const reportButton = event.target.closest('[data-report-task]');
+            if (reportButton) {
+                this._reportGenerationTask(reportButton.dataset.reportTask);
+                return;
+            }
             const outputButton = event.target.closest('[data-task-output]');
             if (outputButton) {
                 void this._activateGenerationTaskOutput(outputButton.dataset.taskOutput,
@@ -2964,6 +2997,7 @@ export class AgentSidebar {
             providerId: provider?.id || null,
             providerName: this._providerLabel(provider),
             model: provider?.model || '',
+            site: errorReportContract.classifyErrorReportSite(provider?.endpoint),
             prompt: String(prompt || ''),
             ...JSON.parse(JSON.stringify(promptInfo)),
             params: JSON.parse(JSON.stringify(params || {})),
@@ -3051,6 +3085,12 @@ export class AgentSidebar {
             status: this._isGenerationDisconnect(error) ? 'disconnected' : 'failed',
             error: message,
             errorCode: error?.code || null,
+            requestId: error?.requestId || null,
+            errorDetail: {
+                category: error?.category, stage: error?.stage, submissionState: error?.submissionState,
+                parameterIssues: error?.parameterIssues, submissionUnknown: error?.submissionUnknown,
+                retryable: error?.retryable, status: error?.status
+            },
             confirmedFailure: error?.confirmedFailure === true || error?.code === 'UPSTREAM_TASK_FAILED',
             ...(rejection ? {
                 params: { syncStage: rejection.stage }
@@ -3062,6 +3102,23 @@ export class AgentSidebar {
 
     recordGenerationError(taskId, error) {
         return this._recordGenerationError(taskId, error);
+    }
+
+    _reportGenerationTask(taskId) {
+        const task = this.generationTasks.find(item => item.id === taskId);
+        if (!task) return null;
+        const context = errorReportContract.sanitizeErrorReport({
+            ...task.errorDetail, requestId: task.requestId || '', taskId: task.taskId,
+            clientTaskId: task.id, projectId: task.projectId, nodeId: task.params?.nodeId || task.nodeId,
+            providerId: task.providerId, model: task.model, kind: task.kind, error: task.error,
+            errorCode: task.errorCode, createdAt: task.createdAt, updatedAt: task.updatedAt,
+            site: task.site || 'unknown', params: task.params,
+            referenceCounts: { images: task.sourcePaths?.length || 0, videos: task.params?.videoSourcePaths?.length || 0,
+                audios: task.params?.audioSourcePaths?.length || 0 },
+            configRevision: modelConfigStore.getConfig()?.revision
+        });
+        document.dispatchEvent(new CustomEvent('diagnostics:report', { detail: context }));
+        return context;
     }
 
     _isGenerationTaskCanceled(taskId) {
@@ -3328,6 +3385,11 @@ export class AgentSidebar {
                             <svg class="flow-icon flow-icon-xs" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-expand"></use></svg>打开文件${outputPaths.length > 1 ? ` ${index + 1}` : ''}
                         </button>`).join('')}</div>` : ''}
                     ${errorCopy ? `<p class="agent-task-error" title="${this._escapeTaskText(errorCopy)}">${this._escapeTaskText(errorCopy)}</p>` : ''}
+                    ${['failed', 'disconnected'].includes(status) ? `<div class="agent-task-recovery">
+                        <button type="button" data-report-task="${this._escapeTaskText(task.id)}" title="提交错误">
+                            <svg class="flow-icon flow-icon-xs" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-arrow-up"></use></svg>提交错误
+                        </button>
+                    </div>` : ''}
                     <details class="agent-task-request" data-task-recovery-id="${this._escapeTaskText(task.id)}" ${expandedRecoveryIds.has(task.id) ? 'open' : ''}>
                         <summary>高级恢复</summary>
                         <div class="agent-task-recovery">
@@ -4116,6 +4178,7 @@ export class AgentSidebar {
         const provider = this._findProvider(id);
         if (!provider || !this._isVideoProvider(provider) || !isVideoGenerationAvailable(provider, modelConfigStore.getConfig())) return;
         this.globalConfig.videoProviderId = id;
+        this.globalConfig.videoProviderSelection = 'manual';
         this._saveConfig();
         this._renderProviderList();
         this._renderAgentComposerModels();
@@ -4131,7 +4194,8 @@ export class AgentSidebar {
     }
 
     _getVideoProvider() {
-        return this._findProvider(this.globalConfig.videoProviderId);
+        if (this.globalConfig.videoProviderSelection === 'manual') return this._findProvider(this.globalConfig.videoProviderId);
+        return resolveCatalogDefaultProvider(modelConfigStore.getConfig(), this.providers, 'video', this.globalConfig.videoProviderId);
     }
 
     _providerLabel(provider) {
@@ -4186,6 +4250,7 @@ export class AgentSidebar {
                     routeGroupScope: profile?.routeGroupScope || '',
                     routeModelLabel: profile?.routeModelLabel || '',
                     recommended: profile?.recommended === true,
+                    ...providerSalePricePresentation(provider, profile),
                     modelLabel: profile?.label || '',
                     description: kind === 'video'
                         ? describeVideoModelProfile(profile, { includePrice: false })
@@ -4335,7 +4400,7 @@ export class AgentSidebar {
 
     getVideoModelProfile(binding = null) {
         const provider = this._getBoundProvider(binding, this._getVideoProvider());
-        const profile = this._getVideoModelProfile(provider);
+        const profile = resolveVideoProfileParameters(this._getVideoModelProfile(provider), provider, binding || {});
         if (!profile) return null;
         const { match, ...plainProfile } = profile;
         return {

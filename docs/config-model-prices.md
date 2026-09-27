@@ -1,8 +1,12 @@
 # 管理页双站价格
 
+2026-09-24 主播新增五型号价表已随CONFIG r38接入，老站上游价2倍、新站老站价8/7向上两位，详见 `docs/zhubo-september-models.md`。画布通过同一销售价快照下发自动匹配对应API站点。
+
+2026-09-24 老站已完成USD到CNY的账本迁移。管理价表老站元数据现为 `currency=CNY`、`exchangeToCny=1`；23条原本已换算为人民币的展示价保持不变。详见 `docs/art-cny-migration.md`。
+
 管理页操作模式和表单列表分别显示 `老站价格`、`新站价格`。数据来自两个中转站的 `models.billing_rule_id -> billing_rules` 只读核对，不从 CONFIG 的单份 `pricing` 或模型预扣费推算。按次、按秒、分辨率及参考视频档位分别保留；金额显示两位小数，鼠标停在价格上可查看核对时间。
 
-登录后的 `GET /admin/model-prices` 优先读取 `CONFIG_DATA_DIR/admin-model-prices.json`，否则读取 `configserver/seed/admin-model-prices.json`。接口只输出已允许的展示字段，原始证据和额外字段不会返回给浏览器；文件不进入公开 `/config`，不会改变画布价格显示、模型目录、渠道状态或实际计费。
+登录后的 `GET /admin/model-prices` 优先读取 `CONFIG_DATA_DIR/admin-model-prices.json`，否则读取 `configserver/seed/admin-model-prices.json`。接口只输出已允许的展示字段，原始证据和额外字段不会返回给浏览器。2026-09-24 起，公开 `/config` 从同一已校验快照中向精确模型投影双站 `salePrices`，供画布显示售价；不下发原始证据、供应商成本或凭据，不改变模型目录、渠道状态或实际计费。详见 `docs/canvas-sale-prices.md`。
 
 数据格式为 `checkedAt` 和 `sites`，每站包含 `host`、`label`、`checkedAt`、原计费 `currency`、`exchangeToCny` 以及 `models`。每个模型包含精确 `model`、`status`、`active`、展示 `currency` 和 `prices: [{ label, amount, unit }]`。原站使用 USD 时按该站配置的人民币汇率折算展示，原始计费单位保持不变。可选 `ids` 仅用于已核实的无 `catalog` 历史条目；有 `catalog.model` 的条目始终按精确模型 ID 匹配。
 
@@ -14,6 +18,16 @@
 - 历史条目没有可核实的一对一模型绑定：显示“待绑定模型”。
 
 此文件是一次核对快照，更新中转站价格后需重新核对并更新它；不要将旧快照当作实时收费配置。价格展示更新不要求重新打包桌面客户端。
+
+## 2026-09-24 Dola 30 秒
+
+新增山海 `oc-model-r5cfh8`（dola 9图30秒）：老站 5.00、新站 5.72 元/次，复用现有15秒版的定价口径。管理页双站价格及0.9山海币/次的上游参考成本已定向补充，其他价目保持原值。部署与验证见 `docs/shanhai-video.md`，回执 `output/dola30-config-receipt.json`。
+
+## 2026-09-23 新增渠道补调
+
+两站实际计费已按 `docs/tkeapi-deployment.md` 的新增渠道代理差价更新。dola 老站 5.00、新站 5.72 元/次；新站 Yueqi `sd2-fast` 4.58、Pro 11.20、Pro-720 14.86 元/次；山海官渠 5.72 元/秒，两条 933 各 8.00 元/次。价表只修改这些金额和核对时间，保留其他价目、成本、启停状态及公开 CONFIG 内容。没有重启 CONFIG 服务。
+
+展示资料备份：`/root/flow-config-backups/added-prices-20260922T185619Z/`；回执 `output/added-channel-prices-display.json`。隔离登录实例通过管理价格接口读取并逐项核对新金额。下面“首次核对”中的两站同价记录为调价前历史。
 
 ## 2026-09-23 核对
 

@@ -1,8 +1,12 @@
 import publicErrors from '../shared/public-api-error.cjs';
 import errorRedaction from '../shared/error-redaction.cjs';
+import sd2FastValidation from '../shared/sd2-fast-validation.cjs';
+import publicDetail from '../shared/public-error-detail.cjs';
 
 const { CATALOG, safeTaskId } = publicErrors;
 const { redactSensitiveText } = errorRedaction;
+const { SD2_FAST_DURATION_CODE, SD2_FAST_DURATION_MESSAGE } = sd2FastValidation;
+const { normalizePublicDetail, formatPublicDetail, isFormattedPublicDetail } = publicDetail;
 
 export function formatGenerationElapsed(startedAt, now = Date.now()) {
     const start = Number(startedAt);
@@ -43,7 +47,7 @@ export function getGenerationRejectionInfo(code) {
     return Object.hasOwn(REJECTION_INFO, code || '') ? REJECTION_INFO[code] : null;
 }
 
-const PUBLIC_MESSAGES = Object.values(CATALOG).map(([, message]) => message);
+const PUBLIC_MESSAGES = [...Object.values(CATALOG).map(([, message]) => message), SD2_FAST_DURATION_MESSAGE];
 const GENERIC_CLIENT_FAILURE = '请求未能完成，请稍后重试。';
 const LOCAL_MESSAGE_PATTERNS = [
     /^(?:模型 [\w.-]+ 已暂时停用，请选择其他渠道；已有任务仍可恢复。|素材文件不存在)$/,
@@ -66,6 +70,11 @@ export function formatClientStatusMessage(value) {
 export function formatClientGenerationError(value) {
     const details = value && typeof value === 'object' ? value : {};
     const original = String(details.error || details.message || (typeof value === 'string' ? value : '') || '');
+    const structured = normalizePublicDetail(details);
+    if (structured) return formatPublicDetail(structured, CATALOG);
+    if (isFormattedPublicDetail(original, CATALOG)) return original;
+    // Rebuild local parameter errors from a fixed message; never echo response details.
+    if (details.code === SD2_FAST_DURATION_CODE) return SD2_FAST_DURATION_MESSAGE;
     if (!original.trim()) return '';
 
     // 任务 ID 与排查编号必须在剥 URL 之前取出：它们常嵌在上游产物地址的路径里，
@@ -127,6 +136,13 @@ export function formatClientGenerationError(value) {
 
 export function generationFailureError(result, fallbackMessage = '请求失败') {
     const error = new Error(formatClientGenerationError({ ...result, error: result?.error || fallbackMessage }));
+    const structured = normalizePublicDetail(result);
+    if (structured) {
+        Object.assign(error, structured);
+        const taskId = safeTaskId(result?.taskId);
+        if (taskId) error.taskId = taskId;
+        return error;
+    }
     for (const key of ['code', 'requestId', 'taskId', 'retryable']) {
         if (result?.[key] !== undefined) error[key] = result[key];
     }

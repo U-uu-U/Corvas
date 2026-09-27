@@ -6,6 +6,7 @@
 // ajv 是可选依赖：装了就做完整 schema 校验（推荐）；没装则降级为结构校验，并在日志与
 // 管理面板上明确标注「降级模式」，避免把「没校验」误当成「校验通过」。
 import fs from 'node:fs';
+import parameterRules from './model-parameter-rules.cjs';
 
 const KINDS = ['image', 'video', 'text'];
 
@@ -103,6 +104,9 @@ export async function createValidator({ schemaPath } = {}) {
         } else {
             config = input;
         }
+        const ruleErrors = (Array.isArray(config?.models) ? config.models : []).flatMap(entry => parameterRules.validateParameterRules(entry?.parameterRules)
+            .map(issue => `${entry?.id || 'model'}: ${parameterRules.formatParameterIssue(issue)}`));
+        if (ruleErrors.length) return { ok: false, errors: ruleErrors, config: null, mode };
         if (validateSchema) {
             if (validateSchema(config)) return { ok: true, errors: [], config, mode };
             return { ok: false, errors: (validateSchema.errors || []).map(formatAjvError), config: null, mode };

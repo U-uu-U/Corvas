@@ -5968,6 +5968,33 @@ select.plan-cell-input {
     padding-top: 2px;
 }
 
+.generation-composer-sale-price {
+    display: flex;
+    min-width: 0;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 3px 7px;
+    padding: 4px 7px 0;
+    color: var(--text-primary);
+    font-size: 10px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.generation-composer-sale-price[hidden] {
+    display: none;
+}
+
+.generation-composer-sale-price > span {
+    color: var(--text-secondary);
+}
+
+.generation-composer-sale-price > strong {
+    min-width: 0;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
 .generation-composer-select,
 .generation-composer-count {
     display: inline-flex;
@@ -6694,6 +6721,18 @@ select.plan-cell-input {
 
 .generation-composer-model-option.selected > span:last-child {
     color: #bfc2c7;
+}
+
+.agent-composer-list-copy small.generation-composer-model-price,
+.op-model-option small.generation-composer-model-price,
+.generation-composer-model-option small.generation-composer-model-price {
+    color: var(--text-primary);
+    font-size: 10px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.5;
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 .generation-composer-model-routes {
@@ -7727,6 +7766,10 @@ select.plan-cell-input {
     grid-row: 2;
     color: #7f848d;
     font-size: 9px;
+}
+
+.op-model-option small.generation-composer-model-price {
+    grid-row: 3;
 }
 
 .op-model-option > span {
