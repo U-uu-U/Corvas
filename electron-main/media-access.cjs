@@ -65,6 +65,20 @@ class MediaAccessPolicy {
                 if (saved.version !== 1 || !Array.isArray(saved.files) || !Array.isArray(saved.roots)) throw new Error('Invalid media registry');
                 this.files = new Set(saved.files.map(savedCanonical).map(pathKey));
                 this.roots = new Set(saved.roots.map(savedCanonical));
+                // Board data is authoritative for files produced by a previous run.
+                // Merge it into an older registry so generated video results remain
+                // readable after an app restart or a profile migration.
+                for (const root of legacyScope.roots || []) {
+                    try { this.grant(root, { directory: true, persist: false }); } catch { /* Skip stale folders. */ }
+                }
+                for (const file of legacyScope.files || []) {
+                    try {
+                        const candidate = path.resolve(file);
+                        const allowedByManagedRoot = [...this.managedRoots, ...this.roots].some(root => within(root, candidate));
+                        if (allowedByManagedRoot) this.grant(file, { persist: false });
+                    } catch { /* Skip stale files. */ }
+                }
+                this.persist();
             } catch (error) {
                 // Only the first upgrade imports legacy references. Corruption must not
                 // turn a renderer-written board into a fresh source of permissions.

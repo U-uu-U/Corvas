@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { MediaAccessPolicy, collectBoardMediaScope } = require('./media-access.cjs');
@@ -125,4 +126,22 @@ test('temporarily missing saved grants do not invalidate the registry', async t 
     await assert.rejects(restarted.resolve(f.file), { code: 'ENOENT' });
     await fs.rename(`${f.file}.disconnected`, f.file);
     assert.equal((await restarted.resolve(f.file)).filePath, await fs.realpath(f.file));
+});
+
+test('board video results repair a stale media registry on startup', async t => {
+    const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'flow-media-access-'));
+    t.after(() => fsSync.rmSync(root, { recursive: true, force: true }));
+    const data = path.join(root, 'data');
+    const captured = path.join(data, 'captured');
+    fsSync.mkdirSync(captured, { recursive: true });
+    const video = path.join(captured, 'generated.mp4');
+    fsSync.writeFileSync(video, Buffer.from('video-fixture'));
+    const registry = path.join(data, 'media-access.v1.json');
+    fsSync.writeFileSync(registry, JSON.stringify({ version: 1, roots: [captured], files: [] }));
+    const policy = new MediaAccessPolicy({ userData: root, managedRoots: [captured], registryFile: registry,
+        legacyScope: { roots: [], files: [video] } });
+    const resolved = await policy.resolve(video);
+    assert.equal(resolved.filePath, fsSync.realpathSync(video));
+    const saved = JSON.parse(fsSync.readFileSync(registry, 'utf8'));
+    assert.ok(saved.files.some(file => file.toLowerCase() === fsSync.realpathSync(video).toLowerCase()));
 });
