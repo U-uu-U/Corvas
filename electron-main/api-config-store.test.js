@@ -59,7 +59,7 @@ test('ApiConfigStore refuses plaintext fallback and leaves the previous credenti
     secure.save({ revision: 1, providers: [{ apiKey: 'original-secret' }] });
     const original = fs.readFileSync(secure.filePath, 'utf8');
     for (const protect of [null, () => null, () => Buffer.alloc(0)]) {
-        const store = new ApiConfigStore(root, { protect });
+        const store = new ApiConfigStore(root, { protect, unprotect: value => Buffer.from(value).map(byte => byte ^ 0x5a).toString('utf8') });
         const result = store.save({ revision: 2, providers: [{ apiKey: 'new-secret' }] });
         assert.equal(result.success, false); assert.match(result.error, /加密不可用/);
         assert.equal(fs.readFileSync(store.filePath, 'utf8'), original);
@@ -80,4 +80,35 @@ test('legacy plaintext is readable but saves and new backups are encrypted even 
         const raw = fs.readFileSync(file, 'utf8'); assert.equal(raw.includes('legacy-secret'), false);
         assert.equal(JSON.parse(raw).format, 'safe-storage');
     }
+});
+
+test('locked or unavailable credential decryption cannot replace existing configuration with an empty startup snapshot', t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-canvas-api-locked-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const working = createStore(root);
+    working.save({ revision: 1, providers: [{ id: 'saved', apiKey: 'saved-secret' }] });
+    working.save({ revision: 2, providers: [{ id: 'saved', apiKey: 'latest-secret' }] });
+    const files = [working.filePath, ...working._backupFiles()];
+    const before = files.map(file => fs.readFileSync(file));
+    for (const unprotect of [() => null, () => { throw new Error('Keychain locked'); }]) {
+        const locked = new ApiConfigStore(root, { protect: text => Buffer.from(text), unprotect });
+        assert.equal(locked.load().success, false);
+        assert.equal(locked.load().code, 'API_CONFIG_UNREADABLE');
+        assert.equal(locked.save({ revision: 3, providers: [] }).success, false);
+        assert.deepEqual(files.map(file => fs.readFileSync(file)), before);
+    }
+    assert.equal(working.load().config.providers[0].apiKey, 'latest-secret');
+});
+
+test('missing stores remain a valid first start while damaged existing stores fail explicitly', t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-canvas-api-damaged-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const store = createStore(root);
+    assert.equal(store.load().success, true);
+    assert.equal(store.load().config, null);
+    fs.mkdirSync(store.dataDir, { recursive: true });
+    fs.writeFileSync(store.filePath, '{broken');
+    assert.equal(store.load().success, false);
+    assert.equal(store.save({ providers: [] }).success, false);
+    assert.equal(fs.readFileSync(store.filePath, 'utf8'), '{broken');
 });

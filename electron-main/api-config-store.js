@@ -52,6 +52,10 @@ class ApiConfigStore {
                 recoveredFromBackup: candidate !== this.filePath
             };
         }
+        if (candidates.some(candidate => fs.existsSync(candidate))) {
+            return { success: false, config: null, recoveredFromBackup: false, code: 'API_CONFIG_UNREADABLE',
+                error: '已有 API 配置暂时无法读取，原文件已保留。请解锁系统钥匙串后重试；不要重新创建空配置。' };
+        }
         return { success: true, config: null, recoveredFromBackup: false };
     }
 
@@ -59,6 +63,11 @@ class ApiConfigStore {
         try {
             const normalized = normalizeConfig(config);
             const current = this._readConfig(this.filePath);
+            // A locked Keychain or damaged primary must never be treated as a fresh install.
+            if (!current && fs.existsSync(this.filePath)) {
+                return { success: false, code: 'API_CONFIG_UNREADABLE',
+                    error: '原 API 配置无法读取，已阻止覆盖。请先恢复系统钥匙串或配置备份。' };
+            }
             const encrypted = current && JSON.parse(fs.readFileSync(this.filePath, 'utf8')).format === 'safe-storage';
             if (encrypted && JSON.stringify(current) === JSON.stringify(normalized)) {
                 return { success: true, unchanged: true, revision: normalized.revision };
