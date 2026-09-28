@@ -319,6 +319,7 @@ export class AgentSidebar {
         this.taskHistoryBadge = document.getElementById('agentTaskHistoryBadge');
         this.taskHistoryPanel = document.getElementById('agentTaskHistory');
         this.taskHistoryCloseBtn = document.getElementById('agentTaskHistoryClose');
+        this.taskHistoryClearBtn = document.getElementById('agentTaskHistoryClear');
         this.taskHistoryFilters = document.getElementById('agentTaskHistoryFilters');
         this.taskHistoryList = document.getElementById('agentTaskHistoryList');
         this.taskHistorySummary = document.getElementById('agentTaskHistorySummary');
@@ -2621,6 +2622,7 @@ export class AgentSidebar {
             this._setTaskHistoryOpen(open);
         });
         this.taskHistoryCloseBtn?.addEventListener('click', () => this._setTaskHistoryOpen(false));
+        this.taskHistoryClearBtn?.addEventListener('click', () => this._clearFinishedGenerationTasks());
         this.taskHistoryFilters?.addEventListener('click', event => {
             const button = event.target.closest('[data-task-kind]');
             if (!button) return;
@@ -3222,6 +3224,21 @@ export class AgentSidebar {
             task.params?.ratio,
             task.params?.duration != null ? `${task.params.duration} 秒` : null
         ].filter(Boolean).join(' · ') || '模型默认参数';
+    }
+
+    async _clearFinishedGenerationTasks() {
+        const active = new Set(['running', 'disconnected']);
+        const removable = this.generationTasks.filter(task => !active.has(task.status));
+        if (!removable.length) {
+            if (this.taskHistorySummary) this.taskHistorySummary.textContent = '没有可清空的已结束记录';
+            return false;
+        }
+        if (!confirm(`清空 ${removable.length} 条已结束任务记录？正在运行或待恢复的任务会保留。`)) return false;
+        this.generationTasks = this.generationTasks.filter(task => active.has(task.status));
+        this._saveGenerationTasks();
+        await window.flowCanvas?.mcp?.clearRecoverableGenerations?.({ preserveActive: true });
+        this._renderGenerationTasks();
+        return true;
     }
 
     _generationTaskOutputPaths(task) {

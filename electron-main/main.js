@@ -3571,6 +3571,11 @@ ipcMain.handle('mcp:generation:recovery-list', event => {
     return flowCanvasBridge?.recoveryStore.list() || [];
 });
 
+ipcMain.handle('mcp:generation:recovery-clear', (event, options) => {
+    if (event.sender !== mainWindow?.webContents) return { removed: [] };
+    return flowCanvasBridge?.recoveryStore.clear(options || {}) || { removed: [] };
+});
+
 app.on('window-all-closed', () => {
     if (watcher) watcher.closeAll();
     if (flowCanvasBridge) flowCanvasBridge.stop();

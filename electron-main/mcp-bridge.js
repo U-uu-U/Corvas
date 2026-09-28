@@ -3841,13 +3841,25 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             recordDiagnostic('error', 'generation.video_submission_unknown', {
                 clientTaskId: options.clientTaskId, model, endpointRef: endpointReference(endpoint), payload: initialResponse
             });
-            const mapped = mapLocalError(502, initialResponse, { code: 'RH_SUBMISSION_UNKNOWN' });
-            const reason = mapped.error || '服务端没有返回任务 ID 或视频地址';
-            return {
-                success: false,
-                error: reason, code: mapped.code, requestId: mapped.requestId || options.clientTaskId,
-                submissionUnknown: mapped.submissionUnknown, confirmedFailure: mapped.confirmedFailure
-            };
+            // Some relays accept the request and finish it but omit the upstream
+            // task id in the POST response. The gateway can still recover by the
+            // exact X-Log-Id; keep polling with our recovery id instead of ending
+            // the task as permanently unrecoverable.
+            let recoveryCapable = false;
+            try {
+                const host = new URL(endpoint).hostname.toLowerCase();
+                recoveryCapable = ['art.ravenhash.org', 'cart.ravenhash.org', 'video.zhubo.asia', 'yueqi.icu'].includes(host);
+            } catch { /* Unknown endpoints must retain the conservative failure. */ }
+            if (!recoveryCapable) {
+                const mapped = mapLocalError(502, initialResponse, { code: 'RH_SUBMISSION_UNKNOWN' });
+                const reason = mapped.error || '服务端没有返回任务 ID 或视频地址';
+                return { success: false, error: reason, code: mapped.code,
+                    requestId: mapped.requestId || options.clientTaskId,
+                    submissionUnknown: mapped.submissionUnknown, confirmedFailure: mapped.confirmedFailure };
+            }
+            recoveringSubmission = true;
+            initialResponse = { id: recoveryId, task_id: recoveryId, status: 'pending', recovering: true };
+            options.onTaskSubmitted?.({ taskId: recoveryId, model, initialResponse, recovering: true, localRecoveryId: true });
         }
         if (taskId) {
             try {
