@@ -44,6 +44,20 @@ class GenerationRecoveryStore {
             mediaType: result?.mediaType || entry.kind
         }));
     }
+
+    clear({ preserveActive = true } = {}) {
+        const keep = new Set(['submitting', 'submitted', 'recovering']);
+        const removed = [];
+        for (const [clientTaskId, entry] of this.records) {
+            if (preserveActive && keep.has(entry.state)) continue;
+            const name = crypto.createHash('sha256').update(clientTaskId).digest('hex');
+            const file = path.join(this.directory, `${name}.json`);
+            try { fs.unlinkSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+            this.records.delete(clientTaskId);
+            removed.push(clientTaskId);
+        }
+        return { removed };
+    }
 }
 
 module.exports = { GenerationRecoveryStore };

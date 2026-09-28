@@ -9229,6 +9229,20 @@ body.sidebar-closed .task-history-dock .agent-task-history {
     color: #c9888d;
 }
 
+.agent-task-history-clear {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    place-items: center;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #969ba4;
+    cursor: pointer;
+}
+.agent-task-history-clear:hover { background: #3b292b; color: #f0b3b3; }
+
 .asset-library-card-annotation {
     margin: 0 6px 6px;
     overflow: hidden;
