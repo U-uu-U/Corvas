@@ -145,3 +145,22 @@ test('board video results repair a stale media registry on startup', async t => 
     const saved = JSON.parse(fsSync.readFileSync(registry, 'utf8'));
     assert.ok(saved.files.some(file => file.toLowerCase() === fsSync.realpathSync.native(video).toLowerCase()));
 });
+
+test('legacy video grants compare native paths before checking managed roots', async t => {
+    const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'flow-media-alias-'));
+    t.after(() => fsSync.rmSync(root, { recursive: true, force: true }));
+    const captured = path.join(root, 'data', 'captured');
+    fsSync.mkdirSync(captured, { recursive: true });
+    const video = path.join(captured, 'generated.mp4');
+    fsSync.writeFileSync(video, 'video-fixture');
+    const alias = path.join(`${root}-short`, 'data', 'captured', 'generated.mp4');
+    const native = fsSync.realpathSync.native;
+    t.mock.method(fsSync.realpathSync, 'native', value => value === alias ? native(video) : native(value));
+    const registryFile = path.join(root, 'media-access.v1.json');
+    fsSync.writeFileSync(registryFile, JSON.stringify({ version: 1, roots: [captured], files: [] }));
+    const policy = new MediaAccessPolicy({ userData: root, managedRoots: [captured], registryFile,
+        legacyScope: { roots: [], files: [alias] } });
+    const saved = JSON.parse(fsSync.readFileSync(registryFile, 'utf8'));
+    assert.ok(saved.files.some(file => file.toLowerCase() === native(video).toLowerCase()));
+    assert.equal((await policy.resolve(video)).filePath, await fs.realpath(video));
+});
