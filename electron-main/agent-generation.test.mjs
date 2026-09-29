@@ -731,24 +731,26 @@ describe('AgentGeneration execution', () => {
         }
     });
 
-    test('SD2 Fast preflight enforces 930 and resolution duration limits before submitting', async t => {
+    test('SD2 Fast preflight enforces 9 images, 0 videos, 3 audios and resolution duration limits', async t => {
         const p = { ...provider('videos', 'video', 'sd2-fast'), endpoint: 'https://art.ravenhash.org/v1' };
         const modelConfig = { schemaVersion: 1, catalogMode: 'remote', models: [{ id: 'sd2-fast', kind: 'video',
             match: { model: ['^sd2-fast$'] }, catalog: { model: 'sd2-fast', hosts: ['art.ravenhash.org'] },
             options: { duration: { type: 'range', min: 1, max: 15 },
                 ratio: { type: 'enum', values: ['adaptive', '16:9', '9:16'] },
                 resolutionTier: { type: 'enum', values: ['480p', '720p'] } },
-            capabilities: { referenceImages: { supported: true, max: 9 }, referenceVideos: { supported: true, max: 3 },
+            capabilities: { referenceImages: { supported: true, max: 9 }, referenceVideos: { supported: false, max: 0 },
                 referenceAudios: { supported: true, max: 3 } }
         }] };
-        for (const mode of ['valid', 'audio', 'too-long']) {
+        for (const mode of ['valid', 'video', 'too-long']) {
             const h = await setup(t, { providers: [p], modelConfig,
                 items: [op('target', 'video', { duration: mode === 'too-long' ? 13 : 12, resolution: '720p', ratio: 'adaptive' })] });
-            for (const [mediaType, extension] of mode === 'audio' ? [['image', 'png'], ['audio', 'mp3']]
-                : [['image', 'png'], ['video', 'mp4']]) {
-                const filePath = await h.file(`reference.${extension}`);
-                h.projects.original.items.push({ id: mediaType, kind: 'media', mediaType, filePath, width: 900, height: 1600 });
-                h.projects.original.connections.push(edge(mediaType, 'target'));
+            const references = mode === 'video' ? [['image', 'png'], ['video', 'mp4']]
+                : [['image', 'png'], ['audio', 'mp3'], ['audio', 'mp3'], ['audio', 'mp3']];
+            for (const [index, [mediaType, extension]] of references.entries()) {
+                const filePath = await h.file(`reference-${index}.${extension}`);
+                const id = `${mediaType}-${index}`;
+                h.projects.original.items.push({ id, kind: 'media', mediaType, filePath, width: 900, height: 1600 });
+                h.projects.original.connections.push(edge(id, 'target'));
             }
             if (mode === 'too-long') {
                 const before = copy(h.projects.original);
@@ -757,18 +759,19 @@ describe('AgentGeneration execution', () => {
                 assert.deepEqual(h.projects.original, before, 'Invalid duration must be rejected during planning');
                 continue;
             }
-            const run = h.plan(['target']);
-            if (mode === 'valid') {
-                await h.execute(run.steps[0], run);
-                assert.equal(h.requests.length, 1);
-                assert.equal(h.requests[0].body.ratio, '9:16');
-                assert.equal(h.requests[0].body.duration, 12);
-            } else {
+            if (mode === 'video') {
                 const before = copy(h.projects.original);
-                await assert.rejects(() => h.execute(run.steps[0], run), mode === 'audio' ? /不支持参考音频/ : /720p.*12/);
+                assert.throws(() => h.plan(['target']), { code: 'LOCAL_MODEL_PARAMETER_INVALID', stage: 'validate', submissionState: 'not_submitted' });
                 assert.equal(h.requests.length, 0);
                 assert.deepEqual(h.projects.original, before, 'Invalid parameters must not create output nodes');
+                continue;
             }
+            const run = h.plan(['target']);
+            await h.execute(run.steps[0], run);
+            assert.equal(h.requests.length, 1);
+            assert.equal(h.requests[0].body.ratio, '9:16');
+            assert.equal(h.requests[0].body.duration, 12);
+            assert.equal(h.requests[0].body.audioReferences.length, 3);
         }
     });
 
