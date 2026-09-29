@@ -9,6 +9,12 @@ const hosts = ['art.ravenhash.org', 'cart.ravenhash.org'];
 const checkedAt = '2026-09-24T05:00:00Z';
 const price = (host, amount, unit = 'request') => ({ host, status: 'known', currency: 'CNY', kind: 'sale',
     source: 'relay billing snapshot', updatedAt: checkedAt, prices: [{ label: '', amount, unit }] });
+const health = (host, index) => ({ host, state: index ? 'degraded' : 'available', reason: 'recent',
+    samples: index ? ['success', 'failure', 'failure', 'success', 'failure'] : Array(10).fill('success'),
+    successCount: index ? 2 : 10, failureCount: index ? 3 : 0, excludedCount: 1,
+    durationSamples: index ? 2 : 10, averageSeconds: index ? 185 : 130,
+    checkedAt: new Date().toISOString(), validUntil: new Date(Date.now() + 180000).toISOString(),
+    lastCompletedAt: new Date(Date.now() - 300000).toISOString() });
 const model = (wire, label, amounts, grouped = true) => ({ id: `smoke.${wire}`, kind: 'video',
     match: { model: [`^${wire.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`] },
     catalog: { model: wire, hosts, enabled: true },
@@ -18,7 +24,10 @@ const model = (wire, label, amounts, grouped = true) => ({ id: `smoke.${wire}`, 
         resolutionTier: { type: 'enum', values: ['480p', '720p'], default: '720p' } },
     capabilities: { referenceImages: { supported: true, max: 10 }, referenceVideos: { supported: false, max: 0 },
         referenceAudios: { supported: false, max: 0 } },
-    salePrices: hosts.map((host, index) => price(host, amounts[index])) });
+    salePrices: hosts.map((host, index) => price(host, amounts[index])),
+    generationHealth: hosts.map(health),
+    generationHealthTimings: hosts.map((host, index) => ({ host,
+        seconds: index ? [1800, null, null, 1801, null] : Array(10).fill(130) })) });
 const pro = model('seedance-2.5-pro', 'Seedance 2.5 Pro', [9.8, 11.2]);
 const dola = model('oc-model-r5cfh8', 'dola（9图30秒）', [5, 5.72]);
 const minimax = model('minimax-h3', 'MiniMax H3', [0.05, 0.06], false);
@@ -28,6 +37,8 @@ for (const [index, entry] of minimax.salePrices.entries()) entry.prices = [
 ];
 const unknown = model('unknown-sale', 'Unknown Sale', [0, 0], false);
 unknown.salePrices = hosts.map(host => ({ ...price(host, 0), status: 'unknown', prices: [] }));
+unknown.generationHealth = hosts.map(host => ({ ...health(host, 0), state: 'unknown', reason: 'insufficient',
+    samples: ['success'], successCount: 1, durationSamples: 0, averageSeconds: null }));
 const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote', catalogScope: { hosts, kinds: ['video'] },
     models: [pro, dola, minimax, unknown] };
 
@@ -134,13 +145,91 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote', catalogSc
                 return element.scrollWidth > element.clientWidth + 2 || bounds.left < -1 || bounds.right > innerWidth + 1;
             }).map(element => element.textContent));
             assert.deepEqual(issues, [], `${label} sale price overflow`);
+            const indicators = page.locator('.generation-health:visible');
+            assert.ok(await indicators.count() >= 5);
+            assert.equal(await page.locator('.generation-composer-route-trigger .generation-health').count(), 0);
+            const selectedModel = page.locator('.generation-composer-model-option.selected .generation-health');
+            assert.equal(await selectedModel.getAttribute('data-health'), 'degraded');
+            assert.match(await selectedModel.innerText(), /3分5秒/);
+            assert.ok(await page.locator('.generation-health-strip i[data-state="success"]:visible').count() > 0);
+            assert.ok(await page.locator('.generation-health-strip i[data-state="failure"]:visible').count() > 0);
+            assert.ok(await page.locator('.generation-health-strip i[data-state="unknown"]:visible').count() > 0);
+            assert.ok(await page.locator('.generation-health-strip i[data-state="slow"]:visible').count() > 0);
+            const geometry = await page.locator('.generation-health-strip:visible').evaluateAll(strips => strips.map(strip => {
+                const lamps = [...strip.children].map(lamp => lamp.getBoundingClientRect());
+                return { count: lamps.length, widths: lamps.map(lamp => lamp.width), heights: lamps.map(lamp => lamp.height),
+                    gaps: lamps.slice(1).map((lamp, index) => lamp.left - lamps[index].right) };
+            }));
+            for (const item of geometry) {
+                assert.equal(item.count, 10);
+                assert.ok(item.widths.every(value => Math.abs(value - 2) < 0.1));
+                assert.ok(item.heights.every(value => Math.abs(value - 14) < 0.1));
+                assert.ok(item.gaps.every(value => Math.abs(value - 2) < 0.1));
+            }
+            assert.deepEqual(await indicators.evaluateAll(elements => elements.filter(element => {
+                const bounds = element.getBoundingClientRect();
+                const parent = element.parentElement.getBoundingClientRect();
+                const strip = element.querySelector('.generation-health-strip').getBoundingClientRect();
+                const duration = element.querySelector('.generation-health-duration').getBoundingClientRect();
+                return element.scrollWidth > element.clientWidth + 2 || bounds.left < parent.left || bounds.right > parent.right
+                    || bounds.bottom > parent.bottom || strip.right > duration.left || bounds.right > innerWidth;
+            }).map(element => element.textContent)), [], `${label} health indicator overflow`);
             await page.screenshot({ path: path.join(artifacts, `canvas-sale-prices-${label}.png`), animations: 'disabled' });
             await page.locator('[data-model]').click();
         }
+        pro.generationHealth[1] = { ...health(hosts[1], 0), averageSeconds: 75 };
+        await page.evaluate(() => window.__flowCanvasRefreshModelConfig());
+        await page.locator('[data-model]').click();
+        await page.locator('.generation-composer-route-trigger').filter({ hasText: 'Seedance 推荐渠道' }).hover();
+        const updated = page.locator('.generation-composer-model-option.selected .generation-health');
+        assert.equal(await updated.getAttribute('data-health'), 'available');
+        assert.match(await updated.innerText(), /1分15秒/);
+        const rasterStrip = page.locator('.generation-composer-model-option[title*="Art account"]')
+            .filter({ hasText: 'MiniMax H3' }).locator('.generation-health-strip');
+        await rasterStrip.hover();
+        // Check rasterized pixels too: equal CSS widths can alternate at fractional Windows scale.
+        const baseDpr = await page.evaluate(() => devicePixelRatio);
+        for (const targetDpr of [1, 1.25, 1.5, 1.75, 2]) {
+            await app.evaluate(({ BrowserWindow }, zoom) => {
+                BrowserWindow.getAllWindows().find(window => /index\.html/.test(window.webContents.getURL()))
+                    .webContents.setZoomFactor(zoom);
+            }, targetDpr / baseDpr);
+            const strip = rasterStrip;
+            await page.waitForFunction(expected => Math.abs(devicePixelRatio - expected) < 0.01, targetDpr);
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            const bounds = await strip.boundingBox();
+            const capture = await app.evaluate(async ({ BrowserWindow }) => {
+                const view = BrowserWindow.getAllWindows().find(window => /index\.html/.test(window.webContents.getURL()));
+                return (await view.webContents.capturePage()).toPNG().toString('base64');
+            });
+            const png = await require('sharp')(Buffer.from(capture, 'base64')).extract({
+                left: Math.floor(bounds.x * targetDpr) - 2, top: Math.floor(bounds.y * targetDpr),
+                width: Math.ceil(bounds.width * targetDpr) + 4, height: Math.ceil(bounds.height * targetDpr)
+            }).png().toBuffer();
+            await fs.writeFile(path.join(artifacts, `generation-lamps-${targetDpr}x.png`), png);
+            const { data, info } = await require('sharp')(png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+            const widths = [];
+            let run = 0;
+            const y = Math.floor(info.height / 2);
+            for (let x = 0; x <= info.width; x++) {
+                const offset = (y * info.width + x) * info.channels;
+                const green = x < info.width && data[offset] < 90 && data[offset + 1] > 110 && data[offset + 2] < 160;
+                if (green) run++;
+                else if (run) { widths.push(run); run = 0; }
+            }
+            assert.equal(widths.length, 10, `${targetDpr}x lamp count`);
+            assert.equal(new Set(widths).size, 1, `${targetDpr}x raster widths: ${widths}`);
+        }
+        await app.evaluate(({ BrowserWindow }) => {
+            BrowserWindow.getAllWindows().find(window => /index\.html/.test(window.webContents.getURL()))
+                .webContents.setZoomFactor(1);
+        });
+        await page.waitForFunction(expected => Math.abs(devicePixelRatio - expected) < 0.01, baseDpr);
+        await page.locator('[data-model]').click();
         assert.deepEqual(errors, []);
         assert.ok(requests.every(request => !request.authorization));
         assert.equal(await app.evaluate(() => globalThis.apiCatalogSmoke.fetchModelsCalls), 0);
-        console.log('PASS canvas sales: art/cart exact prices, same-revision refresh, resolution tiers, unknown state, desktop/compact layout; no generation requests.');
+        console.log('PASS canvas sales and health: model cards only, exact site, same-revision refresh, colors, desktop/compact layout and scale pixel checks; no generation requests.');
     } catch (error) {
         if (page) await page.screenshot({ path: path.join(artifacts, 'canvas-sale-prices-failure.png') }).catch(() => {});
         throw error;

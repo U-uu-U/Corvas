@@ -64,7 +64,7 @@ function isYueqiFastModel(model, endpoint) {
 function seedanceReferenceLimits(model, endpoint) {
     const id = String(model || '').trim().toLowerCase();
     if (getZhuboVideoModelSpec(model, endpoint)) return { image: 30, video: 0, audio: 10 };
-    if (isYueqiFastModel(model, endpoint)) return { image: 9, video: 3, audio: 0 };
+    if (isYueqiFastModel(model, endpoint)) return { image: 9, video: 0, audio: 3 };
     if (isYueqiPro720Model(model, endpoint)) return { image: 30, video: 10, audio: 10 };
     if (id === 'seedance-2.5-pro') return { image: 30, video: 10, audio: 10 };
     if (id === 'seedance_v2.0-933') return { image: 9, video: 3, audio: 3 };
@@ -345,8 +345,8 @@ function buildYueqiFastRequestBody({
         if (!result.ok) throw modelParameterRules.createParameterValidationError(result.issues);
     } else {
         if (images.length > 9) throw new Error('SD2 Fast 最多支持 9 张参考图片');
-        if (videos.length > 3) throw new Error('SD2 Fast 最多支持 3 个参考视频');
-        if (audios.length > 0) throw new Error('SD2 Fast 不支持参考音频');
+        if (videos.length > 0) throw new Error('SD2 Fast 不支持参考视频，请改用参考图片或音频');
+        if (audios.length > 3) throw new Error('SD2 Fast 最多支持 3 段参考音频');
     }
     const body = {
         model: String(model).trim(),

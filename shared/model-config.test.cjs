@@ -20,14 +20,16 @@ const sourceFiles = [
     'shared/model-config.default.json',
     'shared/schemas/model-config.schema.json',
     'shared/model-parameter-rules.cjs',
-    'shared/error-report-contract.cjs'
+    'shared/error-report-contract.cjs',
+    'shared/customer-error-message.cjs'
 ];
 const generatedFiles = [
     'src/model-config-default.js',
     'configserver/seed/model-config.default.json',
     'configserver/schema/model-config.schema.json',
     'configserver/lib/model-parameter-rules.cjs',
-    'configserver/lib/error-report-contract.cjs'
+    'configserver/lib/error-report-contract.cjs',
+    'configserver/lib/customer-error-message.cjs'
 ];
 
 function syncFixture(t, sourceEol = '\n', targetEol = '\n') {

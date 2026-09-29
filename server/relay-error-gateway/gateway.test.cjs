@@ -43,6 +43,64 @@ async function fixture(t, handler, options = {}) {
     return { directory, port, admin: id => request(port, `/internal/diagnostics?requestId=${id}`, { headers: { 'x-corvas-diagnostics-key': SECRET } }) };
 }
 
+test('generation statistics require private auth and never reach the generation upstream', async t => {
+    let reads = 0;
+    const f = await fixture(t, () => assert.fail('Statistics must never reach upstream'), {
+        generationHealth: { async get() { reads++; return { checkedAt: new Date().toISOString(), models: [] }; } }
+    });
+    assert.equal((await request(f.port, '/internal/generation-health')).status, 404);
+    assert.equal((await request(f.port, '/internal/generation-health', { method: 'POST', headers: { 'x-corvas-diagnostics-key': SECRET } })).status, 404);
+    assert.equal(reads, 0);
+    const response = await request(f.port, '/internal/generation-health', { headers: { 'x-corvas-diagnostics-key': SECRET } });
+    assert.equal(response.status, 200);
+    assert.equal(reads, 1);
+    assert.deepEqual(response.json.models, []);
+    assert.equal(response.headers['cache-control'], 'no-store');
+});
+
+test('customer detail and private redaction audit persist, with authenticated review for unreadable errors', async t => {
+    const reason = '远程图片尺寸或宽高比不符合要求（宽高均需在 256～5760 像素，宽高比需在 0.4～2.5）';
+    const f = await fixture(t, (req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ status: 'failed', task_id: 'fixture-task', error: { message: req.url.endsWith('opaque')
+            ? '<html>opaque internal response</html>' : `${reason}。 https://private.example/a; 成本 2元` } }));
+    });
+    const result = await request(f.port, '/v1/videos/actionable');
+    assert.match(result.json.error.customerMessage, /256~5760/);
+    assert.equal(result.json.error.code, 'RH_INVALID_REQUEST');
+    assert.equal(result.json.error.parameterIssues.length, 3);
+    assert.equal(result.json.customerMessageAudit, undefined);
+    const evidence = await f.admin(result.headers['x-request-id']);
+    assert.equal(evidence.json.record.customerMessageAudit.outcome, 'redacted');
+    assert.ok(evidence.json.record.customerMessageAudit.rules.includes('financial'));
+    assert.equal(evidence.json.record.customerMessageAudit.needsReview, false);
+    const opaque = await request(f.port, '/v1/videos/opaque');
+    assert.equal(opaque.json.error.customerMessage, undefined);
+    assert.equal((await request(f.port, '/internal/diagnostics?review=1')).status, 404);
+    const review = await request(f.port, '/internal/diagnostics?review=1', { headers: { 'x-corvas-diagnostics-key': SECRET } });
+    assert.equal(review.json.records.length, 1);
+    assert.equal(review.json.records[0].requestId, opaque.headers['x-request-id']);
+    assert.doesNotMatch(review.text, /opaque internal response/);
+});
+
+test('unclassified failures get opaque AI receipts and only sanitized analysis input is stored', async t => {
+    const f = await fixture(t, (_req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ status: 'failed', task_id: 'analysis-task', error: {
+            message: 'Image pixel format YUV422 is not supported; expected RGB. https://private.example/file; price $1.06'
+        } }));
+    });
+    const response = await request(f.port, '/v1/videos/analysis-task');
+    assert.match(response.json.error.analysisId, /^ea_[a-f0-9]{32}$/);
+    assert.equal(response.json.analysisInput, undefined);
+    const evidence = await f.admin(response.headers['x-request-id']);
+    assert.match(evidence.json.record.analysisInput, /YUV422/);
+    assert.doesNotMatch(evidence.json.record.analysisInput, /private\.example|1\.06/);
+    assert.equal(evidence.json.record.customerMessageAudit.needsReview, true);
+    const rows = await request(f.port, '/internal/diagnostics?review=1', { headers: { 'x-corvas-diagnostics-key': SECRET } });
+    assert.equal(rows.json.records[0].analysisId, response.json.error.analysisId);
+});
+
 test('forwards exact successful request and response without saving credentials or bodies', async t => {
     const body = JSON.stringify({ model: 'sd2-fast', prompt: 'sensitive private prompt', image_urls: ['https://private.example/media?token=abc'] });
     let calls = 0, upstreamId;

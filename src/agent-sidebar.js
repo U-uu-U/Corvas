@@ -394,8 +394,9 @@ export class AgentSidebar {
         this._restorePendingAgentAttachments();
         this._connectAgentRuntime();
         void this.apiConfigReady.then(() => { this.hunyuanWorkflowReady = true; this._syncHunyuanWorkflowContext(); });
-        this.runtimePageHide = () => this.runtimeClient?.dispose();
-        this.runtimePageShow = () => this._connectAgentRuntime();
+        this.runtimePageHide = () => { this.runtimeClient?.dispose(); clearInterval(this.errorAnalysisTimer); this.errorAnalysisTimer = null; };
+        this.runtimePageShow = () => { this._connectAgentRuntime(); this._startErrorAnalysisPolling(); };
+        this._startErrorAnalysisPolling();
         window.addEventListener('pagehide', this.runtimePageHide);
         window.addEventListener('pageshow', this.runtimePageShow);
         window.flowCanvas?.browserSync?.onTaskSubmitted?.((event) => this._handleTaskSubmitted(event));
@@ -2831,6 +2832,25 @@ export class AgentSidebar {
         }
     }
 
+    _startErrorAnalysisPolling() {
+        if (this.errorAnalysisTimer) return;
+        const poll = async () => {
+            if (this.errorAnalysisBusy || !window.flowCanvas?.diagnostics?.errorAnalysis) return;
+            this.errorAnalysisBusy = true;
+            try {
+                const tasks = this.generationTasks.filter(task => task.status === 'failed' && task.errorDetail?.analysisId
+                    && task.analysisAdvice?.state !== 'ready' && Date.now() - Date.parse(task.createdAt) < 7 * 86400000).slice(0, 10);
+                for (const task of tasks) {
+                    const result = await window.flowCanvas.diagnostics.errorAnalysis(task.errorDetail.analysisId);
+                    if (result?.state === 'ready') this._updateGenerationTask(task.id, { analysisAdvice: result });
+                }
+            } catch { /* Analysis is optional and never changes the generation failure or recovery state. */ }
+            finally { this.errorAnalysisBusy = false; }
+        };
+        void poll();
+        this.errorAnalysisTimer = setInterval(poll, 15000);
+    }
+
     _saveGenerationTasks() {
         try {
             localStorage.setItem(
@@ -3089,6 +3109,7 @@ export class AgentSidebar {
             errorCode: error?.code || null,
             requestId: error?.requestId || null,
             errorDetail: {
+                protocolVersion: error?.protocolVersion, customerMessage: error?.customerMessage, analysisId: error?.analysisId,
                 category: error?.category, stage: error?.stage, submissionState: error?.submissionState,
                 parameterIssues: error?.parameterIssues, submissionUnknown: error?.submissionUnknown,
                 retryable: error?.retryable, status: error?.status
@@ -3356,7 +3377,8 @@ export class AgentSidebar {
             const retryLabel = '重新提交';
             const errorCopy = status === 'disconnected'
                 ? formatClientGenerationError(task.error || '与生成服务断开，任务 ID 和参数已保留。')
-                : formatClientGenerationError(task.error || (recovering ? task.params?.recoveryError : null));
+                : formatClientGenerationError({ ...task.errorDetail, code: task.errorCode, requestId: task.requestId,
+                    confirmedFailure, error: task.error || (recovering ? task.params?.recoveryError : null) });
             const outputPaths = status === 'success' ? this._generationTaskOutputPaths(task) : [];
             const canLocate = this._canLocateGenerationTask(task);
             const recoveryControls = `<div class="agent-task-recovery">
@@ -3402,6 +3424,10 @@ export class AgentSidebar {
                             <svg class="flow-icon flow-icon-xs" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-expand"></use></svg>打开文件${outputPaths.length > 1 ? ` ${index + 1}` : ''}
                         </button>`).join('')}</div>` : ''}
                     ${errorCopy ? `<p class="agent-task-error" title="${this._escapeTaskText(errorCopy)}">${this._escapeTaskText(errorCopy)}</p>` : ''}
+                    ${task.analysisAdvice?.state === 'ready' ? `<details class="agent-task-analysis" open><summary>AI 排查建议</summary>
+                        <p>${this._escapeTaskText(task.analysisAdvice.cause)}</p>
+                        <p>${this._escapeTaskText(task.analysisAdvice.suggestion)}</p>
+                        <blockquote>原错误依据：${this._escapeTaskText(task.analysisAdvice.evidence)}</blockquote></details>` : ''}
                     ${['failed', 'disconnected'].includes(status) ? `<div class="agent-task-recovery">
                         <button type="button" data-report-task="${this._escapeTaskText(task.id)}" title="提交错误">
                             <svg class="flow-icon flow-icon-xs" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-arrow-up"></use></svg>提交错误
@@ -4268,6 +4294,7 @@ export class AgentSidebar {
                     routeModelLabel: profile?.routeModelLabel || '',
                     recommended: profile?.recommended === true,
                     ...providerSalePricePresentation(provider, profile),
+                    generationHealth: profile?.generationHealth || null,
                     modelLabel: profile?.label || '',
                     description: kind === 'video'
                         ? describeVideoModelProfile(profile, { includePrice: false })

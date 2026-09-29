@@ -5,6 +5,22 @@ import { formatGenerationElapsed, isGenerationRecoveryActive, canRecoverGenerati
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { imageRequestFailure } = require('../electron-main/image-request-diagnostics.cjs');
+const { normalizeRelayFailure, publicErrorResult } = require('../shared/public-api-error.cjs');
+
+test('customer detail survives gateway, desktop result, Error, renderer and repeated string formatting', () => {
+    const payload = normalizeRelayFailure(200, { status: 'failed', task_id: 'minimax-fixture', error: {
+        message: '远程图片尺寸或宽高比不符合要求（宽高均需在 256～5760 像素，宽高比需在 0.4～2.5）。https://private.example/file; 成本 $0.8'
+    } }, { query: true, requestId: 'rh_' + 'b'.repeat(32) }).body;
+    const result = publicErrorResult(payload);
+    const failure = generationFailureError(result);
+    for (const value of [result, failure, failure.message, formatClientGenerationError(failure.message)]) {
+        const message = formatClientGenerationError(value);
+        assert.match(message, /256~5760.*0\.4~2\.5/);
+        assert.match(message, /原任务已失败/);
+        assert.doesNotMatch(message, /private\.example|0\.8|成本/);
+    }
+    assert.equal(failure.customerMessage, result.customerMessage);
+});
 const { SD2_FAST_DURATION_CODE, SD2_FAST_DURATION_MESSAGE, createSd2FastDurationError,
     getSd2FastDurationConstraint } = require('../shared/sd2-fast-validation.cjs');
 

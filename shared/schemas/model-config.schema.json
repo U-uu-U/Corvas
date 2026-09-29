@@ -345,6 +345,27 @@
             "if": { "properties": { "status": { "const": "known" } } },
             "then": { "properties": { "prices": { "minItems": 1 } } }
         },
+        "generationHealth": {
+            "type": "array", "maxItems": 2,
+            "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["host", "state", "reason", "samples", "successCount", "failureCount", "excludedCount", "durationSamples", "averageSeconds", "checkedAt", "validUntil", "lastCompletedAt"],
+                "properties": {
+                    "host": { "enum": ["art.ravenhash.org", "cart.ravenhash.org"] },
+                    "state": { "enum": ["available", "degraded", "unknown"] },
+                    "reason": { "enum": ["recent", "no_data", "insufficient", "stale", "unavailable"] },
+                    "samples": { "type": "array", "maxItems": 50, "items": { "enum": ["success", "failure", "unknown"] } },
+                    "successCount": { "type": "integer", "minimum": 0, "maximum": 5000 },
+                    "failureCount": { "type": "integer", "minimum": 0, "maximum": 5000 },
+                    "excludedCount": { "type": "integer", "minimum": 0, "maximum": 5000 },
+                    "durationSamples": { "type": "integer", "minimum": 0, "maximum": 5000 },
+                    "averageSeconds": { "type": ["number", "null"], "minimum": 0, "maximum": 604800 },
+                    "checkedAt": { "type": "string", "format": "date-time" },
+                    "validUntil": { "type": "string", "format": "date-time" },
+                    "lastCompletedAt": { "type": ["string", "null"], "format": "date-time" }
+                }
+            }
+        },
         "model": {
             "type": "object",
             "required": ["id", "kind", "match"],
@@ -363,6 +384,19 @@
                 },
                 "pricing": { "$ref": "#/definitions/pricing" },
                 "salePrices": { "$ref": "#/definitions/salePrices" },
+                "generationHealth": { "$ref": "#/definitions/generationHealth" },
+                "generationHealthTimings": {
+                    "type": "array", "maxItems": 2,
+                    "items": {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["host", "seconds"],
+                        "properties": {
+                            "host": { "enum": ["art.ravenhash.org", "cart.ravenhash.org"] },
+                            "seconds": { "type": "array", "maxItems": 50,
+                                "items": { "type": ["number", "null"], "minimum": 0, "maximum": 604800 } }
+                        }
+                    }
+                },
                 "kind": { "enum": ["image", "video", "text"] },
                 "channel": { "type": "string" },
                 "route": { "type": "string" },

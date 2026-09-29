@@ -55,6 +55,7 @@ function createDiagnosticsStore({ directory, maxRecords = 10000, ttlMs = 7 * 864
     const files = new Map();
     const correlations = new Map();
     const recordCorrelations = new Map();
+    const reviewRecords = new Map();
     function forget(requestId) {
         for (const id of recordCorrelations.get(requestId) || []) {
             const matches = correlations.get(id);
@@ -63,8 +64,14 @@ function createDiagnosticsStore({ directory, maxRecords = 10000, ttlMs = 7 * 864
         }
         recordCorrelations.delete(requestId);
         files.delete(requestId);
+        reviewRecords.delete(requestId);
     }
     function index(record) {
+        if (record.customerMessageAudit?.needsReview === true) reviewRecords.set(record.requestId, {
+            requestId: record.requestId, createdAt: record.createdAt, code: record.publicError?.code,
+            analysisId: record.publicError?.analysisId,
+            rules: record.customerMessageAudit.rules
+        });
         const ids = new Set([record.requestId, record.relayLogId, record.clientRequestId].filter(id => CORRELATION_ID.test(id || '')));
         for (const id of ids) {
             if (!correlations.has(id)) correlations.set(id, new Set());
@@ -107,6 +114,10 @@ function createDiagnosticsStore({ directory, maxRecords = 10000, ttlMs = 7 * 864
         if (record) index(record);
     }
     return {
+        listNeedsReview() {
+            prune();
+            return [...reviewRecords.values()].sort((a, b) => (files.get(b.requestId) || 0) - (files.get(a.requestId) || 0)).slice(0, 50);
+        },
         put(record) {
             if (!REQUEST_ID.test(record.requestId || '')) throw new Error('Invalid request id');
             const filename = path.join(directory, `${record.requestId}.json`);

@@ -74,6 +74,7 @@ import {
 import { isGptImage2Model, isMidjourneyImageModel } from './provider-capabilities.js';
 import { assertModelRequest, checkModelRequest } from './model-config-ui.js';
 import { formatModelSalePrice } from '../shared/model-presentation.mjs';
+import { appendGenerationHealth } from './generation-health-indicator.js';
 import { getThemeColor } from './theme.js';
 import { showStatusNotification } from './status-notification.js';
 import { ICONAMOON_GLYPHS } from './iconamoon-glyphs.js';
@@ -9491,7 +9492,8 @@ export class CanvasManager {
         this._syncGenerationComposerModelButton(active.nodeId);
         const data = this.items.get(active.nodeId)?.data;
         if (data?.nodeType === 'video') {
-            const signature = JSON.stringify(this.options.getVideoModelProfile?.(data.config));
+            const signature = JSON.stringify(this.options.getVideoModelProfile?.(data.config),
+                (key, value) => key === 'generationHealth' ? undefined : value);
             if (signature !== active.parameterProfileSignature) {
                 const before = JSON.stringify(data.config);
                 if (active.popover?.anchor?.closest('[data-parameters]')) this._closeGenerationComposerPopover(active);
@@ -9710,6 +9712,7 @@ export class CanvasManager {
                     const marker = document.createElement('span');
                     marker.textContent = selected ? '当前' : '›';
                     button.append(copy, marker);
+                    closeTimers.push(appendGenerationHealth(button, provider.generationHealth));
                     button.addEventListener('click', () => {
                         this._applyImageGenerationProviderSelection(data, provider);
                         active.changed = true;
@@ -10555,7 +10558,8 @@ export class CanvasManager {
             });
         }
         optionRow.hidden = !optionRow.childElementCount;
-        if (data.nodeType === 'video') active.parameterProfileSignature = JSON.stringify(this.options.getVideoModelProfile?.(data.config));
+        if (data.nodeType === 'video') active.parameterProfileSignature = JSON.stringify(this.options.getVideoModelProfile?.(data.config),
+            (key, value) => key === 'generationHealth' ? undefined : value);
         this._syncGenerationComposerCount(nodeId);
         this._syncGenerationComposerSalePrice(nodeId);
         this._positionGenerationComposer();

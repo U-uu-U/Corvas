@@ -234,7 +234,7 @@ test('Yueqi 720 route carries video and audio references without the legacy zero
 });
 
 for (const [hostIndex, host] of ['art.ravenhash.org', 'cart.ravenhash.org', 'yueqi.icu'].entries()) {
-    test(`SD2 Fast ${host} submits 9 image URLs and 3 video URLs, resolves adaptive ratio and only polls on recovery`, async () => {
+    test(`SD2 Fast ${host} submits 9 image URLs and 3 audio URLs, rejects video and only polls on recovery`, async () => {
         profile = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-sd2-fast-'));
         uploadCacheProfiles.push(profile);
         const bridge = new Bridge({ store: { load: () => ({ items: [] }) }, recoveryDirectory: path.join(profile, 'records') });
@@ -247,7 +247,7 @@ for (const [hostIndex, host] of ['art.ravenhash.org', 'cart.ravenhash.org', 'yue
                 temporaryUploadEndpoint: uploadEndpoint, temporaryUploadToken: 'fixture-only' } };
         const expected = {};
         for (const [field, count, extension, wire] of [['sourceReferences', 9, 'png', 'image_urls'],
-            ['videoReferences', 3, 'mp4', 'video_urls']]) {
+            ['audioReferences', 3, 'mp3', 'audio_urls']]) {
             request[field] = [];
             expected[wire] = [];
             for (let index = 0; index < count; index++) {
@@ -298,16 +298,16 @@ for (const [hostIndex, host] of ['art.ravenhash.org', 'cart.ravenhash.org', 'yue
         assert.ok(methods.length > recoveryStart);
         assert.ok(methods.slice(recoveryStart).every(method => method === 'GET'), 'Recovery must not upload or resubmit');
 
-        const audioPath = path.join(profile, 'unsupported.mp3');
+        const audioPath = path.join(profile, 'extra.mp3');
         const extraImagePath = path.join(profile, 'extra.png');
         const extraVideoPath = path.join(profile, 'extra.mp4');
         fs.writeFileSync(audioPath, 'unsupported audio fixture');
         fs.copyFileSync(request.sourceReferences[0].filePath, extraImagePath);
-        fs.copyFileSync(request.videoReferences[0].filePath, extraVideoPath);
+        fs.writeFileSync(extraVideoPath, 'unsupported video fixture');
         const invalidRequests = [
             { ...request, sourceReferences: [...request.sourceReferences, { filePath: extraImagePath }] },
-            { ...request, videoReferences: [...request.videoReferences, { filePath: extraVideoPath }] },
-            { ...request, audioReferences: [{ filePath: audioPath }] }
+            { ...request, videoReferences: [{ filePath: extraVideoPath }] },
+            { ...request, audioReferences: [...request.audioReferences, { filePath: audioPath }] }
         ];
         const invalidStart = methods.length;
         for (const invalid of invalidRequests) {

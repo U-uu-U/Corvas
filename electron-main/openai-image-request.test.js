@@ -147,16 +147,16 @@ test('Yueqi SD2 Fast sends the upstream request schema and 9/3/0 reference limit
     for (const host of ['art.ravenhash.org', 'cart.ravenhash.org', 'yueqi.icu']) {
         const endpoint = `https://${host}/v1`;
         const input = { endpoint, model: 'sd2-fast', prompt: ' fixture ', duration: '12', aspectRatio: '9:16', resolution: '720p',
-            referenceImages: refs(9, 'png'), referenceVideos: refs(3, 'mp4') };
+            referenceImages: refs(9, 'png'), referenceAudios: refs(3, 'mp3') };
         assert.equal(isYueqiFastModel(input.model, endpoint), true);
-        assert.deepEqual(seedanceReferenceLimits(input.model, endpoint), { image: 9, video: 3, audio: 0 });
+        assert.deepEqual(seedanceReferenceLimits(input.model, endpoint), { image: 9, video: 0, audio: 3 });
         assert.deepEqual(buildYueqiFastRequestBody(input), {
             model: 'sd2-fast', prompt: 'fixture', resolution: '720p', aspect_ratio: '9:16', duration: 12, seconds: '12',
-            image_urls: input.referenceImages, video_urls: input.referenceVideos
+            image_urls: input.referenceImages, audio_urls: input.referenceAudios
         });
         assert.throws(() => buildYueqiFastRequestBody({ ...input, referenceImages: refs(10, 'png') }), /9/);
-        assert.throws(() => buildYueqiFastRequestBody({ ...input, referenceVideos: refs(4, 'mp4') }), /3/);
-        assert.throws(() => buildYueqiFastRequestBody({ ...input, referenceAudios: refs(1, 'mp3') }), /不支持参考音频/);
+        assert.throws(() => buildYueqiFastRequestBody({ ...input, referenceVideos: refs(1, 'mp4') }), /不支持参考视频/);
+        assert.throws(() => buildYueqiFastRequestBody({ ...input, referenceAudios: refs(4, 'mp3') }), /3 段参考音频/);
         assert.equal(buildVideoGenerationEndpoint(endpoint, input.model), host === 'yueqi.icu'
             ? 'https://yueqi.icu/v1/videos' : `https://${host}/v1/video/generations`);
     }
@@ -189,7 +189,7 @@ test('Yueqi SD2 Fast enforces resolution-specific durations and concrete ratios'
     assert.throws(() => buildYueqiFastRequestBody({ ...input, resolution: '1080p' }), /480p 或 720p/);
     assert.throws(() => buildYueqiFastRequestBody({ ...input, prompt: '  ' }), /提示词不能为空/);
     assert.deepEqual(buildYueqiFastRequestBody({ ...input, referenceImages: [{ url: ' https://example.test/ref.png ' }],
-        referenceVideos: [{ url: 'https://example.test/ref.mp4' }] }).image_urls, ['https://example.test/ref.png']);
+        referenceAudios: [{ url: 'https://example.test/ref.mp3' }] }).audio_urls, ['https://example.test/ref.mp3']);
 });
 
 test('Yueqi SD2 Fast routing leaves other hosts and model IDs unchanged', () => {

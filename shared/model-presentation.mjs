@@ -1,3 +1,5 @@
+import { selectGenerationHealth } from './model-generation-health.mjs';
+
 const PRESENTATION_FIELDS = ['label', 'description', 'routeLabel', 'routeGroup', 'routeGroupLabel', 'routeGroupDescription', 'routeModelLabel'];
 const PRICE_UNITS = { request: '次', image: '张', second: '秒' };
 const SALE_PRICE_UNITS = { ...PRICE_UNITS, million_tokens: '百万 Token' };
@@ -7,6 +9,7 @@ const SALE_PRICE_FIELDS = ['host', 'status', 'currency', 'kind', 'source', 'upda
 // Display metadata never changes the wire model, endpoint or account binding.
 export function getModelPresentation(entry, provider = {}) {
     const result = {};
+    if (entry?.generationHealth) result.generationHealth = selectGenerationHealth(entry, provider.endpoint);
     const presentation = entry?.presentation;
     for (const field of PRESENTATION_FIELDS) {
         if (typeof presentation?.[field] === 'string') {

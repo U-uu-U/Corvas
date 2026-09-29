@@ -12,6 +12,7 @@ const zlib = require('node:zlib');
 const { execFile } = require('node:child_process');
 const { normalizeRelayFailure, failureNode, isTerminalFailure, findExplicitTaskId } = require('../../shared/public-api-error.cjs');
 const { CORRELATION_ID, sanitizePrivate, sanitizeText, createDiagnosticsStore } = require('./diagnostics-store.cjs');
+const { createGenerationHealthReader } = require('./generation-health.cjs');
 
 const UPSTREAM = 'http://127.0.0.1:8080';
 const RELAY_LOG_ID = /^(?:fc|rh)_[a-f0-9]{32}$/;
@@ -186,6 +187,28 @@ function createGateway(options = {}) {
         const expected = Buffer.from(secret);
         return supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
     }
+    let cachedCustomerPolicy = {}, customerPolicyMtime = -1;
+    function customerPolicy() {
+        try {
+            const file = options.customerPolicyFile || process.env.RELAY_CUSTOMER_ERROR_POLICY_FILE || '/etc/corvas-customer-error-policy.json';
+            const stat = fs.statSync(file);
+            if (stat.mtimeMs !== customerPolicyMtime && stat.size <= 65536) {
+                const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+                if (Array.isArray(value.privateTerms) && value.privateTerms.length <= 200
+                    && value.privateTerms.every(term => typeof term === 'string' && term.length >= 3 && term.length <= 160 && /[a-z\u3400-\u9fff]/i.test(term))) {
+                    cachedCustomerPolicy = { privateTerms: value.privateTerms }; customerPolicyMtime = stat.mtimeMs;
+                }
+            }
+        } catch { /* Keep the last valid private policy; never ship it to CONFIG clients. */ }
+        return cachedCustomerPolicy;
+    }
+    const generationHealth = options.generationHealth || createGenerationHealthReader({
+        site: options.site || process.env.RELAY_SITE, getRules: rules,
+        getPolicy: () => {
+            try { return JSON.parse(fs.readFileSync(options.healthPolicyFile || '/etc/corvas-generation-health-policy.json', 'utf8')); }
+            catch { return {}; }
+        }
+    });
     function json(res, status, body, requestId) {
         if (res.destroyed || res.writableEnded) return;
         const encoded = Buffer.from(JSON.stringify(body));
@@ -196,9 +219,18 @@ function createGateway(options = {}) {
     const server = http.createServer(async (req, res) => {
         const target = validTarget(req.url);
         if (!target) { req.resume(); return json(res, 404, { error: 'not_found' }); }
+        if (target.pathname === '/internal/generation-health') {
+            req.resume();
+            if (req.method !== 'GET' || !authorized(req)) return json(res, 404, { error: 'not_found' });
+            try { return json(res, 200, await generationHealth.get()); }
+            catch { return json(res, 503, { error: 'statistics_unavailable' }); }
+        }
         if (target.pathname === '/internal/diagnostics') {
             req.resume();
             if (req.method !== 'GET' || !authorized(req)) return json(res, 404, { error: 'not_found' });
+            if (target.searchParams.get('review') === '1') {
+                return json(res, 200, { records: store.listNeedsReview?.() || [] });
+            }
             const requestId = target.searchParams.get('requestId');
             if (!CORRELATION_ID.test(requestId || '') || target.searchParams.getAll('requestId').length !== 1) return json(res, 404, { error: 'not_found' });
             try {
@@ -258,7 +290,18 @@ function createGateway(options = {}) {
                     classificationPayload = logFailurePayload(diagnosticLedger, relayLogId) || payload;
                 } finally { clearTimeout(timer); }
             }
-            const result = normalizeRelayFailure(status, classificationPayload, { requestId, query, taskId: findExplicitTaskId(payload), stage: query ? 'poll' : 'submit', rules: rules(), ...extra });
+            let customerMessageAudit = null;
+            const policy = customerPolicy();
+            const privateTerms = [...(policy.privateTerms || []), ...(diagnosticLedger?.rows || [])
+                .flatMap(row => [row.channel_name, row.upstream_model]).filter(value => typeof value === 'string')];
+            const result = normalizeRelayFailure(status, classificationPayload, { requestId, query, taskId: findExplicitTaskId(payload), stage: query ? 'poll' : 'submit', rules: rules(),
+                customerPolicy: { ...policy, privateTerms }, prompts, onCustomerMessage: audit => { customerMessageAudit = audit; }, ...extra });
+            const needsAnalysis = customerMessageAudit?.needsReview || (result.body.error.code === 'RH_TASK_FAILED'
+                && result.body.error.confirmedFailure && customerMessageAudit?.customerMessage);
+            if (needsAnalysis) {
+                result.body.error.analysisId = `ea_${crypto.randomBytes(16).toString('hex')}`;
+                customerMessageAudit.needsReview = true;
+            }
             const clientId = req.headers['x-request-id'] || req.headers['x-log-id'];
             const record = { requestId, relayLogId, createdAt: startedAt, completedAt: new Date().toISOString(),
                 elapsedMs: Date.now() - startedTime, method: req.method, path: target.pathname,
@@ -266,6 +309,13 @@ function createGateway(options = {}) {
                 request: metadata, upstreamStatus: status, upstreamBodyBytesSent: bytesSent,
                 responseIds: { ...responseIds, ...privateResponseIds(payload) }, taskId: result.body.task_id || null,
                 error: sanitizePrivate(privateErrorFields(payload), prompts), publicError: result.body.error, billingState: 'unknown',
+                classificationError: sanitizePrivate(privateErrorFields(classificationPayload), prompts),
+                analysisInput: needsAnalysis ? (customerMessageAudit.customerMessage || '') : undefined,
+                analysisScope: needsAnalysis ? crypto.createHash('sha256').update(JSON.stringify([
+                    diagnosticLedger?.rows?.[0]?.channel_id || '', metadata.model || '',
+                    metadata.model ? '' : (result.body.task_id || target.pathname || requestId)
+                ])).digest('hex') : undefined,
+                customerMessageAudit: { ...customerMessageAudit, source: classificationPayload === payload ? 'response' : 'relay_log' },
                 ...(diagnosticLedger ? { relayLogAtFailure: sanitizePrivate(diagnosticLedger, prompts) } : {}) };
             try { store.put(record); } catch { if (options.onDiagnosticFailure) options.onDiagnosticFailure(requestId); else console.error('Diagnostics write failed:', requestId); }
             json(res, result.status, result.body, requestId);

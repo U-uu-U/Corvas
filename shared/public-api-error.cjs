@@ -1,4 +1,5 @@
 const { normalizeParameterIssues, normalizePublicDetail, safeRequestId, formatPublicDetail } = require('./public-error-detail.cjs');
+const { prepareCustomerMessage, extractErrorReasons } = require('./customer-error-message.cjs');
 
 const CATALOG = Object.freeze({
     RH_ASSET_PENDING: [409, '参考素材仍在审核，尚未提交视频任务；稍后重试会复用素材 ID。'],
@@ -27,7 +28,7 @@ const CATALOG = Object.freeze({
     RH_INVALID_RESPONSE: [502, '\u670d\u52a1\u54cd\u5e94\u5f02\u5e38\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u67e5\u8be2\u6216\u8054\u7cfb\u7ba1\u7406\u5458\u3002'],
     RH_TOOLS_UNSUPPORTED: [400, '\u5f53\u524d\u6a21\u578b\u4e0d\u652f\u6301\u5de5\u5177\u8c03\u7528\uff0c\u53ef\u4f7f\u7528\u666e\u901a\u5bf9\u8bdd\u6216\u66f4\u6362\u6a21\u578b\u3002']
 });
-const WRAPPERS = ['data', 'result', 'output', 'task', 'response', 'Response', 'base_resp', 'metadata'];
+const WRAPPERS = ['data', 'result', 'output', 'task', 'response', 'Response', 'base_resp', 'baseResp', 'metadata'];
 const FAILED = new Set(['failed', 'failure', 'error', 'rejected', 'cancelled', 'canceled', 'expired']);
 const REASON_FIELDS = ['failReason', 'fail_reason', 'failure_reason', 'error_message', 'errorMessage', 'status_msg'];
 const CONTENT_REJECTION_CODES = new Set(['RH_PORTRAIT_SELF_REQUIRED', 'RH_PORTRAIT_RESTRICTED',
@@ -50,8 +51,10 @@ function failureNode(value, depth = 0) {
         || (error && typeof error === 'object' && !Array.isArray(error) && Boolean(error.message || error.msg || error.code || error.type || error.reason || error.detail));
     const hasFailureReason = REASON_FIELDS.filter(key => key !== 'status_msg')
         .some(key => typeof value[key] === 'string' && value[key].trim());
+    const hasErrors = Array.isArray(value.errors) && value.errors.some(item => typeof item === 'string' ? item.trim()
+        : item && typeof item === 'object' && (item.message || item.msg || item.detail || item.reason || item.code));
     if (FAILED.has(state) || value.success === false || value.ok === false || value.type === 'error'
-        || value.type === 'response.failed' || hasError || hasFailureReason
+        || value.type === 'response.failed' || hasError || hasErrors || hasFailureReason
         || (code != null && !['0', '1', '200', '201', '202', '10000', 'ok', 'success'].includes(String(code).toLowerCase())
             && (value.message || value.msg || value.description || value.status_msg))) return value;
     for (const key of WRAPPERS) {
@@ -137,6 +140,7 @@ function classify(status, value, { query = false, terminal = false, transport = 
     const referenceDuration = /(?:reference|input|uploaded)[_ -]?(?:audio|video)|audio[_ -]?duration|video[_ -]?duration|参考(?:音频|视频)|音频.{0,12}时长|视频.{0,12}时长/i;
     const durationLimit = /duration.{0,80}(?:exceed|too long|too short|out of range|maximum|minimum|between|greater than|less than|at most|at least)|(?:exceed|maximum|minimum|too long|too short).{0,40}duration|时长.{0,40}(?:超|大于|小于|不足|范围|限制|最多|至少)|(?:超出|超过).{0,30}(?:秒|时长)/i;
     if (referenceDuration.test(text) && durationLimit.test(text)) return 'RH_INVALID_REQUEST';
+    if (/(?:图片|图像|image).{0,40}(?:尺寸|宽高|宽度|高度|dimension|aspect.?ratio).{0,50}(?:不符合|必须|需在|限制|invalid|between|must|range|exceed)/i.test(text)) return 'RH_INVALID_REQUEST';
     if (/insufficient[_ -]?(quota|balance|credit)|quota[_ -]?exceeded|\u4f59\u989d\u4e0d\u8db3|\u989d\u5ea6\u4e0d\u8db3/i.test(text) || status === 402) return 'RH_QUOTA_EXHAUSTED';
     if (/invalid[_ -]?(api[_ -]?key|token)|authentication|unauthorized|\u8ba4\u8bc1.*\u5931\u8d25|\u65e0\u6548.*(?:key|token)/i.test(text)) return 'RH_AUTH_FAILED';
     if (/\b(tools?|tool_choice|function[_ -]?calling)\b.*(unsupported|not supported|unknown|not allowed)/i.test(text)) return 'RH_TOOLS_UNSUPPORTED';
@@ -171,7 +175,7 @@ function publicFailure(status, payload, options = {}) {
     return { status: terminal && taskId ? 200 : status >= 400 && status <= 599 ? status : CATALOG[code][0], body };
 }
 
-// Clients rebuild the display from our catalogue instead of trusting echoed messages.
+// Clients validate customerMessage separately; the legacy echoed message is never trusted.
 function readPublicError(payload) {
     const value = parsePayload(payload);
     const node = failureNode(value);
@@ -253,21 +257,28 @@ function categoryForCode(code) {
 
 function extractParameterIssues(payload) {
     const text = errorText(payload);
+    const imageIssues = [];
+    if (/图片|图像|\bimage\b/i.test(text)) {
+        const dimensions = text.match(/(?:宽高(?!比)|宽度和高度|width\s+and\s+height)[^（）(),，;；\n]{0,20}?(\d+)\s*(?:[～~–—-]|到|and|to)\s*(\d+)/i);
+        const ratio = text.match(/(?:宽高比|aspect[_ ]?ratio)[^（）(),，;；\n]{0,20}?(\d+(?:\.\d+)?)\s*(?:[～~–—-]|到|and|to)\s*(\d+(?:\.\d+)?)/i);
+        if (dimensions) for (const field of ['referenceImageWidth', 'referenceImageHeight']) imageIssues.push({ field, reason: 'range', min: Number(dimensions[1]), max: Number(dimensions[2]) });
+        if (ratio) imageIssues.push({ field: 'referenceImageAspectRatio', reason: 'range', min: Number(ratio[1]), max: Number(ratio[2]) });
+    }
     const duration = /duration|时长/i.test(text);
     const field = /reference[_ ]?audio|input[_ ]?audio|参考音频|音频.{0,12}时长/i.test(text) ? 'referenceAudioDuration'
         : /reference[_ ]?video|input[_ ]?video|参考视频/i.test(text) ? 'referenceVideoDuration' : 'duration';
-    if (!duration) return [];
+    if (!duration) return normalizeParameterIssues(imageIssues);
     const range = text.match(/(?:duration|时长).{0,35}?(?:between|from|支持|范围[为是]?|必须[为在])\s*(\d+(?:\.\d+)?)\s*(?:and|to|到|[-~])\s*(\d+(?:\.\d+)?)/i);
     const maximum = text.match(/(?:duration|时长).{0,40}?(?:maximum(?: of)?|max(?:imum)?[=: ]|at most|最多|上限[为是]?|超过|exceeds?(?: maximum)?)\s*(\d+(?:\.\d+)?)/i);
     const minimum = text.match(/(?:duration|时长).{0,40}?(?:minimum(?: of)?|at least|至少|不足)\s*(\d+(?:\.\d+)?)/i);
-    if (!range && !maximum && !minimum) return [];
+    if (!range && !maximum && !minimum) return normalizeParameterIssues(imageIssues);
     const issue = { field, reason: 'range' };
     if (range) Object.assign(issue, { min: Number(range[1]), max: Number(range[2]) });
     else if (maximum) issue.max = Number(maximum[1]);
     else issue.min = Number(minimum[1]);
     const actual = text.match(/(?:received|actual|当前(?:为)?|实际(?:为)?)\s*[:=]?\s*(\d+(?:\.\d+)?)/i);
     if (actual) issue.actual = Number(actual[1]);
-    return normalizeParameterIssues([issue]);
+    return normalizeParameterIssues([...imageIssues, issue]);
 }
 
 function mappedRuleCode(value, rules) {
@@ -287,14 +298,17 @@ function normalizeRelayFailure(status, payload, options = {}) {
     const taskId = safeTaskId(options.taskId) || findExplicitTaskId(value);
     const terminal = options.terminal === true || (query && isTerminalFailure(value));
     const transport = options.transport === true;
+    const extracted = extractErrorReasons(value);
+    const classificationValue = extracted.length ? { task_id: taskId, error: { message: extracted.map(item => item.text).join('\n') } } : value;
     let code = (Object.hasOwn(CATALOG, options.code || '') ? options.code : null) || mappedRuleCode(value, options.rules)
-        || classify(status, value, { query, terminal, transport });
+        || classify(status, classificationValue, { query, terminal, transport });
     const text = errorText(value);
     const routingRejected = !taskId && /\bmodel_not_found\b/i.test(text) && /no available channel for model/i.test(text);
     const ambiguous = !query && !['validate', 'upload'].includes(options.stage)
         && (transport || status === 408 || (status >= 500 && !routingRejected && !terminal));
     if (ambiguous) code = 'RH_SUBMISSION_UNKNOWN';
-    if (options.origin !== 'client_account' && ['RH_AUTH_FAILED', 'RH_QUOTA_EXHAUSTED', 'RH_PERMISSION_DENIED'].includes(code)) {
+    const privateAccountFailure = options.origin !== 'client_account' && ['RH_AUTH_FAILED', 'RH_QUOTA_EXHAUSTED', 'RH_PERMISSION_DENIED'].includes(code);
+    if (privateAccountFailure) {
         code = 'RH_SERVICE_UNAVAILABLE';
     }
     const category = categoryForCode(code);
@@ -304,7 +318,10 @@ function normalizeRelayFailure(status, payload, options = {}) {
             : status >= 400 && status < 500 && status !== 408 ? 'rejected'
             : confirmedFailure || code === 'RH_MODEL_UNAVAILABLE' ? 'rejected' : 'unknown';
     const parameterIssues = ['parameter', 'asset'].includes(category)
-        ? normalizeParameterIssues(options.parameterIssues || extractParameterIssues(value)) : [];
+        ? normalizeParameterIssues(options.parameterIssues || extractParameterIssues(classificationValue)) : [];
+    const customer = prepareCustomerMessage(value, { ...options.customerPolicy, prompts: options.prompts,
+        suppress: submissionState === 'unknown' || privateAccountFailure || transport });
+    options.onCustomerMessage?.({ ...customer.audit, customerMessage: customer.message || null });
     const action = submissionState === 'unknown' ? (taskId || query ? 'retry_query' : 'contact_support')
         : submissionState === 'accepted' && !confirmedFailure ? 'retry_query'
             : category === 'parameter' || category === 'moderation' ? 'edit_parameters'
@@ -312,8 +329,8 @@ function normalizeRelayFailure(status, payload, options = {}) {
                     : ['auth', 'quota', 'permission'].includes(category) ? 'check_account'
                         : category === 'rate_limit' ? 'wait' : 'contact_support';
     const detail = normalizePublicDetail({ protocolVersion: 2, code, category,
-        stage: options.stage || (query ? 'poll' : 'submit'), submissionState, action,
-        requestId: safeRequestId(options.requestId), parameterIssues, confirmedFailure,
+        stage: options.stage || (query ? 'poll' : 'submit'), submissionState, action, httpStatus: status,
+        requestId: safeRequestId(options.requestId), parameterIssues, confirmedFailure, customerMessage: customer.message,
         retryable: query && !confirmedFailure && ['RH_RATE_LIMITED', 'RH_TASK_NOT_FOUND', 'RH_SERVICE_UNAVAILABLE', 'RH_REQUEST_TIMEOUT'].includes(code) });
     const { requestId, ...fields } = detail;
     const error = { type: 'ravenhash_error', ...fields, message: CATALOG[code][1] };

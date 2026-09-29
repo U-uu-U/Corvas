@@ -40,6 +40,7 @@ function savedStore(result) {
 contextBridge.exposeInMainWorld('flowCanvas', {
     platform: process.platform,
     diagnostics: {
+        errorAnalysis: token => ipcRenderer.invoke('diagnostics:error-analysis', token),
         summary: () => ipcRenderer.invoke('diagnostics:summary'),
         copy: () => ipcRenderer.invoke('diagnostics:copy'),
         export: () => ipcRenderer.invoke('diagnostics:export'),
