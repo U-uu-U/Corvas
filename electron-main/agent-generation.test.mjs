@@ -761,7 +761,7 @@ describe('AgentGeneration execution', () => {
             }
             if (mode === 'video') {
                 const before = copy(h.projects.original);
-                assert.throws(() => h.plan(['target']), { code: 'LOCAL_MODEL_PARAMETER_INVALID', stage: 'validate', submissionState: 'not_submitted' });
+                assert.throws(() => h.plan(['target']), { code: 'REFERENCE_LIMIT', stage: 'validate', submissionState: 'not_submitted' });
                 assert.equal(h.requests.length, 0);
                 assert.deepEqual(h.projects.original, before, 'Invalid parameters must not create output nodes');
                 continue;
