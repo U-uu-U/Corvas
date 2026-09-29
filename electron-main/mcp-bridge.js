@@ -51,7 +51,9 @@ const { classifyErrorReportSite } = require('../shared/error-report-contract.cjs
 const { imageRequestFailure } = require('./image-request-diagnostics.cjs');
 const { namingPrompt, writeGeneratedMedia } = require('./generated-media-names.cjs');
 const { diagnostic: recordDiagnostic } = require('./diagnostics.cjs');
-const { mapLocalError, publicErrorResult, failureNode } = require('../shared/public-api-error.cjs');
+const { mapLocalError: mapPublicError, publicErrorResult, failureNode } = require('../shared/public-api-error.cjs');
+const mapLocalError = (status, payload, options = {}) => mapPublicError(status, payload,
+    { protocolVersion: 2, origin: 'client_account', ...options });
 const { describeServiceRole } = require('../shared/error-redaction.cjs');
 const {
     buildMiniMaxH3RequestBody,
@@ -2460,7 +2462,7 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
             } : null
         };
     } catch (error) {
-        return { success: false, error: error.message, code: error.code,
+        return { success: false, ...(normalizePublicDetail(error) || {}), error: error.message, code: error.code,
             submissionUnknown: error.submissionUnknown === true, requestId: error.requestId,
             confirmedFailure: error.confirmedFailure === true, retryable: error.retryable, taskId: error.taskId };
     }

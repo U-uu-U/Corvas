@@ -4,7 +4,7 @@ import { dirname, resolve } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const srcRoot = resolve(__dirname, 'src');
-const sharedClientModules = new Set(['public-api-error', 'error-redaction', 'public-error-detail', 'model-parameter-rules', 'sd2-fast-validation', 'error-report-contract']
+const sharedClientModules = new Set(['public-api-error', 'error-redaction', 'public-error-detail', 'customer-error-message', 'model-parameter-rules', 'sd2-fast-validation', 'error-report-contract']
     .map(name => normalizePath(resolve(__dirname, `shared/${name}.cjs`))));
 
 export default defineConfig({
@@ -19,11 +19,14 @@ export default defineConfig({
             if (code.includes("require('./public-error-detail.cjs')")) {
                 code = `import publicErrorDetail from './public-error-detail.cjs';\n${code.replace("require('./public-error-detail.cjs')", 'publicErrorDetail')}`;
             }
+            if (code.includes("require('./customer-error-message.cjs')")) {
+                code = `import customerErrorMessage from './customer-error-message.cjs';\n${code.replace("require('./customer-error-message.cjs')", 'customerErrorMessage')}`;
+            }
             return transformWithEsbuild(code, id, { loader: 'js', format: 'esm', sourcemap: true });
         }
     }],
     build: {
-        commonjsOptions: { include: [/node_modules/, /shared[\\/](?:public-api-error|error-redaction|public-error-detail|model-parameter-rules|sd2-fast-validation|error-report-contract)\.cjs$/] },
+        commonjsOptions: { include: [/node_modules/, /shared[\\/](?:public-api-error|error-redaction|public-error-detail|customer-error-message|model-parameter-rules|sd2-fast-validation|error-report-contract)\.cjs$/] },
         outDir: resolve(__dirname, 'dist'),
         emptyOutDir: true,
         rollupOptions: {

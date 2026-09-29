@@ -1,9 +1,11 @@
+const { sanitizeCustomerMessage } = require('./customer-error-message.cjs');
 const CATEGORIES = new Set(['parameter', 'auth', 'permission', 'quota', 'rate_limit', 'model_unavailable', 'moderation', 'asset', 'service', 'unknown']);
 const STAGES = new Set(['validate', 'upload', 'submit', 'poll', 'download']);
 const SUBMISSION_STATES = new Set(['not_submitted', 'rejected', 'accepted', 'unknown']);
 const ACTIONS = new Set(['edit_parameters', 'check_account', 'replace_reference', 'retry_query', 'contact_support', 'wait']);
 const ISSUE_FIELDS = new Set(['duration', 'resolution', 'aspect_ratio', 'quality', 'n', 'referenceImages', 'referenceVideos', 'referenceAudios',
-    'referenceImageBytes', 'referenceVideoBytes', 'referenceAudioBytes', 'referenceVideoDuration', 'referenceAudioDuration']);
+    'referenceImageBytes', 'referenceVideoBytes', 'referenceAudioBytes', 'referenceVideoDuration', 'referenceAudioDuration',
+    'referenceImageWidth', 'referenceImageHeight', 'referenceImageAspectRatio']);
 const ISSUE_REASONS = new Set(['min', 'max', 'range', 'integer', 'unsupported', 'required', 'count', 'format', 'unreadable']);
 const FIELD_ALIASES = Object.freeze({ image_count: 'referenceImages', video_count: 'referenceVideos', audio_count: 'referenceAudios',
     image_bytes: 'referenceImageBytes', video_bytes: 'referenceVideoBytes', audio_bytes: 'referenceAudioBytes',
@@ -11,7 +13,8 @@ const FIELD_ALIASES = Object.freeze({ image_count: 'referenceImages', video_coun
 const FIELD_LABELS = Object.freeze({ duration: '视频时长', resolution: '分辨率', aspect_ratio: '画面比例', quality: '画质', n: '生成数量',
     referenceImages: '参考图片数量', referenceVideos: '参考视频数量', referenceAudios: '参考音频数量',
     referenceImageBytes: '参考图片大小', referenceVideoBytes: '参考视频大小', referenceAudioBytes: '参考音频大小',
-    referenceVideoDuration: '参考视频时长', referenceAudioDuration: '参考音频时长' });
+    referenceVideoDuration: '参考视频时长', referenceAudioDuration: '参考音频时长',
+    referenceImageWidth: '参考图片宽度', referenceImageHeight: '参考图片高度', referenceImageAspectRatio: '参考图片宽高比' });
 const CATEGORY_MESSAGES = Object.freeze({ parameter: '生成参数不符合要求，请调整后重新提交。',
     auth: '接口认证失败，请检查 API 配置或联系管理员。', permission: '当前请求没有访问权限，请检查账户权限。',
     quota: '可用额度不足，请检查账户额度或联系管理员。', rate_limit: '请求过于频繁，请稍后再试。',
@@ -89,6 +92,10 @@ function normalizePublicDetail(value) {
         confirmedFailure: submissionState === 'rejected' || (submissionState === 'accepted' && value.confirmedFailure === true) };
     const requestId = safeRequestId(value.requestId || value.request_id);
     if (requestId) clean.requestId = requestId;
+    if (Number.isInteger(value.httpStatus) && value.httpStatus >= 400 && value.httpStatus <= 599) clean.httpStatus = value.httpStatus;
+    if (/^ea_[a-f0-9]{32}$/.test(value.analysisId || '')) clean.analysisId = value.analysisId;
+    const customerMessage = sanitizeCustomerMessage(value.customerMessage).message;
+    if (customerMessage && submissionState !== 'unknown') clean.customerMessage = customerMessage;
     return clean;
 }
 
@@ -96,7 +103,8 @@ function formatParameterIssue(raw) {
     const issue = normalizeParameterIssues([raw])[0];
     if (!issue) return '';
     const label = `${issue.resolution ? issue.resolution + ' ' : ''}${issue.index ? `第 ${issue.index} 项` : ''}${FIELD_LABELS[issue.field]}`;
-    const unit = /[Dd]uration$/.test(issue.field) ? ' 秒' : /Bytes$/.test(issue.field) ? ' 字节' : '';
+    const unit = /[Dd]uration$/.test(issue.field) ? ' 秒' : /Bytes$/.test(issue.field) ? ' 字节'
+        : /(?:Width|Height)$/.test(issue.field) ? ' 像素' : '';
     let constraint;
     if (issue.reason === 'unreadable') constraint = '无法读取，请重新上传或更换素材';
     else if (issue.reason === 'required') constraint = '不能为空';
@@ -117,14 +125,16 @@ function formatPublicDetail(value, catalog = {}) {
     const detail = normalizePublicDetail(value);
     if (!detail) return null;
     const issues = detail.parameterIssues.map(formatParameterIssue).filter(Boolean);
-    const message = issues.length ? issues.join('\n') : LOCAL_RULE_MESSAGES[detail.code]
+    const fallback = issues.length ? issues.join('\n') : LOCAL_RULE_MESSAGES[detail.code]
         || catalog[detail.code]?.[1] || CATEGORY_MESSAGES[detail.category];
+    const chineseReason = /[\u3400-\u9fff]/.test((detail.customerMessage || '').replace(/\[[^\]]*已隐藏\]/g, ''));
+    const message = detail.customerMessage ? (chineseReason ? detail.customerMessage : `${fallback}\n${detail.customerMessage}`) : fallback;
     const state = detail.confirmedFailure && detail.submissionState === 'accepted'
         ? '原任务已失败，请调整后重新提交。' : STATE_MESSAGES[detail.submissionState];
-    return `${message}\n${state}${detail.requestId ? `\n排查编号：${detail.requestId}` : ''}`;
+    return `${message}${detail.httpStatus ? `\nHTTP ${detail.httpStatus}` : ''}\n${state}${detail.requestId ? `\n排查编号：${detail.requestId}` : ''}`;
 }
 
-// Recognize only our complete numeric grammar when legacy callers retain just the message.
+// String-only UI paths retain state lines and bounded, already-sanitized reasons.
 function isFormattedPublicDetail(value, catalog = {}) {
     if (typeof value !== 'string') return false;
     const lines = value.split('\n');
@@ -134,7 +144,7 @@ function isFormattedPublicDetail(value, catalog = {}) {
     const token = '(?:\\d+(?:\\.\\d+)?p?|[1-9]k|\\d+:\\d+|adaptive|low|medium|high|standard|hd|auto)';
     const parameter = new RegExp(`^(?:(?:[1-9]\\d{1,3}p|[1-9]k) )?(?:第 \\d{1,4} 项)?(?:视频时长|分辨率|画面比例|画质|生成数量|参考(?:图片|视频|音频)(?:数量|大小|时长))(?:无法读取，请重新上传或更换素材|不能为空|格式不支持，请转换格式后重新上传|不支持|应为 [\\d.]+ 到 [\\d.]+(?: 秒| 字节)?|最多 [\\d.]+(?: 秒| 字节)?|至少 [\\d.]+(?: 秒| 字节)?|仅支持 ${token}(?:、${token})*(?: 秒| 字节)?|必须为整数|不符合当前模型要求)(?:，且必须为整数)?(?:，当前为 ${token}(?: 秒| 字节)?)?。$`);
     return lines.some(line => Object.values(STATE_MESSAGES).includes(line) || line === '原任务已失败，请调整后重新提交。')
-        && lines.every(line => constants.has(line) || parameter.test(line)
+        && lines.every(line => constants.has(line) || parameter.test(line) || /^HTTP [45]\d{2}$/.test(line) || (sanitizeCustomerMessage(line).message === line && line.length <= 1200)
             || (line.startsWith('排查编号：') && safeRequestId(line.slice('排查编号：'.length))));
 }
 

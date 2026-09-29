@@ -197,6 +197,22 @@ export function adminPage({
   ${customerReportsMarkup()}
 
   <section>
+    <h2>错误分析 API</h2>
+    <form id="errorAnalysisSettings" class="publish-bar" style="align-items:end;flex-wrap:wrap">
+      <label><input type="checkbox" name="enabled"> 自动分析未知错误</label>
+      <label>接口地址 <input name="endpoint" type="url" placeholder="https://example.com/v1" autocomplete="off"></label>
+      <label>模型 <input name="model" type="text" maxlength="120" autocomplete="off"></label>
+      <label>协议 <select name="protocol"><option value="chat">Chat Completions</option><option value="responses">Responses</option></select></label>
+      <label>API Key <input name="apiKey" type="password" autocomplete="new-password" placeholder="留空保留已保存的 Key"></label>
+      <label><input name="clearKey" type="checkbox"> 清除 Key</label>
+      <label>每日调用上限 <input name="dailyLimit" type="number" min="1" max="1000" value="50" style="width:80px"></label>
+      <button type="submit">保存分析配置</button>
+      <button type="button" id="errorAnalysisRun">立即检查</button>
+    </form>
+    <p id="errorAnalysisStatus" role="status"></p>
+    <div class="table-scroll"><table><thead><tr><th>站点</th><th>分析状态</th><th>更新时间</th><th>结果</th><th>操作</th></tr></thead><tbody id="errorAnalysisJobs"></tbody></table></div>
+  </section>
+  <section>
     <h2>请求排查</h2>
     <form id="requestDiagnosticsForm" class="publish-bar">
       <label>站点 <select name="site" aria-label="诊断站点"><option value="art">老站</option><option value="cart">新站</option></select></label>
@@ -204,6 +220,8 @@ export function adminPage({
       <button type="submit"><svg width="14" height="14" aria-hidden="true"><use href="/admin/assets/flow-icons.svg#icon-search"></use></svg> 查询</button>
     </form>
     <p id="requestDiagnosticsStatus" role="status"></p>
+    <button type="button" id="requestDiagnosticsReview">查看该站待适配错误</button>
+    <div id="requestDiagnosticsReviewList" style="display:grid;gap:8px;margin:12px 0;overflow-wrap:anywhere"></div>
     <dl id="requestDiagnosticsSummary" style="display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 16px;overflow-wrap:anywhere"></dl>
     <pre id="requestDiagnosticsError" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
     <details><summary>脱敏诊断数据</summary><pre id="requestDiagnosticsResult" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:560px;overflow:auto"></pre></details>
@@ -227,6 +245,7 @@ export function adminPage({
 </main>
 <script type="module" src="/admin/assets/admin-editor.mjs"></script>
 <script type="module" src="/admin/assets/admin-request-diagnostics-client.mjs"></script>
+<script type="module" src="/admin/assets/error-analysis-client.mjs"></script>
 <script type="module" src="/admin/assets/customer-error-reports-client.mjs"></script>
 <script type="module" src="/admin/assets/admin-balances-client.mjs"></script>`);
 }

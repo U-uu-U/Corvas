@@ -76,6 +76,41 @@ const fetchConfig = async base => {
     return { response, config: await response.json() };
 };
 
+test('error analysis settings are admin-only, CSRF protected, and never expose the API key', async t => {
+    const server = await startServer(); t.after(server.cleanup);
+    assert.equal((await fetch(`${server.base}/admin/error-analysis`, { headers: { accept: 'application/json' } })).status, 401);
+    const { cookie } = await login(server.base); const { csrf } = await openAdmin(server.base, cookie);
+    const body = { enabled: false, endpoint: 'https://api.example.com/v1', protocol: 'responses', model: 'test-model', apiKey: 'fixture-secret-analysis', dailyLimit: 20 };
+    assert.equal((await fetch(`${server.base}/admin/error-analysis`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify(body) })).status, 403);
+    const response = await fetch(`${server.base}/admin/error-analysis`, { method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-csrf-token': csrf }, body: JSON.stringify(body) });
+    assert.equal(response.status, 200); assert.doesNotMatch(await response.text(), /fixture-secret-analysis/);
+    assert.doesNotMatch(JSON.stringify((await fetchConfig(server.base)).config), /fixture-secret-analysis|api\.example\.com/);
+    const publicResult = await fetch(`${server.base}/error-analysis/ea_${'a'.repeat(32)}`);
+    assert.deepEqual(await publicResult.json(), { state: 'unavailable' });
+});
+
+test('live generation health changes ETag without publishing a catalog revision', async t => {
+    const metric = { model: 'health-fixture', state: 'available', reason: 'recent', samples: ['success', 'success', 'success'],
+        successCount: 3, failureCount: 0, excludedCount: 0, durationSamples: 3, averageSeconds: 120,
+        validUntil: new Date(Date.now() + 180000).toISOString(), lastCompletedAt: new Date().toISOString() };
+    const snapshots = { 'art.ravenhash.org': { checkedAt: new Date().toISOString(), models: [metric] } };
+    const server = await startServer({ generationHealth: { snapshots } });
+    t.after(server.cleanup);
+    server.instance.store.save({ schemaVersion: 1, models: [{ id: 'health', kind: 'video', match: { model: ['^health-fixture$'] },
+        catalog: { model: 'health-fixture', hosts: ['art.ravenhash.org'] } }] });
+    const first = await fetchConfig(server.base);
+    assert.equal(first.config.models[0].generationHealth[0].averageSeconds, 120);
+    assert.equal(server.instance.validator.validate(first.config).ok, true);
+    metric.averageSeconds = 75;
+    const second = await fetch(`${server.base}/config`, { headers: { 'if-none-match': first.response.headers.get('etag') } });
+    assert.equal(second.status, 200);
+    const updated = await second.json();
+    assert.equal(updated.revision, first.config.revision);
+    assert.equal(updated.models[0].generationHealth[0].averageSeconds, 75);
+    const preview = await fetch(`${server.base}/config/preview`);
+    assert.deepEqual(await preview.json(), updated);
+});
+
 test('/config：公开只读、带 ETag 与 CORS、首次启动就是播种版本', async () => {
     const server = await startServer();
     try {

@@ -6,8 +6,8 @@ const REQUEST_ID = /^(?:rh|fc)_[a-f0-9]{32}$/;
 
 export function createAdminRequestDiagnostics({ dataDir, fetchImpl = fetch } = {}) {
     return {
-        async get(site, requestId) {
-            if (!Object.hasOwn(HOSTS, site) || !REQUEST_ID.test(requestId || '')) {
+        async get(site, requestId, { review = false } = {}) {
+            if (!Object.hasOwn(HOSTS, site) || (!review && !REQUEST_ID.test(requestId || ''))) {
                 return { status: 400, body: { error: '请选择站点并填写有效排查编号' } };
             }
             let account;
@@ -17,7 +17,7 @@ export function createAdminRequestDiagnostics({ dataDir, fetchImpl = fetch } = {
             if (!account || typeof account.key !== 'string' || account.key.length < 32) {
                 return { status: 503, body: { error: '该站点的管理员诊断连接尚未配置' } };
             }
-            const url = `https://${HOSTS[site]}/internal/diagnostics?${new URLSearchParams({ requestId, includeRelayLog: '1' })}`;
+            const url = `https://${HOSTS[site]}/internal/diagnostics?${new URLSearchParams(review ? { review: '1' } : { requestId, includeRelayLog: '1' })}`;
             try {
                 const response = await fetchImpl(url, { headers: { 'x-corvas-diagnostics-key': account.key,
                     accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(15000) });

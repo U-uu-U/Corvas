@@ -9,6 +9,8 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote', models: [
     id: 'sd2-fast', kind: 'video', match: { model: ['^sd2-fast$'] },
     catalog: { model: 'sd2-fast', hosts: ['art.ravenhash.org'], enabled: true },
     presentation: { label: 'sd2-fast', routeLabel: 'sd2-fast', routeGroup: '' },
+    capabilities: { referenceImages: { supported: true, max: 9 }, referenceVideos: { supported: false, max: 0 },
+        referenceAudios: { supported: true, max: 3 } },
     options: { duration: { type: 'range', min: 1, max: 15, default: 10, integer: true },
         resolutionTier: { type: 'enum', values: ['480p', '720p'], default: '480p' },
         ratio: { type: 'enum', values: ['16:9', '9:16'], default: '9:16' } },
@@ -65,6 +67,9 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote', models: [
         await page.evaluate(() => window.Konva.stages[0].findOne('#duration-video').fire('click', { evt: { button: 0 } }));
         await page.locator('[data-model]').click();
         await page.locator('.generation-composer-model-option').filter({ hasText: 'sd2-fast' }).click();
+        const referenceLabel = await page.locator('.generation-composer-reference-add').getAttribute('aria-label');
+        assert.match(referenceLabel, /图片最多9.*音频最多3/);
+        assert.doesNotMatch(referenceLabel, /视频最多/);
         const slider = page.getByRole('slider', { name: '视频时长', exact: true });
         const chooseResolution = async resolution => {
             await page.getByRole('button', { name: '输出分辨率', exact: true }).click();

@@ -226,7 +226,8 @@ function copiesToSync() {
     return [
         { source: SCHEMA_PATH, target: SERVER_SCHEMA_PATH, label: 'configserver schema' },
         { source: path.join(root, 'shared/model-parameter-rules.cjs'), target: path.join(root, 'configserver/lib/model-parameter-rules.cjs'), label: 'configserver parameter rules' },
-        { source: path.join(root, 'shared/error-report-contract.cjs'), target: path.join(root, 'configserver/lib/error-report-contract.cjs'), label: 'configserver error report contract' },
+          { source: path.join(root, 'shared/error-report-contract.cjs'), target: path.join(root, 'configserver/lib/error-report-contract.cjs'), label: 'configserver error report contract' },
+          { source: path.join(root, 'shared/customer-error-message.cjs'), target: path.join(root, 'configserver/lib/customer-error-message.cjs'), label: 'configserver customer error sanitizer' },
         { source: JSON_PATH, target: SERVER_SEED_PATH, label: 'configserver 种子配置' }
     ];
 }

@@ -6,8 +6,11 @@ const crypto = require('node:crypto');
 const { DiagnosticLog, setDiagnosticLog } = require('./diagnostics.cjs');
 const { createErrorReportClient, safeRequestParameters, errorReportContext, classifyErrorReportSite } = require('./error-report-client.cjs');
 const appVersion = require('../package.json').version;
+const { createErrorAnalysisClient } = require('./error-analysis-client.cjs');
 
 function installDiagnostics({ getWindow, getTasks, getSecrets, getConfigStatus }) {
+    const analysis = createErrorAnalysisClient({ fetchImpl: (...args) => net.fetch(...args) });
+    ipcMain.handle('diagnostics:error-analysis', (_event, token) => analysis.get(token));
     const knownSecrets = new Set();
     const remember = value => {
         if (typeof value !== 'string' || value.length < 4) return;

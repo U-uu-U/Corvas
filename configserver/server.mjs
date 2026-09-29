@@ -33,14 +33,17 @@ import { adminPage, loginPage, landingPage, escapeHtml } from './lib/pages.mjs';
 import { createAdminBalances } from './lib/admin-balances.mjs';
 import { projectAdminModelCosts } from './lib/admin-model-costs.mjs';
 import { withCatalogSalePrices } from './lib/catalog-sale-prices.mjs';
+import { createCatalogGenerationHealth, withCatalogGenerationHealth } from './lib/catalog-generation-health.mjs';
 import { createAdminRequestDiagnostics } from './lib/admin-request-diagnostics.mjs';
 import { createCustomerErrorReports } from './lib/customer-error-reports.mjs';
+import { createErrorAnalysis } from './lib/error-analysis.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_PORT = 8087;
 const EDITOR_ASSETS = new Map(['admin-editor.mjs', 'admin-editor-model.mjs', 'admin-catalog-model.mjs', 'admin-catalog-view.mjs', 'admin-balances-client.mjs', 'admin-request-diagnostics-client.mjs', 'customer-error-reports-client.mjs']
     .map(name => [`/admin/assets/${name}`, path.join(HERE, 'lib', name)]));
+EDITOR_ASSETS.set('/admin/assets/error-analysis-client.mjs', path.join(HERE, 'lib/error-analysis-client.mjs'));
 EDITOR_ASSETS.set('/admin/assets/flow-icons.svg', path.join(HERE, 'assets', 'flow-icons.svg'));
 
 export function resolveServerConfig(env = process.env) {
@@ -257,6 +260,8 @@ export async function createConfigServer(options = {}) {
     const balances = options.balances || createAdminBalances({ dataDir: config.dataDir,
         seedPath: path.join(HERE, 'seed', 'admin-balance-accounts.json') });
     const startedAt = Date.now();
+    const generationHealth = options.generationHealth || createCatalogGenerationHealth({ dataDir: config.dataDir });
+    const errorAnalysis = options.errorAnalysis || createErrorAnalysis({ dataDir: config.dataDir, requestDiagnostics });
     const customerReports = options.customerReports || createCustomerErrorReports({ dataDir: config.dataDir,
         requestDiagnostics, limits: options.customerReportLimits });
 
@@ -302,7 +307,8 @@ export async function createConfigServer(options = {}) {
         }
         let prices = null;
         try { prices = readAdminModelPrices(); } catch { /* Unavailable snapshots remain explicitly unknown. */ }
-        const text = `${JSON.stringify(withCatalogSalePrices(active.config, prices), null, 2)}\n`;
+        const published = withCatalogGenerationHealth(withCatalogSalePrices(active.config, prices), generationHealth.snapshots);
+        const text = `${JSON.stringify(published, null, 2)}\n`;
         const etag = `"${crypto.createHash('sha256').update(text).digest('hex').slice(0, 32)}"`;
         if (req.headers['if-none-match'] === etag) {
             res.writeHead(304, { etag, 'cache-control': 'no-cache' });
@@ -367,6 +373,23 @@ export async function createConfigServer(options = {}) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const pathname = url.pathname.replace(/\/+$/, '') || '/';
         const method = req.method || 'GET';
+        if (method === 'GET' && /^\/error-analysis\/ea_[a-f0-9]{32}$/.test(pathname)) {
+            return json(res, 200, errorAnalysis.lookup(pathname.split('/').at(-1)), { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+        }
+        if (pathname === '/admin/error-analysis' && ['GET', 'POST'].includes(method)) {
+            res.setHeader('cache-control', 'no-store');
+            if (!requireAdmin(req, res)) return;
+            if (method === 'GET') return json(res, 200, { settings: errorAnalysis.viewSettings(), jobs: errorAnalysis.list() });
+            if (!sameOrigin(req, config)) return json(res, 403, { error: '来源校验失败' });
+            if (!requireCsrf(req, res)) return;
+            try {
+                const body = JSON.parse(await readBody(req));
+                if (body.operation === 'run') { void errorAnalysis.cycle().catch(() => {}); return json(res, 202, { accepted: true }); }
+                if (body.operation === 'retry') { errorAnalysis.retry(body.key); void errorAnalysis.cycle().catch(() => {}); return json(res, 202, { accepted: true }); }
+                const settings = errorAnalysis.configure(body);
+                return json(res, 200, { settings });
+            } catch (error) { return json(res, 400, { error: error.status === 400 ? error.message : '分析配置无法保存' }); }
+        }
 
         if (method === 'POST' && pathname === '/error-reports') {
             res.setHeader('cache-control', 'no-store');
@@ -435,7 +458,7 @@ export async function createConfigServer(options = {}) {
         if (method === 'GET' && pathname === '/admin/request-diagnostics') {
             res.setHeader('cache-control', 'no-store');
             if (!requireAdmin(req, res)) return;
-            const result = await requestDiagnostics.get(url.searchParams.get('site'), url.searchParams.get('requestId'));
+            const result = await requestDiagnostics.get(url.searchParams.get('site'), url.searchParams.get('requestId'), { review: url.searchParams.get('review') === '1' });
             return json(res, result.status, result.body);
         }
 
@@ -689,6 +712,8 @@ export async function createConfigServer(options = {}) {
     });
 
     const address = server.address();
+    generationHealth.start?.();
+    errorAnalysis.start?.();
     const port = typeof address === 'object' && address ? address.port : Number(config.port);
     const scheme = useTls ? 'https' : 'http';
     const url = `${scheme}://${config.host}:${port}`;
@@ -704,7 +729,7 @@ export async function createConfigServer(options = {}) {
         config,
         auth,
         customerReports,
-        close: async () => { await customerReports.close(); await new Promise(resolve => server.close(() => resolve())); }
+        close: async () => { generationHealth.close?.(); await errorAnalysis.close?.(); await customerReports.close(); await new Promise(resolve => server.close(() => resolve())); }
     };
 }
 
