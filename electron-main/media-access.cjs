@@ -73,7 +73,7 @@ class MediaAccessPolicy {
                 }
                 for (const file of legacyScope.files || []) {
                     try {
-                        const candidate = path.resolve(file);
+                        const candidate = fs.realpathSync.native(file);
                         const allowedByManagedRoot = [...this.managedRoots, ...this.roots].some(root => within(root, candidate));
                         if (allowedByManagedRoot) this.grant(file, { persist: false });
                     } catch { /* Skip stale files. */ }
