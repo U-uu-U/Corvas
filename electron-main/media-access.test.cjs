@@ -141,7 +141,7 @@ test('board video results repair a stale media registry on startup', async t => 
     const policy = new MediaAccessPolicy({ userData: root, managedRoots: [captured], registryFile: registry,
         legacyScope: { roots: [], files: [video] } });
     const resolved = await policy.resolve(video);
-    assert.equal(resolved.filePath, fsSync.realpathSync(video));
+    assert.equal(resolved.filePath, fsSync.realpathSync.native(video));
     const saved = JSON.parse(fsSync.readFileSync(registry, 'utf8'));
-    assert.ok(saved.files.some(file => file.toLowerCase() === fsSync.realpathSync(video).toLowerCase()));
+    assert.ok(saved.files.some(file => file.toLowerCase() === fsSync.realpathSync.native(video).toLowerCase()));
 });
