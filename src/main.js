@@ -454,9 +454,9 @@ async function bootstrap() {
                     storeData.items = storeData.items.filter(i => i.filePath !== filePath);
                 });
             }
-            saveStoreThrottled();
             syncStats();
             commitHistory('remove');
+            saveStoreNow(true);
         });
 
         // 监听画布变更
@@ -1505,6 +1505,11 @@ function setRemovedFromBoardPaths(filePaths) {
             .map(normalizeFsPath)
             .filter(Boolean)
     )];
+    // The top-level board is the active project's mirror, including tombstones.
+    if (owner !== storeData) {
+        storeData.removedFromBoardPaths = [...owner.removedFromBoardPaths];
+        storeData.removedFromBoardPathsInitialized = owner.removedFromBoardPathsInitialized === true;
+    }
 }
 
 function isRemovedFromBoard(filePath) {
@@ -1563,6 +1568,8 @@ function saveStoreNow(useSync = false) {
         activeGroup.connections = cloneData(canvasManager.graphView?.serialize?.() || []);
         activeGroup.boardRevision = getBoardRevision();
         activeGroup.appliedTransactionKeys = cloneData(getAppliedTransactionKeys());
+        storeData.removedFromBoardPaths = [...getRemovedFromBoardPaths()];
+        storeData.removedFromBoardPathsInitialized = activeGroup.removedFromBoardPathsInitialized === true;
     }
 
     storeData.connections = cloneData(canvasManager.graphView?.serialize?.() || []);

@@ -11037,17 +11037,29 @@ export class CanvasManager {
         };
 
         if (this._generationComposer?.nodeId === sourceId) this._closeGenerationComposer();
-        this.graphView?.clearPorts(sourceId);
+        const originalData = JSON.parse(JSON.stringify(sourceItem));
+        const originalConnections = this.graphView?.serialize?.() || [];
+        // Keep the generator alive until the replacement and its connections exist.
+        Object.keys(sourceItem).forEach(key => { delete sourceItem[key]; });
+        Object.assign(sourceItem, mediaData);
+        try {
+            await this._createCard(sourceItem);
+            this.graphView?.convertGeneratorOutputNode(sourceId);
+        } catch (error) {
+            const replacement = this.items.get(sourceId);
+            if (replacement && replacement !== entry) {
+                this._unloadContent(replacement);
+                replacement.group.destroy();
+            }
+            Object.keys(sourceItem).forEach(key => { delete sourceItem[key]; });
+            Object.assign(sourceItem, originalData);
+            this.items.set(sourceId, entry);
+            this.graphView?.load(originalConnections);
+            throw error;
+        }
         entry.group.getAttr('generatorAnimation')?.stop?.();
         this._disposeGeneratorPreviewMedia(entry.group);
         entry.group.destroy();
-        this.items.delete(sourceId);
-        this.selectedItems.delete(sourceId);
-
-        Object.keys(sourceItem).forEach(key => { delete sourceItem[key]; });
-        Object.assign(sourceItem, mediaData);
-        await this._createCard(sourceItem);
-        this.graphView?.convertGeneratorOutputNode(sourceId);
         this._scheduleCullCheck();
         if (wasSelected) this.selectItem(sourceId, true);
         this._scheduleSelectionToolbarSync();

@@ -3524,9 +3524,11 @@ app.on('before-quit', event => {
     hunyuanRhinoWorkflow?.close();
     rhinoWorkbench?.close();
     blenderWorkbench?.close();
-    if ((agentServices || hunyuanAccounts) && !agentShutdownComplete) {
+    if ((agentServices || hunyuanAccounts || watcher) && !agentShutdownComplete) {
         event.preventDefault();
-        agentShutdownPromise ||= Promise.all([agentServices?.close(), hunyuanAccounts?.closeAll()]).catch(() => {}).finally(() => {
+        agentShutdownPromise ||= Promise.allSettled([
+            agentServices?.close(), hunyuanAccounts?.closeAll(), watcher?.closeAll()
+        ]).finally(() => {
             agentShutdownComplete = true;
             app.quit();
         });
