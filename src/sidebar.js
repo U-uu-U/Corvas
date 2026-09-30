@@ -55,8 +55,8 @@ export class SidebarManager {
                 folders: [...this.storeData.watchFolders],
                 boardRevision: 0,
                 appliedTransactionKeys: [],
-                removedFromBoardPaths: [],
-                removedFromBoardPathsInitialized: false
+                removedFromBoardPaths: [...(this.storeData.removedFromBoardPaths || [])],
+                removedFromBoardPathsInitialized: this.storeData.removedFromBoardPathsInitialized === true
             };
             this.storeData.folderGroups.push(defaultGroup);
             this.storeData.activeGroupId = defaultGroup.id;
@@ -1488,6 +1488,8 @@ export class SidebarManager {
             this.storeData.connections = [...(newGroup.connections || [])];
             this.storeData.boardRevision = Number(newGroup.boardRevision) || 0;
             this.storeData.appliedTransactionKeys = [...(newGroup.appliedTransactionKeys || [])];
+            this.storeData.removedFromBoardPaths = [...(newGroup.removedFromBoardPaths || [])];
+            this.storeData.removedFromBoardPathsInitialized = newGroup.removedFromBoardPathsInitialized === true;
             this.storeData.watchFolders = [...newGroup.folders];
             this.storeData.activeGroupDefaultSaveFolder = newGroup.defaultSaveFolder || null;
             this.storeData.viewport = newGroup.savedViewport

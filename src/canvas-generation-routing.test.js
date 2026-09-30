@@ -419,6 +419,51 @@ function deferred() {
     return { promise, resolve };
 }
 
+for (const failure of ['create-card', 'convert-edges', null]) {
+    test(`image replacement retains its generator until landing succeeds: ${failure || 'success'}`, async t => {
+        const source = { id: 'image', kind: 'op', nodeType: 'image', config: { prompt: 'retained prompt' },
+            x: 20, y: 30, width: 400, height: 300 };
+        const original = clone(source);
+        const edges = [{ id: 'input', from: { nodeId: 'reference', port: 'out' }, to: { nodeId: source.id, port: 'source' } }];
+        const oldGroup = { x: () => 20, y: () => 30, getAttr: () => null, destroy: t.mock.fn() };
+        const newGroup = { destroy: t.mock.fn() };
+        const oldEntry = { data: source, group: oldGroup };
+        const error = new ReferenceError('fixture is not defined');
+        const manager = Object.assign(Object.create(CanvasManager.prototype), {
+            items: new Map([[source.id, oldEntry]]), selectedItems: new Set([source.id]),
+            _opReferenceEntries: () => [], _unloadContent: t.mock.fn(),
+            graphView: { serialize: () => clone(edges), load: t.mock.fn(), convertGeneratorOutputNode() {
+                assert.equal(oldGroup.destroy.mock.callCount(), 0);
+                if (failure === 'convert-edges') throw error;
+            } },
+            async _createCard(data) {
+                assert.equal(oldGroup.destroy.mock.callCount(), 0);
+                if (failure === 'create-card') throw error;
+                this.items.set(data.id, { data, group: newGroup });
+            },
+            _disposeGeneratorPreviewMedia: t.mock.fn(), _scheduleCullCheck: t.mock.fn(),
+            selectItem: t.mock.fn(), _scheduleSelectionToolbarSync: t.mock.fn(), emit: t.mock.fn()
+        });
+        const pending = manager._convertImageGeneratorToMedia(source, { image: '/result.png' }, '/result.png');
+        if (failure) {
+            await assert.rejects(pending, candidate => candidate === error);
+            assert.deepEqual(source, original);
+            assert.strictEqual(manager.items.get(source.id), oldEntry);
+            assert.equal(oldGroup.destroy.mock.callCount(), 0);
+            assert.deepEqual(firstArgs(manager.graphView.load)[0], edges);
+            assert.equal(newGroup.destroy.mock.callCount(), failure === 'convert-edges' ? 1 : 0);
+        } else {
+            assert.strictEqual(await pending, source);
+            assert.equal(source.kind, 'media');
+            assert.equal(source.filePath, '/result.png');
+            assert.strictEqual(manager.items.get(source.id).group, newGroup);
+            assert.equal(oldGroup.destroy.mock.callCount(), 1);
+            assert.equal(newGroup.destroy.mock.callCount(), 0);
+            assert.equal(manager.selectedItems.has(source.id), true);
+        }
+    });
+}
+
 function harness(t, { activeProjectId = 'original', staleSource = false } = {}) {
     const source = {
         id: 'source', kind: 'op', nodeType: 'image', config: { prompt: 'original prompt', model: 'image-model' },
