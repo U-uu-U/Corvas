@@ -30,6 +30,7 @@ class Watcher {
         this.store = store;
         this.onChange = onChange;
         this.watchers = new Map();
+        this.pendingCloses = new Set();
     }
 
     isSupportedFile(filePath) {
@@ -80,6 +81,8 @@ class Watcher {
             ignored: /(^|[/\\])\../,
             persistent: true,
             ignoreInitial: true,
+            // Avoid the native fsevents teardown crash on Electron/macOS.
+            ...(process.platform === 'darwin' ? { useFsEvents: false } : {}),
             depth: WATCH_DEPTH,
             awaitWriteFinish: {
                 stabilityThreshold: 2000,
@@ -88,13 +91,13 @@ class Watcher {
         });
 
         watcher.on('add', (filePath) => {
-            if (this.isReadyFile(filePath)) {
+            if (this.watchers.get(folderPath) === watcher && this.isReadyFile(filePath)) {
                 this.onChange('add', filePath);
             }
         });
 
         watcher.on('unlink', (filePath) => {
-            if (this.isSupportedFile(filePath)) {
+            if (this.watchers.get(folderPath) === watcher && this.isSupportedFile(filePath)) {
                 this.onChange('remove', filePath);
             }
         });
@@ -112,8 +115,8 @@ class Watcher {
         const watcher = this.watchers.get(folderPath);
         if (!watcher) return false;
 
-        watcher.close();
         this.watchers.delete(folderPath);
+        this._closeWatcher(watcher);
         console.log('[Watcher] Stopped:', folderPath);
         return true;
     }
@@ -164,11 +167,17 @@ class Watcher {
         }
     }
 
+    _closeWatcher(watcher) {
+        const pending = Promise.resolve().then(() => watcher.close()).catch(error => {
+            console.error('[Watcher] Close failed:', error.message);
+        }).finally(() => this.pendingCloses.delete(pending));
+        this.pendingCloses.add(pending);
+        return pending;
+    }
+
     closeAll() {
-        for (const [, watcher] of this.watchers) {
-            watcher.close();
-        }
-        this.watchers.clear();
+        for (const folder of [...this.watchers.keys()]) this.remove(folder);
+        return Promise.all([...this.pendingCloses]);
     }
 }
 

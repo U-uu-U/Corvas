@@ -68,11 +68,17 @@ jobs:
         run: node scripts/agent-smoke.cjs
       - name: Verify released UI controls
         run: node scripts/release-ui-smoke.cjs
+      - name: Verify board deletion and image landing after restart
+        env:
+          FLOW_MEDIA_SMOKE_ASAR: ${{ github.workspace }}/release/mac-universal/Corvas.app/Contents/Resources/app.asar
+        run: node scripts/board-persistence-smoke.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: macos-release-ui-screenshots
-          path: output/playwright/release-ui-*.png
+          path: |
+            output/playwright/release-ui-*.png
+            output/playwright/board-persistence.png
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:

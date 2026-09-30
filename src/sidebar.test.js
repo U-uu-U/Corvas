@@ -133,3 +133,17 @@ for (const emptyNextGroup of [false, true]) {
         assert.throws(() => h.service.readProject('a'), { code: 'PROJECT_NOT_FOUND' });
     });
 }
+
+test('group switches mirror only the selected group tombstones before a save', async t => {
+    const h = harness(t, false);
+    const a = h.sidebar.getActiveGroup();
+    a.removedFromBoardPaths.push('/Users/apple/Desktop/deleted.png');
+    h.sidebar._activateGroup('b');
+    assert.deepEqual(h.sidebar.storeData.removedFromBoardPaths, ['C:/b/removed.png']);
+    assert.equal(h.sidebar.storeData.removedFromBoardPathsInitialized, true);
+    h.sidebar._activateGroup('a');
+    assert.deepEqual(h.sidebar.storeData.removedFromBoardPaths, ['C:/a/removed.png', '/Users/apple/Desktop/deleted.png']);
+    assert.deepEqual(await Promise.all(h.pendingSaves), [true, true]);
+    assert.deepEqual(h.stored.removedFromBoardPaths, h.sidebar.storeData.removedFromBoardPaths);
+    assert.deepEqual(h.stored.folderGroups.find(g => g.id === 'b').removedFromBoardPaths, ['C:/b/removed.png']);
+});
