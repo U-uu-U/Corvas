@@ -1222,7 +1222,6 @@ class FlowCanvasBridge {
             filePath: result.filePath,
             provider: result.provider,
             taskId: result.taskId,
-            video: { url: result.url },
             sourceReferences: sourceContext.references,
             videoReferences: videoSourceContext.references,
             audioReferences: audioSourceContext.references,
@@ -1425,7 +1424,7 @@ class FlowCanvasBridge {
                 });
                 if (item) this._saveAndNotify(latest, 'mcp:video-recovered');
                 return { item, filePath: completed.filePath, provider: 'shanhai-video', taskId: resolvedTaskId,
-                    video: { url: completed.url }, targetDir, requestedTargetDir, targetDirFallback: targetInfo.fallbackReason };
+                    targetDir, requestedTargetDir, targetDirFallback: targetInfo.fallbackReason };
             });
         }
         const completed = await pollOpenAiVideoTask(
@@ -1468,7 +1467,7 @@ class FlowCanvasBridge {
             onProgress: progress => this.notifyVideoProgress?.({ clientTaskId: body.clientTaskId || null, ...progress })
         });
         this._rememberResult(body, { filePath, filePaths: [filePath], taskId: resolvedTaskId,
-            mediaType: 'video', video: { url: completed.url }, targetDir });
+            mediaType: 'video', targetDir });
         throwIfGenerationCanceled(signal);
         this.notifyVideoProgress?.({ clientTaskId: body.clientTaskId || null, stage: 'completed' });
         if (body.addToCanvas !== false) this.notifyTaskCompleted?.({ clientTaskId: body.clientTaskId, remoteTaskId: resolvedTaskId, filePath });
@@ -1499,7 +1498,6 @@ class FlowCanvasBridge {
                 filePath,
                 provider: 'openai-video',
                 taskId: resolvedTaskId,
-                video: { url: completed.url },
                 targetDir,
                 requestedTargetDir,
                 targetDirFallback: targetInfo.fallbackReason
@@ -3900,14 +3898,13 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
             onProgress: options.onProgress
         });
         options.onDownloaded?.({ filePath, filePaths: [filePath], taskId: completed.taskId || taskId,
-            mediaType: 'video', video: { url: completed.url }, targetDir });
+            mediaType: 'video', targetDir });
         throwIfGenerationCanceled(options.signal);
         options.onProgress?.({ stage: 'completed' });
         return {
             success: true,
             provider: 'openai-video',
             taskId: completed.taskId || taskId,
-            url: completed.url,
             filePath,
             width: Number(options.width) || undefined,
             height: Number(options.height) || undefined
