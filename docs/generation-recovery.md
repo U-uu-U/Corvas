@@ -14,6 +14,12 @@
 
 ## 兼容范围
 
+2026-10-04 源码改动：视频任务一旦明确返回完成（含完成但下载地址暂未返回），画布计时替换为“正在下载...”。刷新过期地址仍停留在下载阶段；不能仅因上游进度为 100% 判定完成。节点、生成输入框和任务记录共用阶段判断，兼容旧 `ready/download/downloading` 值。下载大小和速度由实际读取的字节统计，不使用模型生成进度冒充下载进度。
+
+通用产物下载改为逐块读取，3 分钟限制改为等待响应/连续无数据的超时，持续有数据的慢下载不会因为总用时超过 3 分钟被打断。HTTP/1.1 回退沿用其空闲超时，并补充进度；山海独立下载同样上报字节进度。读取时校验实际 512 MiB 上限及未压缩响应的 Content-Length，失败只重试 GET，不重提生成。此改动没有增加跨重启的部分文件断点续传，也没有改变必须明确拉取旧断连任务的规则。需要更新客户端；既有安装包不受 CONFIG 推送影响。
+
+新增 `scripts/video-download-progress-smoke.cjs`：隔离资料、本地模拟服务和 FFmpeg 视频，先返回完成但无地址，再缓慢传输。验证计时停止、两处下载提示、进度及真实视频落图，全程只提交一次模拟生成。截图为 `output/playwright/video-downloading.png`。
+
 旧任务记录可直接使用保存的任务 ID，或手工补填 ID。新版本开始独立保留主进程检查点，任务记录面板打开时会补回前端遗漏的记录。
 
 上游没有查询接口、任务已过期、账号无权读取，或同步生图中断前既没得到任务 ID 也没下载结果时，不能凭本地记录重建服务端产物；会显示实际错误，不自动变成新的付费生成。
@@ -24,6 +30,7 @@
 node --test electron-main/generation-recovery.test.cjs electron-main/generation-recovery-board.test.mjs
 npm run build
 node scripts/generation-recovery-smoke.cjs
+node scripts/video-download-progress-smoke.cjs
 ```
 
 桌面检查使用隔离配置和本地模拟服务，不读取真实 API 密钥、不产生生成费用。涵盖补填 ID、已中断任务恢复、CDN 502 重试、原项目回填、本地复用、复制任务 ID、鉴权失败与 renderer 刷新。

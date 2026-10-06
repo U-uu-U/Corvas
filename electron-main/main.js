@@ -64,6 +64,32 @@ let blenderWorkbench = null;
 let creativeWebApps = null;
 let mediaPreviewWasFullScreen = null;
 let mediaAccess = null;
+const appUpdates = require('./app-updates.cjs').createAppUpdates({
+    currentVersion: app.getVersion(), platform: process.platform, packaged: app.isPackaged,
+    portable: Boolean(process.env.PORTABLE_EXECUTABLE_FILE), directory: path.join(app.getPath('userData'), 'updates'),
+    fetchImpl: (...args) => net.fetch(...args),
+    updaterFactory: () => require('electron-updater').autoUpdater,
+    onState: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app-updates:state', state); },
+    prepareInstall: async () => {
+        const agentBusy = [...(agentServices?.runtime?.runs?.values?.() || [])]
+            .some(run => ['planning', 'running', 'waiting_provider', 'reviewing'].includes(run.status));
+        if (flowCanvasBridge?.activeGenerationRequests?.size || agentBusy) {
+            throw Object.assign(new Error('Generation tasks are running'), { code: 'TASKS_RUNNING' });
+        }
+        await mainWindow?.webContents.session.flushStorageData();
+    },
+    openInstaller: async file => {
+        if (IS_WINDOWS && process.env.PORTABLE_EXECUTABLE_FILE) { shell.showItemInFolder(file); return; }
+        const error = await shell.openPath(file);
+        if (error) throw new Error('Installer could not open');
+    }
+});
+for (const action of ['snapshot', 'check', 'download', 'cancel', 'install']) {
+    ipcMain.handle(`app-updates:${action}`, event => {
+        if (event.sender !== mainWindow?.webContents) throw new Error('Invalid update sender');
+        return appUpdates[action]();
+    });
+}
 // 文件移动会让 chokidar 先后报告旧路径 unlink、新路径 add。
 // 这两条事件由 moveFilesToFolder 的结果统一处理，不能再让 renderer 当成真实删除/新增。
 const suppressedMoveFileChanges = new Map();

@@ -35,7 +35,8 @@ import {
     getGeneratorPlaceholderSize,
     getGeneratorSplitPositions
 } from './generator-placeholder-layout.js';
-import { formatGenerationElapsed, isGenerationRecoveryActive, canRecoverGenerationTask, isGenerationFailureConfirmed } from './generation-progress.js';
+import { formatGenerationElapsed, isGenerationRecoveryActive, canRecoverGenerationTask, isGenerationFailureConfirmed,
+    generationTransferLabel, formatGenerationDownloadProgress } from './generation-progress.js';
 import {
     clearGeneratorResults,
     ensureGeneratorResultEntries,
@@ -2722,20 +2723,30 @@ export class CanvasManager {
         return control;
     }
 
-    _addGenerationElapsedLabel(group, width, height, startedAt) {
+    _addGenerationElapsedLabel(group, width, height, startedAt, getTask = () => null) {
+        const value = () => generationTransferLabel(getTask()) || formatGenerationElapsed(startedAt);
         const label = new Konva.Text({
             name: 'generationElapsed', width, height,
-            text: formatGenerationElapsed(startedAt),
+            text: value(),
             align: 'center', verticalAlign: 'middle',
             fontFamily: 'Segoe UI, sans-serif', fontSize: Math.min(24, Math.max(10, height * 0.16)),
             fontStyle: 'bold', fill: getThemeColor('canvas-node-text', '#c6c8ce'), listening: false,
             shadowColor: getThemeColor('canvas-control-shadow', '#18191b'), shadowBlur: 4, shadowOpacity: 0.65
         });
-        group.add(label);
-        return () => {
-            const value = formatGenerationElapsed(startedAt);
-            if (label.text() !== value) label.text(value);
+        const detail = new Konva.Text({
+            name: 'generationDownloadProgress', x: 8, y: height / 2 + 22, width: Math.max(1, width - 16), height: 18,
+            text: '', align: 'center', fontSize: 11, listening: false,
+            fill: getThemeColor('canvas-node-muted', '#aeb1b7'), ellipsis: true, wrap: 'none'
+        });
+        group.add(label, detail);
+        const update = () => {
+            const text = value();
+            if (label.text() !== text) label.text(text);
+            const progress = formatGenerationDownloadProgress(getTask());
+            if (detail.text() !== progress) detail.text(progress);
         };
+        update();
+        return update;
     }
 
     addGenerationPlaceholder(options = {}) {
@@ -2828,7 +2839,8 @@ export class CanvasManager {
         sweepClip.add(sweep);
         group.add(sweepClip);
         const updateElapsed = kind === 'video'
-            ? this._addGenerationElapsedLabel(group, width, height, options.startedAt || Date.now())
+            ? this._addGenerationElapsedLabel(group, width, height, options.startedAt || Date.now(),
+                () => this.generationTasksById?.get(options.clientTaskId))
             : null;
         this._addGenerationCancelControl(group, {
             x: Math.max(8, width - 58),
@@ -6098,7 +6110,8 @@ export class CanvasManager {
                 data.runStartedAt = Date.parse(recoveryTask?.createdAt || '') || Date.now();
             }
             const updateElapsed = data.nodeType === 'video'
-                ? this._addGenerationElapsedLabel(group, width, height, data.runStartedAt)
+                ? this._addGenerationElapsedLabel(group, width, height, data.runStartedAt,
+                    () => this.generationTaskStates.get(data.id))
                 : null;
             const animation = new Konva.Animation(frame => {
                 const progress = ((frame?.time || 0) % 1500) / 1500;
@@ -6200,7 +6213,7 @@ export class CanvasManager {
             && task?.params?.syncStage === 'prompt_moderation_failed'
             && taskCanRecover;
         const isDownloadRecovery = Boolean(task?.filePath)
-            || (task?.params?.syncStage === 'download' && taskCanRecover);
+            || (['ready', 'download', 'downloading'].includes(task?.params?.syncStage) && taskCanRecover);
         const isRetry = task?.status === 'failed' && !taskCanRecover && !isPromptModerationRecovery;
         const label = new Konva.Text({
             x: 38,
@@ -6252,6 +6265,7 @@ export class CanvasManager {
     }
 
     setGenerationTaskStates(tasks = []) {
+        this.generationTasksById = new Map((Array.isArray(tasks) ? tasks : []).map(task => [task.id, task]));
         const previousNodeIds = new Set(this.generationTaskStates.keys());
         const next = new Map();
         const resolvedNodeIds = new Set();
@@ -6268,7 +6282,7 @@ export class CanvasManager {
         const previousSignatures = this._generationTaskVisualSignatures || new Map();
         const nextSignatures = new Map([...next].map(([id, task]) => [id, JSON.stringify([
             task.id, task.status, task.taskId, task.filePath, task.errorCode, task.confirmedFailure,
-            task.createdAt, task.params?.syncStage, task.params?.recoveryStartedAt
+            task.createdAt, task.params?.syncStage, task.params?.recoveryStartedAt, generationTransferLabel(task)
         ])]));
         this._generationTaskVisualSignatures = nextSignatures;
         new Set([...previousNodeIds, ...next.keys()]).forEach(nodeId => {
@@ -10678,9 +10692,10 @@ export class CanvasManager {
         if (active?.nodeId !== nodeId || !data) return;
         const submit = active.element.querySelector('[data-submit]');
         const message = active.element.querySelector('[data-message]');
+        const transferLabel = generationTransferLabel(this.generationTaskStates?.get(nodeId));
         const isBusy = data.runStatus === STATUS.QUEUED || data.runStatus === STATUS.RUNNING;
         submit?.classList.toggle('is-running', isBusy);
-        submit?.setAttribute('aria-label', isBusy ? '生成中' : '开始生成');
+        submit?.setAttribute('aria-label', isBusy ? transferLabel || '生成中' : '开始生成');
         if (pendingMessage) {
             message.textContent = pendingMessage;
             message.dataset.state = 'pending';
@@ -10694,7 +10709,7 @@ export class CanvasManager {
             message.textContent = '';
             delete message.dataset.state;
         } else if (isBusy) {
-            message.textContent = data.runStatus === STATUS.QUEUED ? '任务排队中…' : '正在生成…';
+            message.textContent = transferLabel || (data.runStatus === STATUS.QUEUED ? '任务排队中…' : '正在生成…');
             message.dataset.state = 'pending';
         } else {
             message.textContent = '';
@@ -15207,8 +15222,10 @@ export class CanvasManager {
         glyph?.find('.videoVolumeSlash').forEach(node => node.visible(muted));
     }
 
-    _layoutVideoControlGroup(controls, width, height, stageScale = this.stage?.scaleX?.()) {
+    _layoutVideoControlGroup(controls, width, height, stageScale) {
         if (!controls) return;
+        // Keep optional calls out of default arguments: the release transpiler mis-scopes their temporaries.
+        if (stageScale === undefined) stageScale = this.stage?.scaleX?.();
         const layout = getVideoControlLayout(stageScale, width, height, this.uiScaleLimit);
         controls.visible(layout.visible);
         const progressBg = controls.findOne('.videoProgressBg');

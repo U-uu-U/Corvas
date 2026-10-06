@@ -2254,7 +2254,7 @@ body.platform-win32 .agent-settings-btn {
 
 .agent-settings-tabs {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 3px;
     margin: 10px 0 18px;
     padding: 3px;

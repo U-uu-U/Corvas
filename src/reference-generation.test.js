@@ -109,6 +109,21 @@ test('saved upstream text is reused only when live upstream text is unavailable'
     assert.deepEqual(expandGenerationPrompts({ prompt: ['live'] }, config), ['local\n\nlive']);
 });
 
+test('a downloaded video cannot retain a redundant provider URL in its canvas result', async t => {
+    const previousWindow = globalThis.window;
+    t.after(() => { globalThis.window = previousWindow; });
+    globalThis.window = { flowCanvas: { mcp: { generateVideo: async () => ({
+        filePath: '/result.mp4', url: 'https://private-output.test/result.mp4?signature=secret', taskId: 'original-task'
+    }) } } };
+    const output = await NODE_TYPES.video.execute({}, { prompt: 'fixture', duration: 4, count: 1 }, {
+        item: { id: 'node' }, getVideoProvider: () => ({ apiKey: 'fixture', model: 'seedance_v2.5' })
+    });
+    assert.equal(output._resultFilePath, '/result.mp4');
+    assert.equal(output._resultUrl, null);
+    assert.equal(output._generation.taskId, 'original-task');
+    assert.doesNotMatch(JSON.stringify(output), /private-output|signature=secret/);
+});
+
 test('missing citations fail before task creation or API submission', async () => {
     for (const kind of ['image', 'video']) {
         await assert.rejects(NODE_TYPES[kind].execute({}, {
