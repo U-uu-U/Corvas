@@ -115,6 +115,37 @@ test('schema 文件本身是合法 JSON 且包含 models 定义', () => {
     assert.ok(schema.definitions.model);
 });
 
+test('CONFIG deadline includes a stalled response body so subsequent sync can recover', async () => {
+    let canceled = false;
+    const result = await fetchModelConfig({ url: 'https://example.com/config', timeoutMs: 1000,
+        fetchImpl: async () => new Response(new ReadableStream({
+            start(stream) { stream.enqueue(Buffer.from('{')); }, cancel() { canceled = true; }
+        })) });
+    assert.equal(result.success, false);
+    assert.match(result.error, /超时/);
+    assert.equal(canceled, true);
+    const recovered = await fetchModelConfig({ url: 'https://example.com/config', fetchImpl: async (_url, init) => {
+        assert.equal(init.credentials, 'omit');
+        return Response.json(validConfig);
+    } });
+    assert.equal(recovered.success, true);
+});
+
+test('CONFIG size limits use bytes and stop oversized chunked transfers', async () => {
+    let canceled = false;
+    const result = await fetchModelConfig({ url: 'https://example.com/config', fetchImpl: async () => new Response(
+        new ReadableStream({ start(stream) { stream.enqueue(Buffer.alloc(2 * 1024 * 1024 + 1)); },
+            cancel() { canceled = true; } })
+    ) });
+    assert.equal(result.success, false);
+    assert.match(result.error, /过大/);
+    assert.equal(canceled, true);
+    const unicode = await fetchModelConfig({ url: 'https://example.com/config', fetchImpl: async () =>
+        fakeResponse(JSON.stringify({ ...validConfig, source: '中'.repeat(800000) })) });
+    assert.equal(unicode.success, false);
+    assert.match(unicode.error, /过大/);
+});
+
 test('effective reader follows the renderer cache, remote apply, URL switch and builtin reset', async t => {
     const { createModelConfigStore, readModelConfig, MODEL_CONFIG_CACHE_KEY, MODEL_CONFIG_URL_KEY } = await import('../src/model-config.js');
     const { DEFAULT_MODEL_CONFIG } = await import('../src/model-config-default.js');

@@ -244,6 +244,61 @@ test('config 里的 refreshIntervalMs 可覆盖刷新周期并带上下限', () 
     assert.equal(normalizeRefreshInterval('abc'), DEFAULT_REFRESH_INTERVAL_MS);
 });
 
+test('each launch checks CONFIG once even with a fresh cache while rendering cached models immediately', async t => {
+    let resolveRemote, calls = 0;
+    const url = 'https://example.com/config';
+    const storage = createStorage({ [MODEL_CONFIG_CACHE_KEY]: JSON.stringify({ url, fetchedAt: 9990, config: remoteConfig }) });
+    const store = createModelConfigStore({ storage, url, now: () => 10000, windowRef: null,
+        refreshIntervalMs: 10000, setIntervalImpl: () => null, loadRemote: () => {
+            calls++; return new Promise(resolve => { resolveRemote = resolve; });
+        } });
+    t.after(() => store.stop());
+    store.start();
+    assert.equal(store.getStatus().revision, 42);
+    assert.equal(store.getStatus().origin, 'cache');
+    assert.equal(store.getStatus().refreshing, true);
+    store.start();
+    const pending = store.refresh({ force: true });
+    assert.equal(calls, 1, 'startup and manual click share the active request');
+    resolveRemote({ ok: true, raw: { ...remoteConfig, revision: 43 }, fetchedAt: 10000 });
+    assert.equal((await pending).ok, true);
+    assert.equal(store.getStatus().revision, 43);
+    assert.equal(store.isDue(), false);
+});
+
+test('reconnect immediately retries failed CONFIG, keeps cached values and unregisters after stop', async t => {
+    const windowRef = new EventTarget();
+    let calls = 0;
+    let offline = true;
+    const store = createModelConfigStore({ storage: createStorage(), windowRef, refreshIntervalMs: 10000,
+        setIntervalImpl: () => null, loadRemote: async () => { calls++;
+            return offline ? { ok: false, error: 'offline' } : { ok: true, raw: remoteConfig, fetchedAt: Date.now() };
+        } });
+    t.after(() => store.stop());
+    store.start();
+    await store.refresh({ force: true });
+    assert.equal(store.getStatus().lastError, 'offline');
+    offline = false;
+    windowRef.dispatchEvent(new Event('online'));
+    await store.refresh({ force: true });
+    assert.equal(store.getConfig().revision, 42);
+    assert.equal(store.getStatus().lastError, null);
+    const beforeStop = calls;
+    store.stop();
+    windowRef.dispatchEvent(new Event('online'));
+    assert.equal(calls, beforeStop);
+});
+
+test('startup and reconnect respect an explicitly disabled CONFIG source', () => {
+    const windowRef = new EventTarget();
+    const store = createModelConfigStore({ storage: createStorage({ [MODEL_CONFIG_URL_KEY]: '' }), windowRef,
+        setIntervalImpl: () => null, loadRemote: () => assert.fail('disabled CONFIG must not fetch') });
+    store.start();
+    windowRef.dispatchEvent(new Event('online'));
+    assert.equal(store.getStatus().urlConfigured, false);
+    store.stop();
+});
+
 test('a config source switch or reset discards an in-flight response without writing its cache', async () => {
     for (const action of ['url', 'reset']) {
         let resolve;

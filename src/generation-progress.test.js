@@ -1,11 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { formatGenerationElapsed, isGenerationRecoveryActive, canRecoverGenerationTask, generationFailureError,
-    formatClientGenerationError } from './generation-progress.js';
+    formatClientGenerationError, generationProgressParams, generationTransferLabel,
+    formatGenerationDownloadProgress } from './generation-progress.js';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { imageRequestFailure } = require('../electron-main/image-request-diagnostics.cjs');
 const { normalizeRelayFailure, publicErrorResult } = require('../shared/public-api-error.cjs');
+
+test('backend completion stops generation time even while waiting for a URL or refreshing it', () => {
+    const task = { status: 'running', params: {} };
+    task.params = generationProgressParams(task, { stage: 'processing', progress: 100 }, 1000);
+    assert.equal(generationTransferLabel(task), '', '100% alone does not prove completion');
+    task.params = generationProgressParams(task, { stage: 'download', remoteStatus: 'completed' }, 2000);
+    assert.equal(generationTransferLabel(task), '正在下载...');
+    assert.equal(task.params.remoteCompletedAt, 2000);
+    task.params = generationProgressParams(task, { stage: 'recovering', lastError: 'temporary failure' }, 6000);
+    assert.equal(generationTransferLabel(task), '正在下载...');
+    assert.equal(task.params.remoteCompletedAt, 2000);
+    task.params = generationProgressParams(task, { stage: 'completed' }, 8000);
+    assert.equal(generationTransferLabel(task), '正在保存...');
+    task.status = 'failed';
+    assert.equal(generationTransferLabel(task), '');
+});
+
+test('legacy download aliases and byte progress have one customer-visible presentation', () => {
+    for (const stage of ['ready', 'download', 'downloading']) {
+        const task = { status: 'running', params: { syncStage: stage } };
+        assert.equal(generationTransferLabel(task), '正在下载...');
+        task.params = generationProgressParams(task, { stage, downloadedBytes: 1048576, totalBytes: 2097152, bytesPerSecond: 1048576 });
+        assert.equal(formatGenerationDownloadProgress(task), '1.0 / 2.0 MB | 1.0 MB/s');
+        task.params = generationProgressParams(task, { stage, totalBytes: null, bytesPerSecond: -1 });
+        assert.equal(formatGenerationDownloadProgress(task), '1.0 MB');
+    }
+});
 
 test('customer detail survives gateway, desktop result, Error, renderer and repeated string formatting', () => {
     const payload = normalizeRelayFailure(200, { status: 'failed', task_id: 'minimax-fixture', error: {

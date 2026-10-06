@@ -42,6 +42,26 @@ test('portrait failures stop polling immediately for both HTTP and business-erro
     }
 });
 
+test('completed video without a URL switches to download immediately and only polls the existing task', async () => {
+    const progress = [];
+    let polls = 0;
+    const result = await Bridge.pollOpenAiVideoTask('https://api.test/v1/videos', 'fixture', 'task_done', { status: 'queued' }, {
+        wait: async () => {}, onProgress: event => progress.push(event),
+        fetchTask: async (_url, options) => {
+            assert.equal(options.method, 'GET');
+            polls++;
+            return { response: { ok: true, status: 200 }, text: JSON.stringify({ id: 'task_done', status: 'completed',
+                ...(polls > 1 ? { video_url: 'https://cdn.test/result.mp4' } : {}) }) };
+        }
+    });
+    assert.equal(polls, 2);
+    assert.deepEqual(progress.map(event => event.stage), ['queued', 'download', 'download']);
+    assert.equal(progress[1].remoteCompleted, true);
+    assert.equal(progress[1].awaitingUrl, true);
+    assert.equal(progress[1].progress, undefined, 'generation completion is not download progress');
+    assert.equal(result.taskId, 'task_done');
+});
+
 for (const kind of ['image', 'video']) test(`${kind} polling surfaces copyright and content rejection without another query`, async () => {
     const poll = Bridge[kind === 'image' ? 'pollOpenAiImageTask' : 'pollOpenAiVideoTask'];
     for (const [reason, code] of [['素材图片包含版权内容，审核未通过', 'RH_REFERENCE_COPYRIGHT'],

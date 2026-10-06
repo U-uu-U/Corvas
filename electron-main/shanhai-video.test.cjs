@@ -196,7 +196,9 @@ test('submits, polls and downloads with Bearer authentication', async () => {
     const result = await generateShanhaiVideo(options);
     assert.equal(result.provider, 'shanhai-video');
     assert.equal(result.taskId, 'task-1');
-    assert.equal(result.url, 'https://cdn.example/result.mp4');
+    assert.equal(result.url, undefined);
+    assert.doesNotMatch(JSON.stringify(result), /cdn\.example/);
+    assert.doesNotMatch(JSON.stringify(calls.filter(call => call.type === 'downloaded')), /cdn\.example/);
     const post = calls.find(call => call.request?.method === 'POST');
     assert.equal(post.request.headers.Authorization, 'Bearer fixture-key');
     assert.deepEqual(JSON.parse(post.request.body).inputs, [

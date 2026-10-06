@@ -36,7 +36,8 @@ import { CANCELED_IMAGE_REFERENCES } from './node-types.js';
 import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from './generation-request-params.js';
 import { requestRecoveryTaskId } from './generation-recovery-dialog.js';
 import { canRecoverGenerationTask, generationFailureError, formatClientGenerationError,
-    isGenerationFailureConfirmed, getGenerationRejectionInfo } from './generation-progress.js';
+    isGenerationFailureConfirmed, getGenerationRejectionInfo, generationProgressParams,
+    generationTransferLabel, formatGenerationDownloadProgress } from './generation-progress.js';
 import { showStatusNotification } from './status-notification.js';
 import errorReportContract from '../shared/error-report-contract.cjs';
 import { createApplicationLauncher, createHunyuanPanel } from './hunyuan-accounts.js';
@@ -244,6 +245,7 @@ export class AgentSidebar {
         this.shortcutSettingsPane = document.getElementById('agentShortcutSettingsPane');
         this.creationSettingsPane = document.getElementById('agentCreationSettingsPane');
         this.apiSettingsPane = document.getElementById('agentApiSettingsPane');
+        this.updateSettingsPane = document.getElementById('agentUpdateSettingsPane');
         this.defaultTemporaryCompressionToggle = document.getElementById('agentDefaultTemporaryCompression');
         this.assetLibraryFolderSelect = document.getElementById('agentAssetLibraryFolderSelect');
         this.assetLibraryFolderChoose = document.getElementById('agentAssetLibraryFolderChoose');
@@ -2187,7 +2189,7 @@ export class AgentSidebar {
     }
 
     _setSettingsTab(tab = 'shortcuts') {
-        const nextTab = ['shortcuts', 'creation', 'api'].includes(tab) ? tab : 'shortcuts';
+        const nextTab = ['shortcuts', 'creation', 'api', 'updates'].includes(tab) ? tab : 'shortcuts';
         if (this.recordingShortcutAction) this._cancelShortcutCapture();
         this.activeSettingsTab = nextTab;
         this.settingsTabs?.querySelectorAll('[data-settings-tab]').forEach(button => {
@@ -2199,6 +2201,7 @@ export class AgentSidebar {
         if (this.shortcutSettingsPane) this.shortcutSettingsPane.hidden = nextTab !== 'shortcuts';
         if (this.creationSettingsPane) this.creationSettingsPane.hidden = nextTab !== 'creation';
         if (this.apiSettingsPane) this.apiSettingsPane.hidden = nextTab !== 'api';
+        if (this.updateSettingsPane) this.updateSettingsPane.hidden = nextTab !== 'updates';
     }
 
     _setAssetLibraryFolderStatus(message = '', state = '') {
@@ -3304,8 +3307,8 @@ export class AgentSidebar {
             ? this.generationTasks
             : this.generationTasks.filter(task => task.kind === this.taskHistoryFilter);
         const pendingCount = visibleTasks.filter(task => task.status === 'running').length;
-        const readyCount = visibleTasks.filter(task => task.status === 'running' && task.params?.syncStage === 'ready').length;
-        const downloadingCount = visibleTasks.filter(task => task.status === 'running' && task.params?.syncStage === 'downloading').length;
+        const readyCount = visibleTasks.filter(task => generationTransferLabel(task) === '正在保存...').length;
+        const downloadingCount = visibleTasks.filter(task => generationTransferLabel(task) === '正在下载...').length;
         const generatingCount = Math.max(0, pendingCount - readyCount - downloadingCount);
         const disconnectedCount = visibleTasks.filter(task => task.status === 'disconnected').length;
         const badgeCount = this.generationTasks.filter(task => ['running', 'disconnected'].includes(task.status)).length;
@@ -3317,7 +3320,7 @@ export class AgentSidebar {
                 ? `共 ${this.generationTasks.length} 条`
                 : `${this.taskHistoryFilter === 'image' ? '图片' : '视频'} ${visibleTasks.length} 条`];
             if (generatingCount) pieces.push(`${generatingCount} 条生成中`);
-            if (readyCount) pieces.push(`${readyCount} 条待下载`);
+            if (readyCount) pieces.push(`${readyCount} 条保存中`);
             if (downloadingCount) pieces.push(`${downloadingCount} 条下载中`);
             if (disconnectedCount) pieces.push(`${disconnectedCount} 条待重传`);
             this.taskHistorySummary.textContent = visibleTasks.length ? pieces.join(' · ') : '还没有生成任务';
@@ -3363,6 +3366,11 @@ export class AgentSidebar {
             } else if (status === 'running' && task.params?.syncStage === 'processing') {
                 const progress = Number(task.params?.progress);
                 syncStageLabel = Number.isFinite(progress) ? `模型生成中 ${progress}%` : '模型生成中';
+            }
+            const transferLabel = generationTransferLabel(task);
+            if (transferLabel) {
+                const detail = formatGenerationDownloadProgress(task);
+                syncStageLabel = detail ? `${transferLabel} ${detail}` : transferLabel;
             }
             const sourceCount = (Array.isArray(task.sourcePaths) ? task.sourcePaths.length : 0)
                 + (task.params?.videoSourcePaths?.length || 0)
@@ -3672,6 +3680,7 @@ export class AgentSidebar {
             } else {
                 if (!window.flowCanvas?.mcp?.generateVideo) throw new Error('本地视频接口不可用');
                 placeholder = originalNodeId || projectId !== this.options.getActiveProjectId?.() ? null : this.options.beginVideoGeneration?.({
+                    clientTaskId: task.id,
                     ratio: task.params?.ratio || '16:9',
                     sourceReferences: task.sourcePaths.map(filePath => ({ filePath })),
                     onCancel: () => this._cancelGenerationTask(task.id)
@@ -3898,16 +3907,8 @@ export class AgentSidebar {
         const task = this.generationTasks.find(item => item.id === clientTaskId);
         if (!task) return;
 
-        const stage = String(event.stage || 'processing');
-        const progress = Number.isFinite(Number(event.progress)) ? Number(event.progress) : null;
         this._updateGenerationTask(task.id, {
-            params: {
-                ...(task.params || {}),
-                syncStage: stage,
-                progress,
-                recoveryError: event.lastError || null,
-                remoteStatus: event.remoteStatus || null
-            }
+            params: generationProgressParams(task, event)
         });
     }
 

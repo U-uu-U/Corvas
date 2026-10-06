@@ -195,6 +195,7 @@ export function createModelConfigStore(options = {}) {
         ticker: null,
         tickUnsubscribe: null,
         focusHandler: null,
+        onlineHandler: null,
         inflight: null,
         requestVersion: 0
     };
@@ -436,9 +437,12 @@ export function createModelConfigStore(options = {}) {
         if (windowRef?.addEventListener) {
             state.focusHandler = () => checkDue();
             windowRef.addEventListener('focus', state.focusHandler);
+            state.onlineHandler = () => { if (state.url) void refresh({ reason: 'online', force: true }); };
+            windowRef.addEventListener('online', state.onlineHandler);
         }
 
-        if (refreshOnStart && state.url) checkDue();
+        // Show cached models immediately, but always check the server once per launch.
+        if (refreshOnStart && state.url) void refresh({ reason: 'startup', force: true });
         return getStatus();
     }
 
@@ -451,6 +455,10 @@ export function createModelConfigStore(options = {}) {
             windowRef.removeEventListener('focus', state.focusHandler);
         }
         state.focusHandler = null;
+        if (state.onlineHandler && windowRef?.removeEventListener) {
+            windowRef.removeEventListener('online', state.onlineHandler);
+        }
+        state.onlineHandler = null;
         state.started = false;
     }
 

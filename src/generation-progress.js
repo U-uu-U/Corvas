@@ -61,6 +61,47 @@ export function formatClientStatusMessage(value) {
     return redactSensitiveText(value);
 }
 
+const DOWNLOAD_STAGES = new Set(['ready', 'download', 'downloading']);
+const REMOTE_COMPLETED = new Set(['completed', 'complete', 'succeeded', 'success', 'done', 'finished']);
+
+export function generationProgressParams(task, event, now = Date.now()) {
+    const stage = event.stage === 'downloading' ? 'download' : String(event.stage || 'processing');
+    const previous = task?.params || {};
+    const remoteComplete = event.remoteCompleted === true || DOWNLOAD_STAGES.has(stage)
+        || REMOTE_COMPLETED.has(String(event.remoteStatus || '').toLowerCase());
+    const params = { ...previous, syncStage: stage,
+        progress: event.progress != null && Number.isFinite(Number(event.progress)) ? Number(event.progress) : null,
+        recoveryError: event.lastError || null, remoteStatus: event.remoteStatus || previous.remoteStatus || null };
+    if (remoteComplete && !(Number(params.remoteCompletedAt) > 0)) params.remoteCompletedAt = now;
+    for (const key of ['downloadedBytes', 'totalBytes', 'bytesPerSecond', 'downloadAttempt']) {
+        if (Object.hasOwn(event, key)) params[key] = event[key] != null && Number.isFinite(Number(event[key]))
+            && Number(event[key]) >= 0 ? Number(event[key]) : null;
+    }
+    return params;
+}
+
+export function generationTransferLabel(task) {
+    if (task?.status !== 'running') return '';
+    const params = task.params || {};
+    if (['saving', 'completed'].includes(params.syncStage)) return '正在保存...';
+    return Number(params.remoteCompletedAt) > 0 || DOWNLOAD_STAGES.has(params.syncStage)
+        || REMOTE_COMPLETED.has(String(params.remoteStatus || '').toLowerCase()) ? '正在下载...' : '';
+}
+
+export function formatGenerationDownloadProgress(task) {
+    if (generationTransferLabel(task) !== '正在下载...') return '';
+    const { downloadedBytes, totalBytes, bytesPerSecond } = task.params || {};
+    if (!(Number(downloadedBytes) > 0)) return '';
+    const divisor = Math.max(Number(totalBytes) || 0, Number(downloadedBytes)) >= 1048576 ? 1048576 : 1024;
+    const unit = divisor === 1048576 ? 'MB' : 'KB';
+    const size = Number(totalBytes) > 0
+        ? `${(downloadedBytes / divisor).toFixed(1)} / ${(totalBytes / divisor).toFixed(1)} ${unit}`
+        : `${(downloadedBytes / divisor).toFixed(1)} ${unit}`;
+    const speedDivisor = Number(bytesPerSecond) >= 1048576 ? 1048576 : 1024;
+    return Number(bytesPerSecond) > 0
+        ? `${size} | ${(bytesPerSecond / speedDivisor).toFixed(1)} ${speedDivisor === 1048576 ? 'MB' : 'KB'}/s` : size;
+}
+
 /**
  * 主进程错误可能包含上游产物地址、渠道名或响应体原文。
  *
