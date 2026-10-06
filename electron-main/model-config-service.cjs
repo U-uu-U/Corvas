@@ -66,63 +66,80 @@ function validateModelConfig(config) {
 async function fetchModelConfig({ url, fetchImpl, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     const target = String(url || '').trim();
     if (!target) return { success: false, error: '未配置 CONFIG 地址' };
-    if (!isAllowedModelConfigUrl(target)) {
-        return { success: false, error: '地址必须是 http:// 或 https:// 开头的 URL' };
-    }
-    if (typeof fetchImpl !== 'function') {
-        return { success: false, error: '网络接口不可用' };
-    }
-
+    if (!isAllowedModelConfigUrl(target)) return { success: false, error: '地址必须是 http:// 或 https:// 开头的 URL' };
+    if (typeof fetchImpl !== 'function') return { success: false, error: '网络接口不可用' };
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
-    let response;
+    let timer;
+    const deadline = new Promise(resolve => {
+        timer = setTimeout(() => {
+            controller.abort();
+            resolve({ success: false, error: '拉取模型配置超时' });
+        }, Math.max(1000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
+    });
+    const work = async () => {
+        let response;
+        try {
+            response = await fetchImpl(target, {
+                method: 'GET', credentials: 'omit',
+                headers: { accept: 'application/json', 'cache-control': 'no-cache' }, signal: controller.signal
+            });
+        } catch (error) {
+            return { success: false, error: error?.name === 'AbortError' ? '拉取模型配置超时'
+                : `拉取模型配置失败：${error?.message || error}` };
+        }
+        if (!response?.ok) {
+            await response?.body?.cancel();
+            return { success: false, status: response?.status, error: `服务器返回 HTTP ${response?.status ?? '未知'}` };
+        }
+        let text;
+        try {
+            text = await readConfigBody(response, controller.signal);
+        } catch (error) {
+            return { success: false, error: controller.signal.aborted ? '拉取模型配置超时'
+                : `读取模型配置失败：${error?.message || error}` };
+        }
+        let config;
+        try { config = JSON.parse(text); }
+        catch (error) { return { success: false, error: `模型配置不是合法 JSON：${error.message}` }; }
+        const validation = validateModelConfig(config);
+        if (!validation.ok) return { success: false,
+            error: `模型配置未通过 schema 校验（${validation.errors.length} 项）`, details: validation.errors.slice(0, 8) };
+        return { success: true, config, status: response.status };
+    };
+    try { return await Promise.race([work(), deadline]); }
+    finally { clearTimeout(timer); }
+}
+
+async function readConfigBody(response, signal) {
+    const reader = response.body?.getReader?.();
+    if (!reader) {
+        const text = await response.text();
+        signal.throwIfAborted();
+        if (Buffer.byteLength(text, 'utf8') > MAX_BYTES) throw new Error('模型配置过大，已拒绝');
+        return text;
+    }
+    const chunks = [];
+    let size = 0;
+    const abort = () => { void reader.cancel().catch(() => {}); };
+    signal.addEventListener('abort', abort, { once: true });
     try {
-        response = await fetchImpl(target, {
-            method: 'GET',
-            headers: { accept: 'application/json', 'cache-control': 'no-cache' },
-            signal: controller.signal
-        });
+        while (true) {
+            signal.throwIfAborted();
+            const { value, done } = await reader.read();
+            signal.throwIfAborted();
+            if (done) break;
+            size += value.byteLength;
+            if (size > MAX_BYTES) throw new Error('模型配置过大，已拒绝');
+            chunks.push(Buffer.from(value));
+        }
+        return Buffer.concat(chunks, size).toString('utf8');
     } catch (error) {
-        const aborted = error?.name === 'AbortError';
-        return { success: false, error: aborted ? '拉取模型配置超时' : `拉取模型配置失败：${error?.message || error}` };
+        void reader.cancel().catch(() => {});
+        throw error;
     } finally {
-        clearTimeout(timer);
+        signal.removeEventListener('abort', abort);
+        reader.releaseLock();
     }
-
-    if (!response?.ok) {
-        return {
-            success: false,
-            status: response?.status,
-            error: `服务器返回 HTTP ${response?.status ?? '未知'}`
-        };
-    }
-
-    let text;
-    try {
-        text = await response.text();
-    } catch (error) {
-        return { success: false, error: `读取模型配置失败：${error?.message || error}` };
-    }
-    if (text.length > MAX_BYTES) {
-        return { success: false, error: `模型配置过大（>${Math.round(MAX_BYTES / 1024)}KB），已拒绝` };
-    }
-
-    let config;
-    try {
-        config = JSON.parse(text);
-    } catch (error) {
-        return { success: false, error: `模型配置不是合法 JSON：${error.message}` };
-    }
-
-    const validation = validateModelConfig(config);
-    if (!validation.ok) {
-        return {
-            success: false,
-            error: `模型配置未通过 schema 校验（${validation.errors.length} 项）`,
-            details: validation.errors.slice(0, 8)
-        };
-    }
-    return { success: true, config, status: response.status };
 }
 
 // Read the applied store, not the fetch response or a second main-process cache.

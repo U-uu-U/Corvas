@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'node:module';
+import { transformSync } from 'esbuild';
+import { runInNewContext } from 'node:vm';
 import { generationNodeSignature } from '../shared/generation-node-state.mjs';
 import { appendGeneratorResult, rotateGeneratorResults, setGeneratorResultLayout } from './generator-result-stack.js';
 import { generatorResultOutput } from './graph-model.js';
@@ -36,6 +38,20 @@ function historicalReferencesHarness(items) {
         _mediaOutputPortName: () => 'out'
     });
 }
+
+test('minified video control layout resolves the stage scale without leaking default-parameter temporaries', () => {
+    const method = CanvasManager.prototype._layoutVideoControlGroup.toString();
+    const code = transformSync(`globalThis.Fixture = class { ${method} };`, { minify: true, target: 'es2019' }).code;
+    const scales = [];
+    const Fixture = runInNewContext(code, { getVideoControlLayout(scale) { scales.push(scale); return {}; } });
+    const fixture = new Fixture();
+    fixture.stage = { scaleX: () => 0.5 };
+    const controls = { visible() {}, y() {}, findOne: () => null, find: () => [] };
+    fixture._layoutVideoControlGroup(controls, 320, 180);
+    fixture._layoutVideoControlGroup(controls, 320, 180, 2);
+    assert.deepEqual(scales, [0.5, 2]);
+    assert.doesNotThrow(() => fixture._layoutVideoControlGroup(null, 320, 180));
+});
 
 test('reopening legacy video results restores every bound medium even when references saved images only', () => {
     const sources = ['image', 'video', 'audio'].map((mediaType, index) => ({

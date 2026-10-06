@@ -72,6 +72,14 @@ jobs:
         env:
           FLOW_MEDIA_SMOKE_ASAR: ${{ github.workspace }}/release/mac-universal/Corvas.app/Contents/Resources/app.asar
         run: node scripts/board-persistence-smoke.cjs
+      - name: Verify packaged video download progress and privacy
+        env:
+          FLOW_MEDIA_SMOKE_ASAR: ${{ github.workspace }}/release/mac-universal/Corvas.app/Contents/Resources/app.asar
+        run: node scripts/video-download-progress-smoke.cjs
+      - name: Verify packaged updates and automatic CONFIG synchronization
+        env:
+          FLOW_MCP_SMOKE_ASAR: ${{ github.workspace }}/release/mac-universal/Corvas.app/Contents/Resources/app.asar
+        run: node scripts/app-update-smoke.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -79,11 +87,20 @@ jobs:
           path: |
             output/playwright/release-ui-*.png
             output/playwright/board-persistence.png
+            output/playwright/video-downloading.png
+            output/playwright/app-update-*.png
           if-no-files-found: ignore
+      - name: Record update provenance
+        run: node scripts/release-update-metadata.cjs macos
       - uses: actions/upload-artifact@v4
         with:
           name: corvas-macos-universal
-          path: release/*.dmg
+          path: |
+            release/*.dmg
+            release/*.yml
+            release/*.blockmap
+            release/build-info-macos.json
+            !release/builder-debug.yml
           if-no-files-found: error
 
   publish-on-tag:
@@ -98,26 +115,13 @@ jobs:
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: corvas-macos-universal
           path: artifact
-      - name: Publish this run's verified DMG
-        shell: bash
-        run: |
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]
-          dmg="artifact/Corvas.${RELEASE_TAG#v}.mac.universal.dmg"
-          test -s "$dmg"
-          sha256sum "$dmg"
-          if ! gh release view "$RELEASE_TAG" --json isDraft >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Corvas $RELEASE_TAG · macOS" --generate-notes
-          fi
-          [[ $(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft) == true ]]
-          gh release upload "$RELEASE_TAG" "$dmg" --clobber
-          prerelease=false
-          [[ "$RELEASE_TAG" != *-* ]] || prerelease=true
-          # Keep the release private until the matching Windows artifacts are ready.
-          gh release edit "$RELEASE_TAG" --prerelease="$prerelease"
+      - name: Stage assets and publish only when both platforms match
+        run: node scripts/stage-update-release.mjs
 
   publish:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_run_id }}
@@ -143,6 +147,10 @@ jobs:
           tag_sha=$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq .object.sha)
           [[ $(jq -r .headSha <<< "$build") == "$tag_sha" ]]
           [[ $(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft) == true ]]
+          echo "RELEASE_COMMIT=$tag_sha" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.publish_tag }}
       - name: Transfer DMG and publish release
         shell: bash
         run: |
@@ -153,5 +161,4 @@ jobs:
           [[ -f "$dmg" ]] || dmg="artifact/Flow.Canvas.${RELEASE_TAG#v}.mac.universal.dmg"
           test -s "$dmg"
           sha256sum "$dmg"
-          gh release upload "$RELEASE_TAG" "$dmg"
-          gh release edit "$RELEASE_TAG" --draft=false --prerelease
+          node scripts/stage-update-release.mjs

@@ -1,6 +1,7 @@
 import { CanvasManager } from './canvas.js';
 import './mcp-client-settings.js';
 import './diagnostics-settings.js';
+import './app-update-settings.js';
 import './generation-recovery.css';
 import './light-theme.css';
 import './hunyuan-accounts.css';
@@ -1602,6 +1603,9 @@ function updateBodyState() {
 }
 
 // 启动
+document.addEventListener('app-update:prepare-install', event => {
+    if (!storeData || !canvasManager || saveStoreNow(true) === false) event.preventDefault();
+});
 bootstrap();
 
 window.addEventListener('beforeunload', () => {

@@ -5,6 +5,8 @@ const fs = require('fs');
 const crypto = require('crypto');
 const sharp = require('sharp');
 const { app, net } = require('electron');
+const { publicVideoResult } = require('./video-result-privacy.cjs');
+const { readGeneratedMediaBody, downloadProgressReporter } = require('./generated-media-stream.cjs');
 const { PlanService, DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core.cjs');
 const { WORKFLOW_TOOL_DEFINITIONS } = require('../shared/workflow-tools.cjs');
 const { HANDOFF_TOOL_DEFINITIONS } = require('../shared/handoff-tools.cjs');
@@ -151,9 +153,13 @@ function createLinkedAbortController(externalSignal, timeoutMs = 0) {
     const abort = () => controller.abort();
     if (externalSignal?.aborted) abort();
     else externalSignal?.addEventListener?.('abort', abort, { once: true });
-    const timeout = timeoutMs > 0 ? setTimeout(abort, timeoutMs) : null;
+    let timeout = timeoutMs > 0 ? setTimeout(abort, timeoutMs) : null;
     return {
         controller,
+        resetTimeout() {
+            if (timeout) clearTimeout(timeout);
+            if (timeoutMs > 0 && !controller.signal.aborted) timeout = setTimeout(abort, timeoutMs);
+        },
         cleanup() {
             if (timeout) clearTimeout(timeout);
             externalSignal?.removeEventListener?.('abort', abort);
@@ -344,6 +350,8 @@ class FlowCanvasBridge {
     }
 
     _rememberResult(body, result) {
+        const kind = this.recoveryStore.get(body.clientTaskId)?.kind || body.kind || result.mediaType;
+        if (kind === 'video') result = publicVideoResult(result);
         recordDiagnostic('info', 'generation.downloaded', { clientTaskId: body.clientTaskId, projectId: body.projectId,
             taskId: result.taskId, count: result.filePaths?.length || (result.filePath ? 1 : 0) });
         if (!this.recoveryStore.get(body.clientTaskId)?.kind) {
@@ -408,12 +416,15 @@ class FlowCanvasBridge {
             }
             throwIfGenerationCanceled(signal);
             if (typeof this.attachRecoveredGeneration !== 'function') throw new Error('画板恢复服务尚未就绪，产物已保留');
+            if (kind === 'video') result = publicVideoResult(result);
             const attached = await this.attachRecoveredGeneration(request, result, signal);
-            this.recoveryStore.update(clientTaskId, { state: 'attached', nodeId: attached.nodeId });
+            this.recoveryStore.update(clientTaskId, { state: 'attached', nodeId: attached.nodeId,
+                ...(kind === 'video' ? { result } : {}) });
             this.notifyTaskCompleted?.({ clientTaskId, remoteTaskId: result.taskId || taskId,
                 projectId: request.projectId, filePath: result.filePath, filePaths: result.filePaths,
                 recovered: true, nodeId: attached.nodeId });
-            return { ...result, ...attached, taskId: result.taskId || taskId, recovered: true };
+            const response = { ...result, ...attached, taskId: result.taskId || taskId, recovered: true };
+            return kind === 'video' ? publicVideoResult(response) : response;
         }, clientTaskId);
         this.recoveryRequests.set(key, work);
         try { return await work; }
@@ -1111,8 +1122,8 @@ class FlowCanvasBridge {
         const modelConfig = await this._generationCatalog(body, 'video');
         body = this._rememberGeneration('video', body);
         return this._runCancelableGeneration(body?.clientTaskId, async signal => {
-            const result = await this._generateVideoFromRenderer(body, signal, modelConfig);
-            return this._attachRetriedGeneration('video', body, result, signal);
+            const result = publicVideoResult(await this._generateVideoFromRenderer(body, signal, modelConfig));
+            return publicVideoResult(await this._attachRetriedGeneration('video', body, result, signal));
         });
     }
 
@@ -3125,7 +3136,7 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
         : isGlobalAiOpcModel(options.model) && getVideoTaskStatus(payload).toLowerCase() !== 'completed' ? '' : getVideoResultUrl(payload);
     const directUrl = resultUrl(initialResponse);
     if (directUrl) {
-        options.onProgress?.({ stage: 'download' });
+        options.onProgress?.({ stage: 'download', remoteCompleted: true });
         return { payload: initialResponse, url: directUrl, taskId };
     }
     if (!taskId) throw new Error('\u89c6\u9891\u63a5\u53e3\u8fd4\u56de\u4e2d\u6ca1\u6709\u4efb\u52a1 ID \u6216\u89c6\u9891\u5730\u5740');
@@ -3243,15 +3254,17 @@ async function pollOpenAiVideoTask(generationEndpoint, apiKey, taskId, initialRe
         const url = resultUrl(payload);
         const taskStatus = getVideoTaskStatus(payload);
         if (url && (isCompletedVideoStatus(taskStatus) || !taskStatus)) {
-            options.onProgress?.({ stage: 'download', progress: 100 });
+            options.onProgress?.({ stage: 'download', remoteCompleted: true, remoteStatus: taskStatus });
             return { payload, url, taskId: currentTaskId };
         }
         if (isFailedVideoStatus(taskStatus)) {
             const mapped = mapLocalError(200, payload, { query: true, terminal: true, taskId: currentTaskId });
             throw Object.assign(new Error(mapped.error), mapped, { code: mapped.code === 'RH_TASK_FAILED' ? 'UPSTREAM_TASK_FAILED' : mapped.code });
         }
-        if (isCompletedVideoStatus(taskStatus) && !url && ++emptyCompleted > 12) {
-            throw new Error(`视频任务 ${currentTaskId} 已完成，但上游尚未返回产物地址；可稍后再次拉取`);
+        if (isCompletedVideoStatus(taskStatus) && !url) {
+            options.onProgress?.({ stage: 'download', remoteCompleted: true, remoteStatus: taskStatus, awaitingUrl: true });
+            if (++emptyCompleted > 12) throw new Error(`视频任务 ${currentTaskId} 已完成，但上游尚未返回产物地址；可稍后再次拉取`);
+            continue;
         }
         options.onProgress?.({
             stage: videoTaskProgressStage(taskStatus),
@@ -3275,9 +3288,9 @@ function videoExtensionFromUrl(url, contentType = '') {
     return '.mp4';
 }
 
-async function downloadVideo(url, targetDir, prompt, signal = null, headers = undefined) {
+async function downloadVideo(url, targetDir, prompt, signal = null, headers = undefined, onProgress = undefined) {
     const { buffer, contentType, finalUrl } = await downloadGeneratedBuffer(url, {
-        signal, headers,
+        signal, headers, onProgress,
         accept: 'video/*,application/octet-stream;q=0.9,*/*;q=0.1'
     });
     throwIfGenerationCanceled(signal);
@@ -3303,8 +3316,12 @@ async function downloadVideoWithAutoRefresh(completed, targetDir, prompt, option
                 current.payload || { status: 'completed', metadata: { url: current.url } }) : { url: current.url };
             const { url } = request;
             if (!url) throw new Error('视频尚未完成，不能下载');
-            return await download(url, targetDir, prompt, options.signal,
-                request.requiresAuth ? { Authorization: `Bearer ${options.apiKey}` } : undefined);
+            const startedAt = Date.now();
+            recordDiagnostic('info', 'generation.video_download_start', { taskId, attempt: refreshAttempts + 1 });
+            const file = await download(url, targetDir, prompt, options.signal,
+                request.requiresAuth ? { Authorization: `Bearer ${options.apiKey}` } : undefined, options.onProgress);
+            recordDiagnostic('info', 'generation.video_download_complete', { taskId, elapsedMs: Date.now() - startedAt });
+            return file;
         } catch (error) {
             const status = Number(error?.status);
             if (!taskId || !GENERATED_MEDIA_AUTO_REFRESH_STATUSES.has(status)
@@ -3313,7 +3330,7 @@ async function downloadVideoWithAutoRefresh(completed, targetDir, prompt, option
             }
             refreshAttempts += 1;
             options.onRefresh?.({ attempt: refreshAttempts, waitMs: GENERATED_MEDIA_AUTO_REFRESH_INTERVAL_MS, status });
-            options.onProgress?.({ stage: 'recovering', retryCount: refreshAttempts,
+            options.onProgress?.({ stage: 'download', remoteCompleted: true, retryCount: refreshAttempts,
                 lastError: `下载地址暂不可用（HTTP ${status}），正在重新查询任务` });
             await wait(GENERATED_MEDIA_AUTO_REFRESH_INTERVAL_MS, options.signal);
             current = await poll(
@@ -3325,7 +3342,7 @@ async function downloadVideoWithAutoRefresh(completed, targetDir, prompt, option
                     model: options.model,
                     preferVideoTaskEndpoint: options.preferVideoTaskEndpoint === true,
                     signal: options.signal,
-                    onProgress: options.onProgress
+                    onProgress: progress => options.onProgress?.({ ...progress, stage: 'download', remoteCompleted: true })
                 }
             );
         }
@@ -3335,6 +3352,8 @@ async function downloadVideoWithAutoRefresh(completed, targetDir, prompt, option
 async function downloadGeneratedBuffer(url, {
     headers,
     signal,
+    onProgress,
+    idleTimeoutMs = 180000,
     accept = 'application/octet-stream,*/*;q=0.1'
 } = {}) {
     let lastError;
@@ -3343,7 +3362,9 @@ async function downloadGeneratedBuffer(url, {
     for (let attempt = 0; attempt < GENERATED_MEDIA_DOWNLOAD_ATTEMPTS; attempt += 1) {
         attemptsMade = attempt + 1;
         throwIfGenerationCanceled(signal);
-        const linked = createLinkedAbortController(signal, 180000);
+        const linked = createLinkedAbortController(signal, idleTimeoutMs);
+        const reportProgress = downloadProgressReporter(onProgress, attemptsMade);
+        reportProgress(0, null);
         try {
             const response = await net.fetch(url, {
                 method: 'GET',
@@ -3361,7 +3382,8 @@ async function downloadGeneratedBuffer(url, {
                 await response.body?.cancel();
                 throw Object.assign(new Error('生成产物超过 512 MB 下载限制'), { retryable: false });
             }
-            const buffer = Buffer.from(await response.arrayBuffer());
+            const buffer = await readGeneratedMediaBody(response, { maxBytes: GENERATED_MEDIA_DOWNLOAD_MAX_BYTES,
+                signal: linked.controller.signal, onChunk: () => linked.resetTimeout(), onProgress: reportProgress });
             if (!buffer.length) throw new Error('服务器返回了空生成产物');
             return {
                 buffer,
@@ -3374,7 +3396,7 @@ async function downloadGeneratedBuffer(url, {
             if (shouldFallbackToHttp1GeneratedMediaDownload(error)) {
                 http1FallbackAttempts += 1;
                 try {
-                    const fallback = await downloadRemoteBinaryOverHttp1(url, signal, accept, headers);
+                    const fallback = await downloadRemoteBinaryOverHttp1(url, signal, accept, headers, 0, reportProgress);
                     if (!fallback.buffer.length) throw new Error('服务器返回了空生成产物');
                     return {
                         buffer: fallback.buffer,
@@ -3414,6 +3436,7 @@ function generatedMediaDownloadHttpError(status) {
 }
 
 function isRetryableGeneratedMediaDownloadError(error) {
+    if (error?.retryable === false) return false;
     const status = Number(error?.status);
     if (Number.isFinite(status) && status > 0) {
         return [408, 425, 429, 500, 502, 503, 504].includes(status);
@@ -3432,7 +3455,8 @@ async function downloadRemoteBinaryOverHttp1(
     signal = null,
     accept = 'application/octet-stream,*/*;q=0.1',
     requestHeaders = {},
-    redirects = 0
+    redirects = 0,
+    onProgress = undefined
 ) {
     throwIfGenerationCanceled(signal);
     const url = new URL(rawUrl);
@@ -3472,7 +3496,7 @@ async function downloadRemoteBinaryOverHttp1(
                 if (nextUrl.origin !== url.origin) {
                     for (const key of Object.keys(nextHeaders)) if (/^(authorization|cookie)$/i.test(key)) delete nextHeaders[key];
                 }
-                downloadRemoteBinaryOverHttp1(nextUrl.toString(), signal, accept, nextHeaders, redirects + 1)
+                downloadRemoteBinaryOverHttp1(nextUrl.toString(), signal, accept, nextHeaders, redirects + 1, onProgress)
                     .then(value => finish(resolve, value), fail);
                 return;
             }
@@ -3491,6 +3515,7 @@ async function downloadRemoteBinaryOverHttp1(
 
             const chunks = [];
             let totalBytes = 0;
+            onProgress?.(0, declaredLength);
             response.on('data', chunk => {
                 totalBytes += chunk.length;
                 if (totalBytes > GENERATED_MEDIA_DOWNLOAD_MAX_BYTES) {
@@ -3500,14 +3525,15 @@ async function downloadRemoteBinaryOverHttp1(
                     return;
                 }
                 chunks.push(chunk);
+                onProgress?.(totalBytes, declaredLength);
             });
             response.once('error', fail);
             response.once('aborted', () => fail(new Error('生成产物下载连接被服务器中断')));
-            response.once('end', () => finish(resolve, {
-                buffer: Buffer.concat(chunks),
-                contentType: String(response.headers['content-type'] || ''),
-                url: url.toString()
-            }));
+            response.once('end', () => {
+                onProgress?.(totalBytes, declaredLength, true);
+                finish(resolve, { buffer: Buffer.concat(chunks),
+                    contentType: String(response.headers['content-type'] || ''), url: url.toString() });
+            });
         });
         request.setTimeout(GENERATED_MEDIA_DOWNLOAD_HTTP1_TIMEOUT_MS, () => {
             request.destroy(new Error('HTTP/1.1 产物下载超时'));
@@ -4194,4 +4220,5 @@ module.exports = FlowCanvasBridge;
 module.exports.pollOpenAiImageTask = pollOpenAiImageTask;
 module.exports.pollOpenAiVideoTask = pollOpenAiVideoTask;
 module.exports.downloadVideoWithAutoRefresh = downloadVideoWithAutoRefresh;
+module.exports.downloadGeneratedBuffer = downloadGeneratedBuffer;
 module.exports.tryGenerateWithOpenAIVideo = tryGenerateWithOpenAIVideo;

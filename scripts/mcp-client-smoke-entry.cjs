@@ -1,4 +1,5 @@
 const { app, safeStorage } = require('electron');
+const path = require('node:path');
 const { ApiConfigStore } = require('../electron-main/api-config-store');
 const profile = process.env.FLOW_MCP_SMOKE_PROFILE;
 if (!profile) throw new Error('Isolated smoke profile required');
@@ -8,4 +9,5 @@ app.whenReady().then(() => {
     new ApiConfigStore(profile, { protect: value => safeStorage.encryptString(value), unprotect: value => safeStorage.decryptString(value) })
         .save({ version: 1, revision: 1, providers: [], globalConfig: {} });
 });
-require('../electron-main/main.js');
+require(process.env.FLOW_MCP_SMOKE_ASAR
+    ? path.join(process.env.FLOW_MCP_SMOKE_ASAR, 'electron-main/main.js') : '../electron-main/main.js');

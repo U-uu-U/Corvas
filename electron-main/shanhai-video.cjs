@@ -1,6 +1,7 @@
 'use strict';
 
 const { writeGeneratedMedia } = require('./generated-media-names.cjs');
+const { readGeneratedMediaBody, downloadProgressReporter } = require('./generated-media-stream.cjs');
 
 const SHANHAI_HOST = 'shanhai.vnshu.cn';
 const SHANHAI_BASE_PATH = '/api/v1';
@@ -346,7 +347,8 @@ async function downloadShanhaiVideo({ url, taskId, key, fetcher, signal, targetD
         throw safeError('山海视频产物超过下载大小限制', 'SHANHAI_DOWNLOAD_FAILED', { confirmedFailure: false, taskId });
     }
     let buffer;
-    try { buffer = Buffer.from(await response.arrayBuffer()); }
+    try { buffer = await readGeneratedMediaBody(response, { signal, maxBytes: MAX_DOWNLOAD_BYTES,
+        onProgress: downloadProgressReporter(onProgress) }); }
     catch (_) { throw safeError('山海视频产物下载失败，请稍后重试', 'SHANHAI_DOWNLOAD_FAILED', { confirmedFailure: false, taskId }); }
     if (buffer.length > MAX_DOWNLOAD_BYTES) throw safeError('山海视频产物超过下载大小限制', 'SHANHAI_DOWNLOAD_FAILED', { confirmedFailure: false, taskId });
     if (!buffer.length) throw safeError('山海返回了空视频产物', 'SHANHAI_DOWNLOAD_FAILED', { confirmedFailure: false, taskId });

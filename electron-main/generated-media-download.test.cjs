@@ -82,3 +82,63 @@ test('persistent download denial stops refreshing after three queries and preser
         } }), error => error.code === 'DOWNLOAD_FAILED' && error.status === 403 && error.retryable);
     assert.equal(polls, 3);
 });
+
+test('slow streaming download continues beyond the per-idle timeout and reports byte progress', async () => {
+    const events = [];
+    let requests = 0;
+    fetchFixture = async () => {
+        requests++;
+        let chunks = 0;
+        return new Response(new ReadableStream({
+            async pull(controller) {
+                await new Promise(resolve => setTimeout(resolve, 160));
+                controller.enqueue(Buffer.from('video'));
+                if (++chunks === 6) controller.close();
+            }
+        }), { headers: { 'content-length': '30', 'content-type': 'video/mp4' } });
+    };
+    const started = Date.now();
+    const result = await Bridge.downloadGeneratedBuffer('https://cdn.test/slow.mp4', {
+        idleTimeoutMs: 600, onProgress: event => events.push(event)
+    });
+    assert.ok(Date.now() - started > 600);
+    assert.equal(requests, 1, 'active slow transfer must not restart');
+    assert.equal(result.buffer.toString(), 'video'.repeat(6));
+    assert.equal(events.at(-1).downloadedBytes, 30);
+    assert.equal(events.at(-1).totalBytes, 30);
+    assert.ok(events.at(-1).bytesPerSecond > 0);
+    assert.ok(events.every(event => event.stage === 'download' && event.remoteCompleted));
+});
+
+test('stream cancellation aborts locally and does not launch another download', async () => {
+    const controller = new AbortController();
+    let canceled = false;
+    let requests = 0;
+    fetchFixture = async () => {
+        requests++;
+        return new Response(new ReadableStream({ start(stream) { stream.enqueue(Buffer.from('partial')); },
+            cancel() { canceled = true; } }));
+    };
+    const pending = Bridge.downloadGeneratedBuffer('https://cdn.test/cancel.mp4', { signal: controller.signal });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    controller.abort();
+    await assert.rejects(pending, error => error.code === 'GENERATION_CANCELED');
+    assert.equal(canceled, true);
+    assert.equal(requests, 1);
+});
+
+test('a stalled transfer times out, cancels its body and retries only the download', async () => {
+    let requests = 0;
+    let canceled = false;
+    fetchFixture = async (_url, options) => {
+        assert.equal(options.method, 'GET');
+        requests++;
+        if (requests > 1) return new Response('complete-video');
+        return new Response(new ReadableStream({ start(stream) { stream.enqueue(Buffer.from('partial')); },
+            cancel() { canceled = true; } }));
+    };
+    const result = await Bridge.downloadGeneratedBuffer('https://cdn.test/stalled.mp4', { idleTimeoutMs: 100 });
+    assert.equal(canceled, true);
+    assert.equal(requests, 2);
+    assert.equal(result.buffer.toString(), 'complete-video');
+});

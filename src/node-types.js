@@ -870,7 +870,7 @@ NODE_TYPES['video'] = {
                 video: videoUrl,
                 _resultFilePath: filePath,
                 _resultItem: result?.item || null,
-                _resultUrl: result?.url || null,
+                _resultUrl: filePath ? null : result?.url || null,
                 _generation: {
                     nodeType: 'video',
                     prompt,

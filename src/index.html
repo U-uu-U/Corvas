@@ -528,7 +528,32 @@
                             <svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-settings"></use></svg>
                             API
                         </button>
+                        <button class="agent-settings-tab" id="agentUpdateSettingsTab" type="button"
+                            role="tab" aria-selected="false" aria-controls="agentUpdateSettingsPane" data-settings-tab="updates">
+                            <svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-download"></use></svg>
+                            软件更新
+                        </button>
                     </div>
+
+                    <section class="agent-settings-pane app-update-settings" id="agentUpdateSettingsPane" hidden
+                        role="tabpanel" aria-labelledby="agentUpdateSettingsTab">
+                        <div class="agent-settings-section-head"><strong>Corvas</strong><span id="appUpdateVersion">读取版本中</span></div>
+                        <p id="appUpdateStatus" role="status" aria-live="polite"></p>
+                        <p id="appUpdateMode" class="app-update-mode"></p>
+                        <progress id="appUpdateProgress" max="100" value="0" hidden aria-label="更新下载进度"></progress>
+                        <div class="app-update-actions">
+                            <button id="appUpdateAction" type="button"><svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-download"></use></svg><span>获取新版本</span></button>
+                            <button id="appUpdateCancel" type="button" hidden title="取消下载" aria-label="取消下载"><svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-close"></use></svg></button>
+                        </div>
+                        <div id="appUpdateNotes" class="app-update-notes" hidden><strong>更新内容</strong><pre></pre></div>
+                        <section class="config-update-settings" aria-labelledby="configUpdateHeading">
+                            <div class="agent-settings-section-head"><strong id="configUpdateHeading">模型配置 CONFIG</strong><span id="configUpdateVersion">读取配置中</span></div>
+                            <p id="configUpdateAuto" class="app-update-mode"></p>
+                            <p id="configUpdateStatus" role="status" aria-live="polite"></p>
+                            <p id="configUpdateCheckedAt" class="app-update-mode"></p>
+                            <div class="app-update-actions"><button id="configUpdateAction" type="button"><svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-replace"></use></svg><span>立即同步</span></button></div>
+                        </section>
+                    </section>
 
                     <section class="agent-settings-pane agent-shortcut-settings" id="agentShortcutSettingsPane"
                         role="tabpanel" aria-labelledby="agentShortcutSettingsTab">

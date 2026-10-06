@@ -39,6 +39,15 @@ function savedStore(result) {
 
 contextBridge.exposeInMainWorld('flowCanvas', {
     platform: process.platform,
+    appUpdates: {
+        snapshot: () => ipcRenderer.invoke('app-updates:snapshot'),
+        check: () => ipcRenderer.invoke('app-updates:check'),
+        download: () => ipcRenderer.invoke('app-updates:download'),
+        cancel: () => ipcRenderer.invoke('app-updates:cancel'),
+        install: () => ipcRenderer.invoke('app-updates:install'),
+        onState: callback => { const listener = (_event, state) => callback(state); ipcRenderer.on('app-updates:state', listener);
+            return () => ipcRenderer.removeListener('app-updates:state', listener); }
+    },
     diagnostics: {
         errorAnalysis: token => ipcRenderer.invoke('diagnostics:error-analysis', token),
         summary: () => ipcRenderer.invoke('diagnostics:summary'),
