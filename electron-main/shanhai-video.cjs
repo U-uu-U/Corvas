@@ -357,9 +357,9 @@ async function downloadShanhaiVideo({ url, taskId, key, fetcher, signal, targetD
     const extension = contentType.includes('webm') ? '.webm' : contentType.includes('quicktime') ? '.mov' : '.mp4';
     const filePath = await writer(buffer, { targetDir, prompt: promptForName, mediaType: 'video', extension });
     throwIfAborted(signal);
-    onDownloaded?.({ filePath, filePaths: [filePath], taskId, mediaType: 'video', video: { url: outputUrl }, targetDir });
+    onDownloaded?.({ filePath, filePaths: [filePath], taskId, mediaType: 'video', targetDir });
     onProgress?.({ stage: 'completed', progress: 100, remoteStatus: 'succeeded' });
-    return { success: true, provider: 'shanhai-video', taskId, url: outputUrl, filePath,
+    return { success: true, provider: 'shanhai-video', taskId, filePath,
         width: Number(options?.width) || undefined, height: Number(options?.height) || undefined };
 }
 
