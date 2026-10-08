@@ -21,7 +21,8 @@ if (process.env.FLOW_UPDATE_SMOKE_ENTRY === '1' && process.versions.electron) {
                 return new Promise(resolve => {
                     finish = resolve;
                     timer = setTimeout(() => resolve(publish(globalThis.updateSmoke.failNext
-                        ? { phase: 'error', error: '下载或校验失败，请重试。' } : { phase: 'downloaded', percent: 100 })), 700);
+                        ? { phase: 'error', error: '更新服务器请求过多（HTTP 429），请稍后重试。', errorCode: 'UPDATE_RATE_LIMITED' }
+                        : { phase: 'downloaded', percent: 100 })), 700);
                 });
             }
             if (action === 'cancel') { clearTimeout(timer); publish({ phase: 'available', percent: 0 }); finish?.(state); return state; }
@@ -98,7 +99,7 @@ if (process.env.FLOW_UPDATE_SMOKE_ENTRY === '1' && process.versions.electron) {
             assert.match(await action.innerText(), /下载新版本/);
             await app.evaluate(() => { globalThis.updateSmoke.failNext = true; });
             await action.click();
-            await page.waitForFunction(() => document.querySelector('#appUpdateStatus').textContent.includes('失败'));
+            await page.waitForFunction(() => document.querySelector('#appUpdateStatus').textContent.includes('HTTP 429'));
             await app.evaluate(() => { globalThis.updateSmoke.failNext = false; });
             await action.click();
             await page.waitForFunction(() => document.querySelector('#appUpdateAction').textContent.includes('重启并安装'));

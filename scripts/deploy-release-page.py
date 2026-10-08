@@ -1,5 +1,6 @@
 """Host Corvas releases on cart and mirror the cover on art; credentials remain external."""
 import argparse
+import base64
 import datetime
 import hashlib
 import json
@@ -39,6 +40,12 @@ def digest(file):
     with file.open('rb') as source:
         for block in iter(lambda: source.read(1024 * 1024), b''): value.update(block)
     return value.hexdigest()
+
+def digest512(file):
+    value = hashlib.sha512()
+    with file.open('rb') as source:
+        for block in iter(lambda: source.read(1024 * 1024), b''): value.update(block)
+    return base64.b64encode(value.digest()).decode('ascii')
 
 def mirror_legacy(client):
     health = json.loads(run(client, 'curl --fail --silent --show-error --max-time 20 https://cart.ravenhash.org/corvas/health'))
@@ -134,7 +141,7 @@ def deploy(client, release_dir, notes_file, from_github=False):
         file = release_dir / name
         if not record or not file.is_file() or file.stat().st_size != record['bytes'] or digest(file) != record['sha256']:
             raise ValueError('Unverified installer: ' + name)
-        assets.append({'platform': platform, 'name': name, 'bytes': record['bytes'], 'sha256': record['sha256']})
+        assets.append({'platform': platform, 'name': name, 'bytes': record['bytes'], 'sha256': record['sha256'], 'sha512': digest512(file)})
     notes = json.loads(notes_file.read_text(encoding='utf-8'))
     if not isinstance(notes, list) or not all(isinstance(note, str) and len(note) <= 500 for note in notes):
         raise ValueError('Notes must be a JSON string array')
@@ -158,9 +165,18 @@ def deploy(client, release_dir, notes_file, from_github=False):
         with sftp.file(target + '/release.json') as remote: old = json.load(remote)
     except FileNotFoundError: old = None
     if old:
-        if old['assets'] != assets or old['sourceCommit'] != metadata['sourceCommit'] or old['notes'] != notes:
+        prior = [{key: value for key, value in asset.items() if key != 'sha512'} for asset in old['assets']]
+        expected = [{key: value for key, value in asset.items() if key != 'sha512'} for asset in assets]
+        if prior != expected or old['sourceCommit'] != metadata['sourceCommit'] or old['notes'] != notes:
             raise ValueError('Existing version differs; publish a new version instead')
+        if any(before.get('sha512') not in (None, after['sha512']) for before, after in zip(old['assets'], assets)):
+            raise ValueError('Existing SHA512 differs')
         manifest = old
+        if old['assets'] != assets:
+            run(client, f'cp -p {target}/release.json {backup}/release.json')
+            manifest = {**old, 'assets': assets}
+            put_text(target + '/release.json.next', json.dumps(manifest, ensure_ascii=False, indent=2))
+            run(client, f'mv {target}/release.json.next {target}/release.json')
     else:
         stage = f'{data}/releases/.incoming-{uuid.uuid4().hex}'
         run(client, f'mkdir -m 755 {stage}')

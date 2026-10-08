@@ -15,7 +15,8 @@ async function fixture(t) {
     const assets = [];
     for (const [platform, name] of [['windows', `Corvas.Setup.${version}.exe`], ['macos', `Corvas.${version}.mac.universal.dmg`]]) {
         await fs.writeFile(path.join(directory, name), content);
-        assets.push({ platform, name, bytes: content.length, sha256: crypto.createHash('sha256').update(content).digest('hex') });
+        assets.push({ platform, name, bytes: content.length, sha256: crypto.createHash('sha256').update(content).digest('hex'),
+            sha512: crypto.createHash('sha512').update(content).digest('base64') });
     }
     const manifest = { version, sourceCommit: 'a'.repeat(40), publishedAt: '2026-09-29T00:00:00Z', notes: ['<script>bad()</script>'], assets };
     await fs.writeFile(path.join(directory, 'release.json'), JSON.stringify(manifest));
@@ -23,7 +24,7 @@ async function fixture(t) {
     const server = createReleaseServer({ dataDir });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await fs.rm(dataDir, { recursive: true, force: true }); });
-    return { url: `http://127.0.0.1:${server.address().port}`, directory, assets, content };
+    return { url: `http://127.0.0.1:${server.address().port}`, directory, dataDir, manifest, assets, content };
 }
 
 test('release page and API serve verified asset links and escape notes', async t => {
@@ -51,4 +52,42 @@ test('installer downloads support Range and HEAD and restrict files to the relea
 test('range parser rejects multi-ranges, reversals and unsafe integers', () => {
     for (const header of ['bytes=3-1', 'bytes=0-2,4-5', 'bytes=-', 'bytes=-0', 'bytes=99999999999999999999-']) assert.equal(parseRange(header, 10), false);
     assert.deepEqual(parseRange('bytes=0-999', 10), { start: 0, end: 9 });
+});
+
+test('owned update catalog and NSIS feed reference the verified installer with SHA512', async t => {
+    const f = await fixture(t);
+    const catalog = await (await fetch(f.url + '/corvas/api/updates')).json();
+    assert.equal(catalog.schemaVersion, 1);
+    assert.equal(catalog.releases.length, 1);
+    assert.equal(catalog.releases[0].assets[0].sha512, f.assets[0].sha512);
+    const feed = await fetch(f.url + '/corvas/releases/1.6.0-beta.13/beta.yml?noCache=fixture');
+    assert.equal(feed.status, 200);
+    const info = await feed.json();
+    assert.equal(info.path, f.assets[0].name);
+    assert.equal(info.sha512, crypto.createHash('sha512').update(f.content).digest('base64'));
+    assert.deepEqual(info.files, [{ url: info.path, sha512: info.sha512, size: f.content.length }]);
+    assert.equal((await fetch(f.url + '/corvas/releases/1.6.0-beta.13/latest.yml')).status, 404);
+});
+
+test('update catalog excludes incomplete and unpublished releases while retaining older stable releases', async t => {
+    const f = await fixture(t);
+    for (const [version, publishedAt] of [['1.5.0', '2026-09-28T00:00:00Z'], ['1.7.0', '2026-09-30T00:00:00Z']]) {
+        const directory = path.join(f.dataDir, 'releases', version);
+        await fs.mkdir(directory);
+        const assets = f.assets.map(asset => ({ ...asset, name: asset.name.replace('1.6.0-beta.13', version) }));
+        for (const asset of assets) await fs.writeFile(path.join(directory, asset.name), f.content);
+        await fs.writeFile(path.join(directory, 'release.json'), JSON.stringify({ ...f.manifest, version, publishedAt, assets }));
+    }
+    await fs.mkdir(path.join(f.dataDir, 'releases', '.incoming-not-published'));
+    await fs.mkdir(path.join(f.dataDir, 'releases', '1.8.0'));
+    const result = await (await fetch(f.url + '/corvas/api/updates')).json();
+    assert.deepEqual(result.releases.map(release => release.version), ['1.6.0-beta.13', '1.5.0']);
+});
+
+test('legacy manifest without SHA512 remains downloadable but cannot provide an unverified NSIS feed', async t => {
+    const f = await fixture(t);
+    const assets = f.assets.map(({ sha512: _sha512, ...asset }) => asset);
+    await fs.writeFile(path.join(f.directory, 'release.json'), JSON.stringify({ ...f.manifest, assets }));
+    assert.equal((await fetch(f.url + '/corvas/releases/1.6.0-beta.13/beta.yml')).status, 503);
+    assert.equal((await fetch(f.url + '/corvas/releases/1.6.0-beta.13/' + assets[0].name)).status, 200);
 });
