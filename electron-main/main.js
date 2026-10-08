@@ -74,6 +74,7 @@ const appUpdates = require('./app-updates.cjs').createAppUpdates({
     fetchImpl: (...args) => net.fetch(...args),
     updaterFactory: () => require('electron-updater').autoUpdater,
     onState: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app-updates:state', state); },
+    onDiagnostic: data => require('./diagnostics.cjs').diagnostic('warn', 'app.update_error', data),
     prepareInstall: async () => {
         const agentBusy = [...(agentServices?.runtime?.runs?.values?.() || [])]
             .some(run => ['planning', 'running', 'waiting_provider', 'reviewing'].includes(run.status));

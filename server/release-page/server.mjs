@@ -12,6 +12,7 @@ export const PREFIX = '/corvas';
 const VERSION = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:\.[a-zA-Z0-9]+)*)?$/;
 const ASSET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,150}\.(?:exe|dmg)$/;
 const PLATFORM = new Set(['windows', 'macos', 'windows-portable']);
+const SHA512 = /^[A-Za-z0-9+/]{86}==$/;
 
 export function readRelease(dataDir, version) {
     if (!VERSION.test(version || '')) throw new Error('Invalid release');
@@ -25,12 +26,14 @@ export function readRelease(dataDir, version) {
     const assets = info.assets.map(asset => {
         if (!PLATFORM.has(asset.platform) || platforms.has(asset.platform) || !ASSET_NAME.test(asset.name || '')
             || !asset.name.includes(`.${version}.`) || !/^[a-f0-9]{64}$/.test(asset.sha256 || '')
+            || (asset.sha512 !== undefined && !SHA512.test(asset.sha512))
             || !Number.isSafeInteger(asset.bytes) || asset.bytes < 1 || asset.bytes > 1024 ** 3) throw new Error('Invalid asset');
         platforms.add(asset.platform);
         const full = path.join(dataDir, 'releases', version, asset.name);
         const stat = fs.lstatSync(full);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== asset.bytes) throw new Error('Missing release asset');
         return { platform: asset.platform, name: asset.name, bytes: asset.bytes, sha256: asset.sha256,
+            ...(asset.sha512 ? { sha512: asset.sha512 } : {}),
             url: `${PREFIX}/releases/${version}/${asset.name}` };
     });
     if (!platforms.has('windows') || !platforms.has('macos')) throw new Error('Both installers required');
@@ -65,6 +68,17 @@ export function createReleaseServer({ dataDir = process.env.RELEASE_DATA_DIR || 
         }
         return currentInfo;
     }
+    function updates() {
+        const published = current();
+        return fs.readdirSync(path.join(dataDir, 'releases'), { withFileTypes: true })
+            .filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && VERSION.test(entry.name))
+            .flatMap(entry => {
+                try {
+                    const info = readRelease(dataDir, entry.name);
+                    return Date.parse(info.publishedAt) <= Date.parse(published.publishedAt) ? [info] : [];
+                } catch { return []; }
+            }).sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt)).slice(0, 50);
+    }
     function respond(req, res, status, body, type, headers = {}) {
         const bytes = Buffer.from(body);
         res.writeHead(status, { 'content-type': type, 'content-length': bytes.length, ...headers });
@@ -94,13 +108,28 @@ export function createReleaseServer({ dataDir = process.env.RELEASE_DATA_DIR || 
                 if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag, 'cache-control': 'no-cache' }); return res.end(); }
                 return respond(req, res, 200, body, 'application/json; charset=utf-8', { etag, 'cache-control': 'no-cache' });
             }
+            if (route === `${PREFIX}/api/updates`) {
+                return respond(req, res, 200, JSON.stringify({ schemaVersion: 1, releases: updates() }),
+                    'application/json; charset=utf-8', { 'cache-control': 'no-store' });
+            }
             if (route === `${PREFIX}/SHA256SUMS.txt`) {
                 return respond(req, res, 200, current().assets.map(asset => `${asset.sha256}  ${asset.name}`).join('\n') + '\n', 'text/plain; charset=utf-8', { 'cache-control': 'no-cache' });
             }
             const parts = route.split('/');
-            if (parts.length !== 5 || parts[1] !== 'corvas' || parts[2] !== 'releases' || !VERSION.test(parts[3]) || !ASSET_NAME.test(parts[4])) return respond(req, res, 404, 'Not found', 'text/plain');
+            if (parts.length !== 5 || parts[1] !== 'corvas' || parts[2] !== 'releases' || !VERSION.test(parts[3])) return respond(req, res, 404, 'Not found', 'text/plain');
             let release;
             try { release = readRelease(dataDir, parts[3]); } catch { return respond(req, res, 404, 'Not found', 'text/plain'); }
+            const channel = release.version.includes('-') ? release.version.split('-')[1].split('.')[0] : 'latest';
+            if (parts[4] === `${channel}.yml`) {
+                const installer = release.assets.find(asset => asset.platform === 'windows');
+                if (!installer?.sha512) return respond(req, res, 503, 'Update metadata not ready', 'text/plain', { 'cache-control': 'no-store' });
+                // JSON is valid YAML; generate the feed from verified local artifact metadata.
+                const body = JSON.stringify({ version: release.version,
+                    files: [{ url: installer.name, sha512: installer.sha512, size: installer.bytes }],
+                    path: installer.name, sha512: installer.sha512, releaseDate: release.publishedAt });
+                return respond(req, res, 200, body, 'application/yaml', { 'cache-control': 'no-cache' });
+            }
+            if (!ASSET_NAME.test(parts[4])) return respond(req, res, 404, 'Not found', 'text/plain');
             const asset = release.assets.find(asset => asset.name === parts[4]);
             if (!asset) return respond(req, res, 404, 'Not found', 'text/plain');
             const etag = `"${asset.sha256}"`;

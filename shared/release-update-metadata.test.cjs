@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { recordReleaseMetadata } = require('../scripts/release-update-metadata.cjs');
 const { selectRelease } = require('../electron-main/app-updates.cjs');
 
@@ -26,5 +27,10 @@ test('beta publication aliases builder latest metadata and passes the updater re
     }));
     const { verifyReleaseProvenance } = await import('../scripts/release-provenance.mjs');
     assert.doesNotThrow(() => verifyReleaseProvenance(manifests, new Map(assets.map(asset => [asset.name, asset])), `v${version}`, sourceCommit));
-    assert.equal(selectRelease([{ tag_name: `v${version}`, prerelease: true, assets }], '1.6.0-beta.14', 'win32').version, version);
+    const ownAssets = Object.entries(manifests).flatMap(([platform, manifest]) => manifest.assets
+        .filter(asset => /\.(exe|dmg)$/.test(asset.name)).map(asset => ({
+            ...asset, platform, url: `/corvas/releases/${version}/${asset.name}`,
+            sha512: crypto.createHash('sha512').update(fs.readFileSync(path.join(directory, platform, asset.name))).digest('base64')
+        })));
+    assert.equal(selectRelease([{ product: 'Corvas', version, sourceCommit, assets: ownAssets }], '1.6.0-beta.14', 'win32').version, version);
 });
