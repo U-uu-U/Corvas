@@ -975,7 +975,7 @@
     background: var(--accent);
 }
 
-/* The bottom-left view dock and top-right usage badge are separate from the
+/* The bottom-left view dock and top-left usage badge are separate from the
    sidebar rail, so they need their own light surfaces. */
 :root[data-theme='light'] .canvas-view-dock,
 :root[data-theme='light'] .board-usage,
@@ -1006,6 +1006,16 @@
 :root[data-theme='light'] .board-usage-detail,
 :root[data-theme='light'] .canvas-minimap-zoom {
     color: #77777b;
+}
+
+:root[data-theme='light'] .board-quality-toggle {
+    border-color: #d0d3d7;
+    background: rgba(255, 255, 255, 0.96);
+    color: #42464d;
+}
+
+:root[data-theme='light'] .board-quality-toggle:hover {
+    border-color: #8f979f;
 }
 
 /* Asset library: search, type tabs, category chips and result cards. */

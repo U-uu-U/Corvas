@@ -154,10 +154,6 @@
                 <button class="canvas-tool-btn" id="canvasToolPlan" type="button" title="新建规划表" aria-label="新建规划表">
                     <svg class="flow-icon" aria-hidden="true"><use href="./icons/iconamoon.svg#plan"></use></svg>
                 </button>
-                <button class="canvas-tool-btn" id="agentSettingsBtn" type="button" title="设置"
-                    aria-label="设置" aria-controls="agentSidebar" aria-expanded="false">
-                    <svg class="flow-icon" aria-hidden="true"><use href="./icons/iconamoon.svg#settings"></use></svg>
-                </button>
                 <span class="canvas-tool-separator" aria-hidden="true"></span>
                 <button class="canvas-tool-btn canvas-task-history-btn" id="agentTaskHistoryBtn" type="button"
                     title="打开任务记录" aria-label="打开任务记录" aria-controls="agentTaskHistory" aria-expanded="false">
@@ -253,9 +249,16 @@
                     <svg class="flow-icon" aria-hidden="true"><use href="./icons/canvas-view-icons.svg#fit"></use></svg>
                 </button>
             </div>
-            <div class="board-usage" id="boardUsage" title="仅统计当前 Corvas 白板窗口">
-                <span class="board-usage-memory" id="boardUsageMemory">-- MB</span>
-                <span class="board-usage-detail" id="boardUsageDetail">0/0</span>
+            <div class="board-performance" id="boardPerformance">
+                <div class="board-usage" id="boardUsage" title="仅统计当前 Corvas 白板窗口">
+                    <span class="board-usage-memory" id="boardUsageMemory">-- MB</span>
+                    <span class="board-usage-detail" id="boardUsageDetail">0/0</span>
+                </div>
+                <button class="board-quality-toggle" id="boardResourceSaverBtn" type="button" role="switch"
+                    aria-label="节约模式" aria-checked="false" title="当前：清晰；点击切换为节约">
+                    <span class="board-quality-track" aria-hidden="true"></span>
+                    <span class="board-quality-label" id="boardResourceSaverLabel" aria-hidden="true">清晰</span>
+                </button>
             </div>
             <div class="canvas-minimap" id="canvasMinimap" hidden>
                 <div class="canvas-minimap-toolbar">
@@ -842,6 +845,10 @@
             <span class="context-menu-shortcut" data-shortcut-action="duplicate">Ctrl+D</span>
         </div>
         <div class="context-menu-divider context-op-only"></div>
+        <div class="context-menu-item" data-action="relayTask">
+            <svg class="flow-icon"><use href="./icons/flow-icons.svg#icon-window"></use></svg>
+            <span>查看后台任务</span>
+        </div>
         <div class="context-menu-item" data-action="copy">
             <span class="context-menu-icon icon-copy"></span>
             <span>复制到剪贴板</span>

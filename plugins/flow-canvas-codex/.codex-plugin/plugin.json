@@ -1,0 +1,40 @@
+{
+  "name": "flow-canvas-codex",
+  "version": "0.1.0",
+  "description": "Connect Codex to a running Corvas workspace through its local MCP server.",
+  "author": {
+    "name": "Corvas",
+    "url": "https://github.com/U-uu-U/flow-canvas"
+  },
+  "homepage": "https://github.com/U-uu-U/flow-canvas",
+  "repository": "https://github.com/U-uu-U/flow-canvas",
+  "keywords": [
+    "flow-canvas",
+    "codex",
+    "mcp",
+    "creative-canvas",
+    "image-generation",
+    "video-generation"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Corvas",
+    "shortDescription": "Connect Codex to your local creative canvas",
+    "longDescription": "Use Codex to inspect Corvas projects, read assets and planning tables, edit nodes and connections, and run authorized image or video generation tasks through the existing local MCP bridge.",
+    "developerName": "Corvas",
+    "category": "Creativity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/U-uu-U/flow-canvas",
+    "defaultPrompt": [
+      "Inspect the active Corvas project",
+      "Organize the selected canvas nodes and connections",
+      "Create an image generation task from these references"
+    ],
+    "brandColor": "#2F6F78"
+  }
+}

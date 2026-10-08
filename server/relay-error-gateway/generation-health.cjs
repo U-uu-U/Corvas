@@ -53,6 +53,10 @@ function classify(record, now, rules) {
     } else if (record.completed && record.statusCode >= 200 && record.statusCode < 300 && record.statusCode !== 202 && !pending
         && (states.some(state => SUCCESS.has(state)) || (record.kind === 'image' && !record.async && response.hasOutput))) state = 'success';
     let completed = timestamp(response.completedAt);
+    if (!Number.isFinite(completed) && state === 'success' && record.async && record.kind === 'video'
+        && record.completionTimeSource === 'relay_terminal_elapsed'
+        && Number.isFinite(record.completionElapsedMs) && record.completionElapsedMs > 0
+        && record.completionElapsedMs <= 7 * 86400000) completed = started + record.completionElapsedMs;
     // Only synchronous image calls may use HTTP latency. Async submission latency is not generation time.
     if (!Number.isFinite(completed) && state === 'success' && record.kind === 'image' && !record.async
         && Number.isFinite(record.latencyMs) && record.latencyMs > 0) completed = started + record.latencyMs;

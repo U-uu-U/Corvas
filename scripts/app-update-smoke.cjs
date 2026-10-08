@@ -63,6 +63,7 @@ if (process.env.FLOW_UPDATE_SMOKE_ENTRY === '1' && process.versions.electron) {
             await page.waitForFunction(() => window.__flowCanvasGetModelConfigSnapshot?.().status.revision === 43);
             assert.ok(configRequests > 0);
             assert.equal(await app.evaluate(() => globalThis.updateSmoke.downloads), 0);
+            await page.locator('#agentToggleBtn').hover();
             await page.locator('#agentSettingsBtn').click();
             await page.getByRole('tab', { name: '软件更新' }).click();
             await page.waitForFunction(() => document.querySelector('#configUpdateVersion').textContent.includes('r43'));
@@ -74,6 +75,7 @@ if (process.env.FLOW_UPDATE_SMOKE_ENTRY === '1' && process.versions.electron) {
             await page.reload();
             await page.waitForFunction(() => window.__flowCanvasGetModelConfigSnapshot?.().status.revision === 45,
                 null, { timeout: 7000 });
+            await page.locator('#agentToggleBtn').hover();
             await page.locator('#agentSettingsBtn').click();
             await page.getByRole('tab', { name: '软件更新' }).click();
             configOffline = true;

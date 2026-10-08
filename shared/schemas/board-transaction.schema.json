@@ -27,6 +27,7 @@
           "enum": [
             "node.create",
             "node.update",
+            "node.set-prompt",
             "node.delete",
             "node.duplicate",
             "connection.create",

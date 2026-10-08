@@ -105,6 +105,26 @@ test('terminal task failure retains identity but not arbitrary payload fields', 
     assert.equal(JSON.stringify(result).includes(privateDetail), false);
 });
 
+test('gateway preserves explicit routing rejection codes through message extraction without exposing account groups', () => {
+    const upstream = { error: { code: 'model_not_found', type: 'new_api_error',
+        message: 'No available channel for model sd2-fast under group default (distributor)' } };
+    for (const payload of [upstream, { code: 'fail_to_fetch_task', message: JSON.stringify(upstream), data: null }]) {
+        const result = normalizeRelayFailure(503, payload, { requestId, origin: 'upstream' });
+        assert.equal(result.body.error.code, 'RH_MODEL_UNAVAILABLE');
+        assert.equal(result.body.error.submissionState, 'rejected');
+        assert.equal(result.body.error.submissionUnknown, false);
+        assert.equal(result.body.error.billingState, 'unknown');
+        assert.equal(result.body.error.retryable, false);
+        assert.doesNotMatch(JSON.stringify(result.body), /distributor|default|sd2-fast/);
+        assert.equal(publicErrorResult(result.body).code, 'RH_MODEL_UNAVAILABLE');
+    }
+    for (const options of [{ transport: true }, { taskId: 'existing-task' }]) {
+        assert.equal(normalizeRelayFailure(503, upstream, options).body.error.code, 'RH_SUBMISSION_UNKNOWN');
+    }
+    assert.equal(normalizeRelayFailure(503, { error: { message: 'No available channel for model sd2-fast' } }).body.error.code,
+        'RH_SUBMISSION_UNKNOWN', 'unstructured 503 remains ambiguous');
+});
+
 test('does not treat creative content or completed results as error fields', () => {
     for (const value of [{ choices: [{ message: { content: 'error: authentication failed' } }] },
         { status: 'completed', data: [{ url: 'https://media.test/result.png' }] },

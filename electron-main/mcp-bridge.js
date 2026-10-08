@@ -62,6 +62,7 @@ const {
     buildSeedance25RequestBody,
     assertZhuboVideoReferenceFile,
     getZhuboVideoModelSpec,
+    getHmSeedance20Spec,
     buildYueqiFastRequestBody,
     buildVideoGenerationEndpoint,
     getVideoPayloadError,
@@ -74,6 +75,7 @@ const {
     isMiniMaxH3PerSecondEndpoint,
     isMiniMaxH3UnavailableResponse,
     isSeedanceVideoModel,
+    isYihongSuperModel,
     isYueqiFastModel,
     seedanceReferenceLimits,
     resolveSeedance25AspectRatio
@@ -3577,6 +3579,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
         const isSeedance = isSeedanceVideoModel(model);
         const isYueqiFast = isYueqiFastModel(model, endpoint);
         const zhuboSpec = getZhuboVideoModelSpec(model, endpoint);
+        const hm20Spec = getHmSeedance20Spec(model, endpoint);
         const isShanhaiDola30 = isShanhaiDola30Model(model, rawEndpoint);
         const isGlobalAiOpc = isGlobalAiOpcModel(model);
         const isStarFrame = isStarFrameModel(model);
@@ -3637,7 +3640,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 endpoint,
                 model,
                 prompt,
-                duration: zhuboSpec ? options.duration : Number.isInteger(duration) ? duration : undefined,
+                duration: zhuboSpec || hm20Spec ? options.duration : Number.isInteger(duration) ? duration : undefined,
                 resolution: resolution || undefined,
                 aspectRatio: ratio || undefined
             }));
@@ -3688,7 +3691,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 }
             }
         }
-        const uploadReferences = isShanhai || isShanhaiDola30 || isGlobalAiOpc || isStarFrame || isYueqiFast || zhuboSpec
+        const uploadReferences = isShanhai || isShanhaiDola30 || isGlobalAiOpc || isStarFrame || isYueqiFast || zhuboSpec || hm20Spec || isYihongSuperModel(model, endpoint)
             ? uploadTemporaryReferences : uploadVideoReferencesOrUseOriginals;
         const imageUrls = await uploadReferences(
             images.map(image => image.url),
@@ -3756,7 +3759,7 @@ async function tryGenerateWithOpenAIVideo(prompt, targetDir, options = {}) {
                 endpoint,
                 model,
                 prompt,
-                duration: zhuboSpec ? options.duration : Number.isInteger(duration) ? duration : undefined,
+                duration: zhuboSpec || hm20Spec ? options.duration : Number.isInteger(duration) ? duration : undefined,
                 resolution: resolution || undefined,
                 aspectRatio: ratio || undefined,
                 referenceImages: imageUrls,

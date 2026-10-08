@@ -38,7 +38,8 @@ for (const [index, entry] of minimax.salePrices.entries()) entry.prices = [
 const unknown = model('unknown-sale', 'Unknown Sale', [0, 0], false);
 unknown.salePrices = hosts.map(host => ({ ...price(host, 0), status: 'unknown', prices: [] }));
 unknown.generationHealth = hosts.map(host => ({ ...health(host, 0), state: 'unknown', reason: 'insufficient',
-    samples: ['success'], successCount: 1, durationSamples: 0, averageSeconds: null }));
+    samples: ['success'], successCount: 1, durationSamples: 1, averageSeconds: 406 }));
+unknown.generationHealthTimings = hosts.map(host => ({ host, seconds: [405.916] }));
 const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote', catalogScope: { hosts, kinds: ['video'] },
     models: [pro, dola, minimax, unknown] };
 
@@ -77,6 +78,7 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote', catalogSc
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         await page.waitForFunction(() => window.__flowCanvasGetModelConfigSnapshot?.().status.origin === 'remote');
+        await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
         await page.locator('#agentApiSettingsTab').click();
         for (const [index, host] of hosts.entries()) {
@@ -88,6 +90,7 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote', catalogSc
             await page.locator('#agentFormSaveBtn').click();
             await page.locator('#agentApiForm').waitFor({ state: 'hidden' });
         }
+        await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
         await page.waitForFunction(() => window.Konva?.stages[0]?.findOne('#sale-video'));
         await page.evaluate(() => window.Konva.stages[0].findOne('#sale-video').fire('click', { evt: { button: 0 } }));
@@ -123,6 +126,15 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote', catalogSc
         await choose('Unknown Sale', '老站售价', false);
         assert.match(await selectedPrice.innerText(), /售价待配置/);
         assert.doesNotMatch(await selectedPrice.innerText(), /0\.00/);
+        await page.locator('[data-model]').click();
+        const singleResult = page.locator('.generation-composer-model-option.selected .generation-health');
+        assert.equal(await singleResult.getAttribute('data-health'), 'unknown');
+        assert.match(await singleResult.getAttribute('title'), /有效样本不足/);
+        assert.match(await singleResult.innerText(), /6分46秒/);
+        assert.equal(await singleResult.locator('i[data-state="success"]').count(), 1);
+        assert.equal(await singleResult.locator('i[data-state="unknown"]').count(), 9);
+        await page.screenshot({ path: path.join(artifacts, 'generation-health-single-success.png') });
+        await page.locator('[data-model]').click();
 
         await choose('Seedance 2.5 Pro', '新站售价');
         for (const [label, width, height] of [['desktop', 1440, 1000], ['compact', 820, 760]]) {

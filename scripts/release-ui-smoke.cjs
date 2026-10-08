@@ -21,6 +21,18 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         }
         assert.ok(page, 'The main renderer window must open');
         await page.waitForFunction(() => window.flowCanvas?.store && document.querySelector('#agentToggleBtn'));
+        await app.evaluate(({ ipcMain }) => {
+            ipcMain.removeHandler('relay-browser:open');
+            globalThis.relayRouteRequest = new Promise(resolve => {
+                ipcMain.handle('relay-browser:open', (_event, options) => { resolve(options); return { opened: true }; });
+            });
+        });
+        await page.evaluate(() => document.dispatchEvent(new CustomEvent('context-relay-task', {
+            detail: { nodeId: 'relay-route-smoke' }
+        })));
+        const relayRoute = await app.evaluate(() => Promise.race([globalThis.relayRouteRequest,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Canvas relay menu is not wired')), 3000))]));
+        assert.equal(relayRoute.nodeId, 'relay-route-smoke');
         if (process.env.FLOW_UI_TEST_PLATFORM) await page.evaluate(platform => {
             document.body.classList.remove('platform-win32', 'platform-darwin');
             document.body.classList.add(`platform-${platform}`);
@@ -29,10 +41,12 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         const settings = page.locator('#agentSettingsBtn');
         assert.equal(await page.locator('.titlebar #agentSettingsBtn').count(), 0);
         assert.equal(await page.locator('#creationModePicker').count(), 0);
-        assert.equal(await settings.getAttribute('class'), 'canvas-tool-btn');
+        assert.equal(await page.locator('#corvasAppLauncher #agentSettingsBtn').count(), 1);
+        await page.locator('#agentToggleBtn').hover();
         await settings.click();
         await page.waitForFunction(() => document.body.classList.contains('settings-mode') && document.body.classList.contains('agent-open'));
         assert.equal(await settings.getAttribute('aria-expanded'), 'true');
+        await page.locator('#agentToggleBtn').hover();
         await settings.click();
         await page.waitForFunction(() => !document.body.classList.contains('agent-open'));
         await page.locator('#agentToggleBtn').click();

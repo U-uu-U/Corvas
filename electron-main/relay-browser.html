@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'">
+    <title>中转站 · Corvas</title>
+    <link rel="stylesheet" href="relay-browser.css">
+</head>
+<body>
+    <header>
+        <button id="back" class="icon" title="后退" aria-label="后退"><svg class="back"><use href="../dist/icons/flow-icons.svg#icon-arrow-up"></use></svg></button>
+        <button id="forward" class="icon" title="前进" aria-label="前进"><svg class="forward"><use href="../dist/icons/flow-icons.svg#icon-arrow-up"></use></svg></button>
+        <button id="reload" class="icon" title="刷新网页" aria-label="刷新网页"><svg><use href="../dist/icons/flow-icons.svg#icon-replace"></use></svg></button>
+        <button id="home" class="site-name">中转站</button>
+        <button id="clear-task" hidden title="清除任务定位"><span id="task-label"></span><svg><use href="../dist/icons/flow-icons.svg#icon-close"></use></svg></button>
+        <span id="web-status" role="status"></span>
+        <span class="spacer"></span>
+        <button id="logs" title="打开站点任务日志"><svg><use href="../dist/icons/flow-icons.svg#icon-history"></use></svg><span>任务日志</span></button>
+        <button id="switch" class="icon" title="切换站点" aria-label="切换站点"><svg><use href="../dist/icons/flow-icons.svg#icon-settings"></use></svg></button>
+    </header>
+    <main id="picker">
+        <img class="brand" src="assets/app-icon.png" alt="Corvas">
+        <h1>选择中转站</h1>
+        <div class="sites">
+            <button data-site="art"><svg><use href="../dist/icons/flow-icons.svg#icon-canvas"></use></svg><strong>个人站</strong><span>个人用户</span><small>art.ravenhash.org</small></button>
+            <button data-site="cart"><svg><use href="../dist/icons/flow-icons.svg#icon-grid"></use></svg><strong>企业站</strong><span>企业用户</span><small>cart.ravenhash.org</small></button>
+        </div>
+    </main>
+    <script src="relay-browser-ui.js"></script>
+</body>
+</html>

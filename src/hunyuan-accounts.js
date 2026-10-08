@@ -14,9 +14,12 @@ export function createApplicationLauncher({ onSelect }) {
     menu.innerHTML = `<div class="corvas-app-launcher-group" role="group" aria-label="AI 助手">
         <span class="corvas-app-launcher-label">AI 助手</span>
         <button type="button" data-app="agent">${icon('sparkles')}<span>AI Agent</span></button>
+        <button type="button" data-app="settings" id="agentSettingsBtn" title="设置" aria-label="设置"
+            aria-controls="agentSidebar" aria-expanded="false">${icon('settings')}<span>设置</span></button>
         </div>
         <div class="corvas-app-launcher-group" role="group" aria-label="网页创作">
         <span class="corvas-app-launcher-label">网页创作</span>
+        <button type="button" data-app="relay" title="打开个人站或企业站">${icon('window')}<span>中转站</span></button>
         <button type="button" data-app="tripo" title="打开 Tripo 创作平台">${creativeAppIcon('tripo')}<span>Tripo</span></button>
         <button type="button" data-app="hunyuan">${hunyuanLogo}<span>混元 3D</span></button>
         <button type="button" data-app="jimeng" title="打开即梦创作平台">${creativeAppIcon('jimeng')}<span>即梦</span></button>

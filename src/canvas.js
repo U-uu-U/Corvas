@@ -730,6 +730,16 @@ export class CanvasManager {
             if (nodeId) void this.runFromNode(nodeId);
         });
 
+        document.addEventListener('context-relay-task', event => {
+            const nodeId = event.detail?.nodeId;
+            const data = this.items.get(nodeId)?.data;
+            const task = this.generationTaskStates.get(nodeId);
+            if (!window.flowCanvas?.relay) { this._showCanvasStatus('请重启 Corvas 后打开中转站'); return; }
+            void window.flowCanvas.relay.open({ nodeId, clientTaskId: task?.id,
+                taskId: task?.taskId || data?.generation?.taskId, site: task?.site || data?.generation?.relaySite })
+                .catch(error => this._showCanvasStatus(error.message, 0, 'error'));
+        });
+
         document.addEventListener('context-duplicate-node', event => {
             this.duplicateItems(event.detail?.itemIds || []);
         });
@@ -2111,6 +2121,7 @@ export class CanvasManager {
             const sourceIds = binding.sourceNodeIds?.length ? binding.sourceNodeIds : [binding.sourceNodeId || reference?.itemId];
             return sourceIds.map(itemId => ({ itemId, filePath: binding.filePath, stable: Boolean(itemId) }));
         });
+
         historyReferences.forEach(reference => {
             let item = reference?.itemId ? this.items.get(reference.itemId) : null;
             if (!item && reference?.filePath && !reference.stable) {
@@ -5192,12 +5203,12 @@ export class CanvasManager {
     }
 
     async _hydrateReferenceAnnotation(data) {
-        if (!data?.filePath || normalizeReferenceAnnotation(data.referenceAnnotation)
+        if (!data?.filePath || typeof data.referenceAnnotation === 'string'
             || !window.flowCanvas?.asset?.readMetadata) return;
         try {
             const metadata = await window.flowCanvas.asset.readMetadata([data.filePath]);
             const annotation = normalizeReferenceAnnotation(metadata?.[data.filePath]?.referenceAnnotation);
-            if (!annotation || !this.items.has(data.id) || data.referenceAnnotation) return;
+            if (!annotation || !this.items.has(data.id) || typeof data.referenceAnnotation === 'string') return;
             data.referenceAnnotation = annotation;
             if (this._generationComposer?.nodeId) {
                 this._renderGenerationComposerReferences(this._generationComposer.nodeId);
@@ -5631,6 +5642,7 @@ export class CanvasManager {
                 nodeType: data.nodeType,
                 itemId: data.id,
                 itemIds,
+                hasRelayTask: data.nodeType === 'video' && Boolean(this.generationTaskStates.get(data.id)?.taskId || data.generation?.taskId),
                 filePath,
                 filePaths,
                 fileTargets,
