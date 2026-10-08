@@ -60,7 +60,7 @@ if (process.env.FLOW_LIVE_UPDATE_ENTRY === '1' && process.versions.electron) {
         assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), asset.sha256);
         assert.equal(crypto.createHash('sha512').update(bytes).digest('base64'), asset.sha512);
         assert.equal(native.autoInstallOnAppQuit, false);
-        return { version: result.latestVersion, bytes: bytes.length, sources: [...sources], nativeUpdater: true,
+        return { installerPath: file, version: result.latestVersion, bytes: bytes.length, sources: [...sources], nativeUpdater: true,
             sha256: asset.sha256, sha512Verified: true, installed: false };
     };
 } else {
@@ -76,12 +76,17 @@ if (process.env.FLOW_LIVE_UPDATE_ENTRY === '1' && process.versions.electron) {
             app.process().stdout.on('data', chunk => {
                 for (const line of String(chunk).split('\n')) if (line.startsWith('CORVAS_UPDATE_PROGRESS ')) console.log(line.trim());
             });
-            const result = await app.evaluate(async () => {
+            const { installerPath, ...result } = await app.evaluate(async () => {
                 let timer;
                 try { return await Promise.race([globalThis.liveUpdateRun(),
                     new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Live updater exceeded 10 minutes')), 600000); })]); }
                 finally { clearTimeout(timer); }
             });
+            if (process.env.FLOW_LIVE_UPDATE_SAVE_DIR) {
+                const directory = path.resolve(process.env.FLOW_LIVE_UPDATE_SAVE_DIR);
+                await fs.mkdir(directory, { recursive: true });
+                await fs.copyFile(installerPath, path.join(directory, `Corvas.Setup.${result.version}.exe`));
+            }
             await fs.mkdir(path.join(__dirname, '../output'), { recursive: true });
             await fs.writeFile(path.join(__dirname, '../output/live-update-verified.json'), JSON.stringify(result, null, 2));
             console.log(JSON.stringify(result));

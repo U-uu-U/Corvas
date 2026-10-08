@@ -105,7 +105,16 @@ def github_sources(metadata):
             raise ValueError('Build source does not match this release')
     artifacts = gh('api', f"repos/U-uu-U/Corvas/actions/runs/{metadata['windowsRunId']}/artifacts")['artifacts']
     archive = next(item for item in artifacts if item['name'] == 'corvas-windows-x64' and not item['expired'])
-    release = gh('release', 'view', 'v' + metadata['version'], '--json', 'assets')
+    release = gh('release', 'view', 'v' + metadata['version'], '--json', 'assets,isDraft')
+    if release['isDraft']:
+        raise ValueError('Release must be published before site deployment')
+    tag = gh('api', f"repos/U-uu-U/Corvas/commits/v{metadata['version']}", '--jq', '{sha:.sha}')
+    if tag['sha'] != metadata['sourceCommit']:
+        raise ValueError('Release tag source does not match')
+    for expected in metadata['assets']:
+        asset = next((item for item in release['assets'] if item['name'] == expected['name']), None)
+        if not asset or asset['size'] != expected['bytes'] or asset.get('digest') != 'sha256:' + expected['sha256']:
+            raise ValueError('Published asset differs from build provenance')
     dmg = next(item for item in release['assets'] if item['name'] == f"Corvas.{metadata['version']}.mac.universal.dmg")
     token = subprocess.check_output(['gh', 'auth', 'token'], text=True).strip()
     class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -139,9 +148,13 @@ def deploy(client, release_dir, notes_file, from_github=False):
     for name, platform in names.items():
         record = next((item for item in metadata['assets'] if item['name'] == name), None)
         file = release_dir / name
-        if not record or not file.is_file() or file.stat().st_size != record['bytes'] or digest(file) != record['sha256']:
+        if (not record or not re.fullmatch(r'[a-f0-9]{64}', record.get('sha256', ''))
+                or not isinstance(record.get('bytes'), int) or not 0 < record['bytes'] <= 1024 ** 3):
             raise ValueError('Unverified installer: ' + name)
-        assets.append({'platform': platform, 'name': name, 'bytes': record['bytes'], 'sha256': record['sha256'], 'sha512': digest512(file)})
+        if not from_github and (not file.is_file() or file.stat().st_size != record['bytes'] or digest(file) != record['sha256']):
+            raise ValueError('Unverified local installer: ' + name)
+        assets.append({'platform': platform, 'name': name, 'bytes': record['bytes'], 'sha256': record['sha256'],
+                       **({'sha512': digest512(file)} if not from_github else {})})
     notes = json.loads(notes_file.read_text(encoding='utf-8'))
     if not isinstance(notes, list) or not all(isinstance(note, str) and len(note) <= 500 for note in notes):
         raise ValueError('Notes must be a JSON string array')
@@ -160,11 +173,21 @@ def deploy(client, release_dir, notes_file, from_github=False):
     def put_text(target, content, mode=0o644):
         with sftp.file(target, 'w') as remote: remote.write(content)
         sftp.chmod(target, mode)
+    def verify_remote(directory):
+        for asset in assets:
+            remote_file = shlex.quote(directory + '/' + asset['name'])
+            if run(client, f'sha256sum {remote_file}', timeout=40).split()[0] != asset['sha256']:
+                raise ValueError('Remote installer checksum mismatch')
+            sha512 = bytes.fromhex(run(client, f'sha512sum {remote_file}', timeout=40).split()[0])
+            actual = base64.b64encode(sha512).decode('ascii')
+            if asset.get('sha512') not in (None, actual): raise ValueError('Remote SHA512 mismatch')
+            asset['sha512'] = actual
     target = f'{data}/releases/{version}'
     try:
         with sftp.file(target + '/release.json') as remote: old = json.load(remote)
     except FileNotFoundError: old = None
     if old:
+        verify_remote(target)
         prior = [{key: value for key, value in asset.items() if key != 'sha512'} for asset in old['assets']]
         expected = [{key: value for key, value in asset.items() if key != 'sha512'} for asset in assets]
         if prior != expected or old['sourceCommit'] != metadata['sourceCommit'] or old['notes'] != notes:
@@ -188,6 +211,7 @@ def deploy(client, release_dir, notes_file, from_github=False):
             result = out.read().decode(); err.read()
             if out.channel.recv_exit_status(): raise RuntimeError('Server-side installer transfer failed')
             print(result, flush=True)
+            verify_remote(stage)
         for asset in ([] if from_github else assets):
             last = [0]
             def progress(count, total):
