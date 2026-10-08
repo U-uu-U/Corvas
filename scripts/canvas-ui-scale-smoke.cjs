@@ -69,7 +69,10 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
                 points: stage.findOne('#flow-edge').points(), nodeScale: stage.findOne('#image').scaleX() };
         });
         const openSettings = async () => {
-            if (!(await page.locator('#canvasUiScaleLimit').isVisible())) await page.locator('#agentSettingsBtn').click();
+            if (!(await page.locator('#canvasUiScaleLimit').isVisible())) {
+                await page.locator('#agentToggleBtn').hover();
+                await page.locator('#agentSettingsBtn').click();
+            }
             await page.locator('#agentShortcutSettingsTab').click();
         };
         const checkVideoControls = async screenScale => {
@@ -152,6 +155,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await page.screenshot({ path: path.join(output, 'canvas-ui-scale-light.png') });
         await page.locator('#flowCanvasThemeSelect').selectOption('dark');
         await page.setViewportSize({ width: 1360, height: 900 });
+        await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
         await page.locator('#agentToggleBtn').click();
         await page.locator('#agentConversationMenuBtn').click();

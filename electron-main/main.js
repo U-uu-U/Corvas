@@ -2,7 +2,7 @@
 // Corvas — Electron Main Process
 // ============================================================
 
-const { app, BrowserWindow, ipcMain, shell, clipboard, nativeImage, dialog, protocol, net, Menu, screen, safeStorage, session } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, shell, clipboard, nativeImage, dialog, protocol, net, Menu, screen, safeStorage, session } = require('electron');
 const path = require('path');
 require('./app-identity.cjs').configureAppIdentity(app);
 const util = require('util');
@@ -30,6 +30,9 @@ const { WorkflowService } = require('./workflow-service.cjs');
 const { BlenderDesktop } = require('./blender-desktop.cjs');
 const { BlenderWorkbench } = require('./blender-workbench.cjs');
 const { CreativeWebApps } = require('./creative-web-apps.cjs');
+const { RelayBrowser } = require('./relay-browser.cjs');
+const { createRelayImporter } = require('./relay-browser-import.cjs');
+const { relaySite } = require('./relay-browser-contract.cjs');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -62,6 +65,7 @@ let hunyuanRhinoWorkflow = null;
 let rhinoWorkbench = null;
 let blenderWorkbench = null;
 let creativeWebApps = null;
+let relayBrowser = null;
 let mediaPreviewWasFullScreen = null;
 let mediaAccess = null;
 const appUpdates = require('./app-updates.cjs').createAppUpdates({
@@ -360,6 +364,7 @@ function createWindow() {
 
     mainWindow.on('closed', () => {
         creativeWebApps?.close();
+        relayBrowser?.close();
         void hunyuanAccounts?.closeAll();
         flowCanvasBridge?.setBoardToolsReady(false, {
             code: 'RENDERER_NOT_READY',
@@ -2177,6 +2182,27 @@ ipcMain.handle('creative-web:open', async (event, platform) => {
     return creativeWebApps.open(platform);
 });
 
+ipcMain.handle('relay-browser:open', async (event, options = {}) => {
+    requireMainFrame(event);
+    relayBrowser ||= new RelayBrowser({ BrowserWindow, BrowserView, session, shell,
+        directory: path.join(app.getPath('userData'), 'data'),
+        importer: createRelayImporter({ bridge: flowCanvasBridge, store, board: agentServices.board, getSaveDir }) });
+    const record = flowCanvasBridge.recoveryStore.get(options.clientTaskId);
+    let site = record ? relaySite(record.endpoint) : options.site;
+    let taskId = record?.taskId || options.taskId;
+    if (!site && options.nodeId) {
+        const node = store.load().items?.find(item => item.id === options.nodeId);
+        const providerId = node?.generation?.sourceProviderId || node?.generation?.providerId || node?.config?.providerId;
+        const providers = apiConfigStore.load()?.config?.providers || [];
+        const provider = providers.find(provider => provider.id === String(providerId || '').split('::model:')[0]);
+        site = node?.generation?.relaySite || relaySite(provider?.endpoint);
+        taskId ||= node?.generation?.taskId;
+    }
+    if (taskId && !site) throw new Error('该任务未关联个人站或企业站，请从中转站入口查询');
+    return relayBrowser.open({ site, taskId, clientTaskId: record?.clientTaskId });
+});
+ipcMain.handle('relay-browser:command', (event, action, value) => relayBrowser?.command(event, action, value));
+
 const RAVENHASH_URLS = Object.freeze({
     ai: 'https://ai.ravenhash.org/',
     art: 'https://art.ravenhash.org/',
@@ -3547,6 +3573,7 @@ let agentShutdownComplete = false;
 app.on('before-quit', event => {
     isQuitting = true;
     creativeWebApps?.close();
+    relayBrowser?.close();
     hunyuanRhinoWorkflow?.close();
     rhinoWorkbench?.close();
     blenderWorkbench?.close();

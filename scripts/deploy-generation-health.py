@@ -20,7 +20,10 @@ def main():
     parser.add_argument('--caddy-file', type=Path)
     parser.add_argument('--deploy', action='store_true')
     parser.add_argument('--code-only', action='store_true', help='Update metrics/schema only; preserve the deployed routes and entry points')
+    parser.add_argument('--reader-only', action='store_true', help='Hot-update only the per-query Python projection; no service restart')
     args = parser.parse_args()
+    if args.reader_only and args.site == 'config':
+        parser.error('--reader-only requires art or cart')
     host, port, node = TARGETS[args.site]
     client = paramiko.SSHClient()
     client.load_system_host_keys()
@@ -51,13 +54,15 @@ def main():
     else:
         base = '/opt/corvas-relay-error-gateway/'
         for name in ['gateway.cjs', 'generation-health.cjs', 'read-generation-records.py']:
-            if args.code_only and name != 'generation-health.cjs':
+            if args.reader_only and name != 'read-generation-records.py':
+                continue
+            if args.code_only and name == 'gateway.cjs':
                 continue
             relative = 'server/relay-error-gateway/' + name
             files.append((ROOT / relative, base + relative))
-        if not args.code_only and (not args.caddy_file or not args.caddy_file.is_file()):
+        if not args.code_only and not args.reader_only and (not args.caddy_file or not args.caddy_file.is_file()):
             raise ValueError('Reviewed local Caddyfile required')
-        if not args.code_only:
+        if not args.code_only and not args.reader_only:
             files.append((args.caddy_file, '/etc/caddy/Caddyfile'))
         service = 'corvas-relay-error-gateway'
     if not args.deploy:
@@ -65,7 +70,7 @@ def main():
                           'service': run(f'systemctl is-active {service}').strip()}, indent=2))
         client.close()
         return
-    if args.site != 'config':
+    if args.site != 'config' and not args.reader_only:
         active = run("ss -Htn state established '( sport = :18089 )'").strip()
         if active:
             raise RuntimeError('Gateway has active connections; retry deployment when idle')
@@ -87,20 +92,26 @@ def main():
             run(f'{shlex.quote(node)} --check < {shlex.quote(candidate)}' + (' --input-type=module' if target.endswith('.mjs') else ''))
         elif target.endswith('Caddyfile'):
             run(f'caddy validate --config {shlex.quote(candidate)} --adapter caddyfile')
+        elif target.endswith('.py'):
+            validate = "import ast,pathlib; ast.parse(pathlib.Path(" + repr(candidate) + ").read_text())"
+            run('python3 -c ' + shlex.quote(validate))
         receipts.append({'path': target, 'sha256': hashlib.sha256(local.read_bytes()).hexdigest(), 'backup': backup + '/' + str(index)})
     try:
         for _, target in files:
             run(f'mv {shlex.quote(target + ".health-next")} {shlex.quote(target)}')
-        run(f'systemctl restart {service}')
+        if not args.reader_only:
+            run(f'systemctl restart {service}')
         run(f'systemctl is-active {service}')
-        if args.site != 'config' and not args.code_only:
+        if args.site != 'config' and not args.code_only and not args.reader_only:
             run('systemctl reload caddy')
     except Exception:
         for index, (_, target) in enumerate(files):
             run(f'if test -f {shlex.quote(backup + "/" + str(index))}; then cp -p {shlex.quote(backup + "/" + str(index))} {shlex.quote(target)}; fi')
-        run(f'systemctl restart {service}')
+        if not args.reader_only:
+            run(f'systemctl restart {service}')
         raise
-    record = {'site': args.site, 'deployedAt': stamp, 'files': receipts, 'service': service}
+    record = {'site': args.site, 'deployedAt': stamp, 'files': receipts, 'service': service,
+              'restarted': not args.reader_only}
     output = ROOT / 'output' / f'generation-health-{args.site}-deployed.json'
     output.write_text(json.dumps(record, indent=2), encoding='utf-8')
     print(json.dumps(record, indent=2))

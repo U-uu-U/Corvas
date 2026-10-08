@@ -65,7 +65,7 @@ class AgentMedia {
                 await Promise.all(files.slice(128).map(file => fs.promises.unlink(path.join(this.directory, file.name)).catch(() => {})));
             }
         }
-        return { nodeId, kind, fileName: path.basename(filePath), fingerprint: key, bytes: stat.size, ...cached,
+        return { nodeId, kind, fileName: path.basename(filePath), referenceAnnotation: node.referenceAnnotation || '', fingerprint: key, bytes: stat.size, ...cached,
             images: cached.images.flatMap((image, index) => [
                 { type: 'text', text: `节点 ${nodeId}，文件 ${path.basename(filePath)}${cached.frames ? `，视频时间 ${cached.frames[index].time.toFixed(2)} 秒` : crop ? `，区域 ${JSON.stringify(crop)}` : ''}` }, image
             ]) };

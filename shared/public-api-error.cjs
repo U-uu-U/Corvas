@@ -298,12 +298,13 @@ function normalizeRelayFailure(status, payload, options = {}) {
     const taskId = safeTaskId(options.taskId) || findExplicitTaskId(value);
     const terminal = options.terminal === true || (query && isTerminalFailure(value));
     const transport = options.transport === true;
+    const text = errorText(value);
+    const routingRejected = !transport && !taskId && /\bmodel_not_found\b/i.test(text)
+        && /no available channel for model/i.test(text);
     const extracted = extractErrorReasons(value);
     const classificationValue = extracted.length ? { task_id: taskId, error: { message: extracted.map(item => item.text).join('\n') } } : value;
     let code = (Object.hasOwn(CATALOG, options.code || '') ? options.code : null) || mappedRuleCode(value, options.rules)
-        || classify(status, classificationValue, { query, terminal, transport });
-    const text = errorText(value);
-    const routingRejected = !taskId && /\bmodel_not_found\b/i.test(text) && /no available channel for model/i.test(text);
+        || (routingRejected ? 'RH_MODEL_UNAVAILABLE' : classify(status, classificationValue, { query, terminal, transport }));
     const ambiguous = !query && !['validate', 'upload'].includes(options.stage)
         && (transport || status === 408 || (status >= 500 && !routingRejected && !terminal));
     if (ambiguous) code = 'RH_SUBMISSION_UNKNOWN';
@@ -320,7 +321,7 @@ function normalizeRelayFailure(status, payload, options = {}) {
     const parameterIssues = ['parameter', 'asset'].includes(category)
         ? normalizeParameterIssues(options.parameterIssues || extractParameterIssues(classificationValue)) : [];
     const customer = prepareCustomerMessage(value, { ...options.customerPolicy, prompts: options.prompts,
-        suppress: submissionState === 'unknown' || privateAccountFailure || transport });
+        suppress: submissionState === 'unknown' || privateAccountFailure || transport || routingRejected });
     options.onCustomerMessage?.({ ...customer.audit, customerMessage: customer.message || null });
     const action = submissionState === 'unknown' ? (taskId || query ? 'retry_query' : 'contact_support')
         : submissionState === 'accepted' && !confirmedFailure ? 'retry_query'

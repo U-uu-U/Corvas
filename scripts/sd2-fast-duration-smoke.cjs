@@ -53,6 +53,7 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote', models: [
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         await page.waitForFunction(() => window.__flowCanvasGetModelConfigSnapshot?.().status.origin === 'remote');
+        await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
         await page.locator('#agentApiSettingsTab').click();
         await page.locator('#agentAddApiBtn').click();
@@ -62,6 +63,7 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote', models: [
         await page.locator('#agentFetchedModelSelect').selectOption('sd2-fast');
         await page.locator('#agentFormSaveBtn').click();
         await page.locator('#agentApiForm').waitFor({ state: 'hidden' });
+        await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
         await page.waitForFunction(() => window.Konva?.stages[0]?.findOne('#duration-video'));
         await page.evaluate(() => window.Konva.stages[0].findOne('#duration-video').fire('click', { evt: { button: 0 } }));

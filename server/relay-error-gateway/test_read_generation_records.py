@@ -12,6 +12,27 @@ spec.loader.exec_module(reader)
 
 
 class GenerationProjectionTest(unittest.TestCase):
+    def test_terminal_video_elapsed_is_distinct_from_pending_http_latency(self):
+        row = {'user_id': 'private-user', 'channel_id': 3, 'model': 'seedance_v2.0-933',
+               'task_id': 'private-task', 'log_id': 'private-log', 'id': 893,
+               'created_at': '2026-10-06T10:30:43Z', 'status_code': 200, 'is_completed': 1,
+               'endpoint': '/v1/video/generations', 'latency_ms': 405916, 'error_message': None,
+               'response_content': json.dumps({'status': 'completed'})}
+        result = reader.project_record(row)
+        self.assertEqual(result['completionElapsedMs'], 405916)
+        self.assertEqual(result['completionTimeSource'], 'relay_terminal_elapsed')
+        self.assertEqual(result['response']['completedAt'], '2026-10-06T10:37:28.916000+00:00')
+        self.assertEqual(reader.project_record({**row, 'response_content': json.dumps({
+            'status': 'completed', 'completed_at': '2026-10-06T10:36:00Z'})})['response']['completedAt'],
+            '2026-10-06T10:36:00Z')
+        self.assertNotIn('private', json.dumps(result))
+        for patch in [{'is_completed': 0}, {'status_code': 202}, {'status_code': 503},
+                      {'task_id': ''}, {'latency_ms': 0}, {'latency_ms': -1},
+                      {'latency_ms': 8 * 86400000}, {'error_message': 'error'},
+                      {'response_content': json.dumps({'status': 'processing'})},
+                      {'response_content': json.dumps({'status': 'failed'})}]:
+            self.assertNotIn('completionElapsedMs', reader.project_record({**row, **patch}))
+
     def test_projection_omits_private_inputs_outputs_and_billing(self):
         projected = reader.project_response(json.dumps({'status': 'completed', 'completed_at': 123,
             'prompt': 'private prompt', 'cost': 12, 'balance': 45, 'api_key': 'private-key',

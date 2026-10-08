@@ -72,6 +72,7 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
             await page.waitForFunction(revision => window.__flowCanvasGetModelConfigSnapshot?.().status.revision === revision, config.revision);
         };
         const openSettings = async () => {
+            await page.locator('#agentToggleBtn').hover();
             await page.locator('#agentSettingsBtn').click();
             await page.locator('#agentApiSettingsTab').click();
         };
@@ -164,6 +165,7 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
         assert.equal(cart.modelCatalog, 'remote');
         assert.deepEqual(cart.models, []);
         assert.equal(cart.model, 'sd2.5-route1');
+        await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
         await page.waitForFunction(() => window.Konva?.stages[0]?.findOne('#api-catalog-video'));
         await page.evaluate(() => window.Konva.stages[0].findOne('#api-catalog-video').fire('click', { evt: { button: 0 } }));

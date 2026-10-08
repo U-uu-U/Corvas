@@ -46,6 +46,8 @@ export class ContextMenu {
                     document.dispatchEvent(new CustomEvent('context-edit-node', { detail: { nodeId } }));
                 } else if (action === 'runNode') {
                     document.dispatchEvent(new CustomEvent('context-run-node', { detail: { nodeId } }));
+                } else if (action === 'relayTask') {
+                    document.dispatchEvent(new CustomEvent('context-relay-task', { detail: { nodeId } }));
                 } else if (action === 'duplicateNode') {
                     document.dispatchEvent(new CustomEvent('context-duplicate-node', { detail: { itemIds } }));
                 } else if (action === 'copy') {
@@ -140,6 +142,8 @@ export class ContextMenu {
         this.el.querySelectorAll('.context-op-only').forEach(menuItem => {
             menuItem.style.display = isOpNode ? '' : 'none';
         });
+        const relayTask = this.el.querySelector('[data-action="relayTask"]');
+        if (relayTask) relayTask.style.display = item.hasRelayTask ? '' : 'none';
         this.el.querySelectorAll('.context-menu-divider:not(.context-op-only)').forEach(divider => {
             divider.style.display = isOpNode && !hasFiles ? 'none' : '';
         });

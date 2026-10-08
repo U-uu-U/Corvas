@@ -1,5 +1,15 @@
 # 主播五款 Seedance 2.5
 
+## 2026-09-30 请求名修复
+
+上游公开目录与两站渠道 Key 的 `/v1/models` 均已移除 `seedance-2.5-480p/720p/1080p`。对应 30 图、0 视频、10 音频、4-30 秒、按次计费的型号现为 `y-seedance-2.5-480p/720p/1080p`；同目录的 `F-`、`bz-`、`XG-` 是其他型号，不能仅按分辨率混用。
+
+两站保留原 `model_id`、mid、客户端目录和参数契约，将这三条 `models.original_id` 及对应 `channels.model_mapping` 改为带 `y-` 的请求名。老站渠道 3、新站渠道 2；既有安装版无需改名或重新打包。修复脚本 `server/seedance-hm/repair-zhubo-model-names.py` 默认预演回滚，`--apply` 私有备份后提交，事务中校验其他模型、计费规则、渠道字段均未变化。两站预演、提交及回读验证通过，未提交收费生成。
+
+两站回执在 `output/zhubo-rename-{art,cart}-receipt.json`；私有备份分别为 `/root/flow-canvas-operations/zhubo-rename-art-20260930T061645532278Z` 和 `/root/flow-canvas-operations/zhubo-rename-cart-20260930T061649190182Z`。备份含渠道凭据，不能发布。
+
+当日上游成本已变为 5.5/7/13 元每次；本次仅修请求名，销售价和 CONFIG 管理成本快照没有调整。1080p 老站售价 12 元低于成本，新站售价 13.72 元在代理抽成后也不足以覆盖成本，需另行确认调价。下文 4/5/6 元为历史接入成本，不应当作当前成本。其余 HM 和 LongXia 请求名仍存在；旧 `sd2.5` 不在上游目录，尚无已确认的替代型号，保留原配置并单独跟进。
+
 2026-09-24 两站新增以下5个精确型号，并发布统一 CONFIG r38，追加到当前“Seedance 2.5 推荐渠道”。既有模型的开关、排序、分组及价格保留。
 
 - `LongXia-video-seedance2_5-standard-480p-express-PerSecond`：480p、4-25秒；上游0.42元/秒，老站0.80元/秒，新站0.92元/秒。

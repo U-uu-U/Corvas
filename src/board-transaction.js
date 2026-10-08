@@ -1,5 +1,7 @@
 import { NODE_TYPES } from './node-types.js';
 import { canConnect, getPorts, portsCompatible } from './graph-model.js';
+import { getGeneratorResultEntries } from './generator-result-stack.js';
+import { bindReferenceCitations, normalizeReferenceAnnotation, referenceMediaType } from './reference-citations.js';
 
 export const BOARD_SNAPSHOT_SCHEMA = 'flow-canvas.board-snapshot.v1';
 export const BOARD_TRANSACTION_SCHEMA = 'flow-canvas.board-transaction.v1';
@@ -7,12 +9,13 @@ export const BOARD_TRANSACTION_SCHEMA = 'flow-canvas.board-transaction.v1';
 const MAX_OPERATIONS = 500;
 const MAX_APPLIED_KEYS = 200;
 const MUTABLE_NODE_FIELDS = new Set([
-    'title', 'x', 'y', 'width', 'height', 'config', 'model', 'tags', 'metadata'
+    'title', 'x', 'y', 'width', 'height', 'config', 'model', 'tags', 'metadata', 'referenceAnnotation'
 ]);
 
 const OPERATION_NAMES = new Set([
     'node.create',
     'node.update',
+    'node.set-prompt',
     'node.delete',
     'node.duplicate',
     'connection.create',
@@ -252,6 +255,8 @@ function applyOperation(snapshot, transaction, operation, operationIndex, tempId
             return createNode(snapshot, transaction, operation, operationIndex, tempIds, options);
         case 'node.update':
             return updateNode(snapshot, operation, tempIds);
+        case 'node.set-prompt':
+            return setNodePrompt(snapshot, transaction, operation, operationIndex, tempIds);
         case 'node.delete':
             return deleteNode(snapshot, operation, tempIds);
         case 'node.duplicate':
@@ -316,6 +321,13 @@ function updateNode(snapshot, operation, tempIds) {
             nextPatch.config = { ...(item.config || {}), ...clone(value) };
             return;
         }
+        if (key === 'referenceAnnotation') {
+            if (typeof value !== 'string' || value.length > 80) {
+                throw new BoardTransactionError('INVALID_NODE_PATCH', '素材标注必须是最多80个字符的文本');
+            }
+            nextPatch[key] = normalizeReferenceAnnotation(value);
+            return;
+        }
         if (['x', 'y', 'width', 'height'].includes(key)) {
             const number = Number(value);
             if (!Number.isFinite(number)) {
@@ -328,6 +340,51 @@ function updateNode(snapshot, operation, tempIds) {
     });
     Object.assign(item, nextPatch);
     return { status: 'ready', nodeId, fields: Object.keys(nextPatch) };
+}
+
+function setNodePrompt(snapshot, transaction, operation, operationIndex, tempIds) {
+    const nodeId = resolveNodeId(operation.nodeId, tempIds);
+    const item = requireItem(snapshot, nodeId);
+    if (item.kind !== 'op' || !['image', 'video'].includes(item.nodeType)) {
+        throw new BoardTransactionError('INVALID_NODE_TYPE', '引用胶囊需要图片或视频生成节点');
+    }
+    if (!Array.isArray(operation.promptParts) || operation.promptParts.length > 256) {
+        throw new BoardTransactionError('INVALID_PROMPT_PARTS', 'promptParts 必须是最多256段的文本和素材引用数组');
+    }
+    const references = snapshot.connections.filter(connection => connection.kind !== 'history' && connection.to.nodeId === nodeId)
+        .map(connection => ({ connection, source: requireItem(snapshot, connection.from.nodeId) }))
+        .map(reference => {
+            const { source } = reference;
+            const filePath = getGeneratorResultEntries(source)[0]?.filePath || source.filePath || `pending:${source.id}`;
+            return { ...reference, filePath, mediaType: referenceMediaType({ filePath,
+                mediaType: source.kind === 'op' ? source.nodeType : source.mediaType }) };
+        }).filter(reference => ['image', 'video', 'audio'].includes(reference.mediaType));
+    let prompt = '';
+    const occurrences = [];
+    operation.promptParts.forEach((part, index) => {
+        if (!part || typeof part !== 'object' || Array.isArray(part) || Object.keys(part).length !== 1) {
+            throw new BoardTransactionError('INVALID_PROMPT_PARTS', '每一段只能包含text或sourceNodeId');
+        }
+        if (typeof part.text === 'string') prompt += part.text;
+        else if (typeof part.sourceNodeId === 'string' && part.sourceNodeId) {
+            const sourceNodeId = resolveNodeId(part.sourceNodeId, tempIds);
+            const reference = references.find(reference => reference.source.id === sourceNodeId);
+            if (!reference) throw new BoardTransactionError('REFERENCE_NOT_CONNECTED', '引用素材必须先连接到生成节点');
+            occurrences.push({ id: stableId('citation', transaction.id, `${operationIndex}-${index}`),
+                connectionId: reference.connection.id, sourceNodeId, offset: prompt.length,
+                annotation: normalizeReferenceAnnotation(reference.source.referenceAnnotation) });
+        } else throw new BoardTransactionError('INVALID_PROMPT_PARTS', '文本或素材节点ID无效');
+        if (prompt.length > 60000) throw new BoardTransactionError('INVALID_PROMPT_PARTS', '提示词过长');
+    });
+    const ids = [...new Set(occurrences.map(occurrence => occurrence.connectionId))];
+    const config = { ...item.config, prompt, agentCompiledPrompt: '', referenceCitationIds: ids,
+        referenceCitationLabels: [], referenceCitationOffsets: Object.fromEntries(ids.map(id =>
+            [id, occurrences.find(occurrence => occurrence.connectionId === id).offset])),
+        referenceCitationAnnotations: {}, referenceCitationOccurrences: occurrences };
+    item.config = bindReferenceCitations(config, references.map(reference => ({ filePath: reference.filePath,
+        sourceNodeId: reference.source.id, mediaType: reference.mediaType, annotation: reference.source.referenceAnnotation })),
+    references.map(reference => ({ connectionId: reference.connection.id, source: reference.source }))).config;
+    return { status: 'ready', nodeId, citations: occurrences.length, fields: ['config'] };
 }
 
 function deleteNode(snapshot, operation, tempIds) {
@@ -672,7 +729,7 @@ function removePlanReferences(plans, item) {
 
 function incrementSummary(summary, op, result) {
     if (op === 'node.create' || op === 'node.duplicate') summary.nodesCreated += 1;
-    if (op === 'node.update') summary.nodesUpdated += 1;
+    if (op === 'node.update' || op === 'node.set-prompt') summary.nodesUpdated += 1;
     if (op === 'node.delete') {
         summary.nodesDeleted += 1;
         summary.connectionsDeleted += Number(result.removedConnections) || 0;

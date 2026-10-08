@@ -143,6 +143,7 @@ function operationInputSchema() {
                 enum: [
                     'node.create',
                     'node.update',
+                    'node.set-prompt',
                     'node.delete',
                     'node.duplicate',
                     'connection.create',
@@ -152,7 +153,15 @@ function operationInputSchema() {
             },
             id: { type: 'string', minLength: 1, description: 'Optional stable id for a created node or connection.' },
             tempId: { type: 'string', minLength: 1, description: 'Temporary node id that later operations in this transaction may reference.' },
-            nodeId: { type: 'string', minLength: 1, description: 'Required by node.update, node.delete, and node.duplicate.' },
+            nodeId: { type: 'string', minLength: 1, description: 'Required by node.update, node.set-prompt, node.delete, and node.duplicate.' },
+            promptParts: {
+                type: 'array', maxItems: 256,
+                description: 'For node.set-prompt: replace the prompt with ordered text and real reference capsules. Use {text:"..."} or {sourceNodeId:"..."}; sources must be connected first. Repeated sources create repeated capsules. An empty array clears the prompt and capsules.',
+                items: { oneOf: [
+                    { type: 'object', properties: { text: { type: 'string', maxLength: 60000 } }, required: ['text'], additionalProperties: false },
+                    { type: 'object', properties: { sourceNodeId: { type: 'string', minLength: 1 } }, required: ['sourceNodeId'], additionalProperties: false }
+                ] }
+            },
             sourceId: { type: 'string', minLength: 1, description: 'Legacy alias for nodeId in node.duplicate.' },
             connectionId: { type: 'string', minLength: 1, description: 'Connection id required by connection.delete unless from and to are supplied.' },
             nodeType: { type: 'string', enum: ['text', 'image', 'video', 'batch'], description: 'Operation node type for node.create.' },
@@ -171,7 +180,8 @@ function operationInputSchema() {
                     config: { type: 'object', additionalProperties: true },
                     model: {},
                     tags: {},
-                    metadata: {}
+                    metadata: {},
+                    referenceAnnotation: { type: 'string', maxLength: 80, description: 'Material role or purpose shown beside its thumbnail and in reference capsules. Empty text clears the annotation; does not rename or modify the file.' }
                 },
                 additionalProperties: false
             },

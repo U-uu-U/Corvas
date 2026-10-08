@@ -47,6 +47,20 @@ test('sync image latency is usable only when output exists and task is complete'
     const result = aggregate([row('a', { kind: 'image', async: false, latencyMs: 65000, response: { hasOutput: true } })]);
     assert.equal(result.averageSeconds, 65);
 });
+
+test('verified terminal relay elapsed time supplies video duration without accepting HTTP latency', () => {
+    const record = row('terminal', { response: { states: ['completed'] }, latencyMs: 19,
+        completionTimeSource: 'relay_terminal_elapsed', completionElapsedMs: 405916 });
+    const result = aggregate([record]);
+    assert.equal(result.averageSeconds, 406);
+    assert.deepEqual(result.sampleDurationsSeconds, [405.916]);
+    assert.equal(result.state, 'unknown');
+    assert.equal(result.reason, 'insufficient');
+    assert.equal(aggregate([{ ...record, completionTimeSource: 'http' }]).averageSeconds, null);
+    assert.equal(aggregate([{ ...record, completionElapsedMs: 99999999 }]).averageSeconds, null);
+    assert.equal(aggregate([{ ...record, response: { states: ['queued'] } }]).averageSeconds, null);
+    assert.equal(aggregate([{ ...record, response: { states: ['completed'], completedAt: iso(-300000) } }]).averageSeconds, 300);
+});
 test('old evidence and insufficient samples are gray; sites/models never mix', () => {
     const result = aggregate(['a', 'b', 'c'].map(key => row(key, { createdAt: iso(-8 * 3600000), response: { states: ['completed'] } })));
     assert.equal(result.state, 'unknown');

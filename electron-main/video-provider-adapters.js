@@ -12,6 +12,20 @@ const ZHUBO_VIDEO_MODELS = Object.freeze({
     'seedance-2.5-1080p': { resolution: '1080p', maxDuration: 30, audioMegabytes: 20, audioExtensions: ['.mp3', '.wav'] }
 });
 
+const HM_SEEDANCE20_MODELS = Object.freeze({
+    'SD2.0FAST813': { resolutions: ['720p', '1080p', '2k'], references: { image: 8, video: 1, audio: 3 } },
+    'SD2.0MINI503': { resolutions: ['720p'], references: { image: 5, video: 0, audio: 3 } }
+});
+
+function getHmSeedance20Spec(model, endpoint) {
+    const id = String(model || '').trim();
+    if (!Object.hasOwn(HM_SEEDANCE20_MODELS, id)) return null;
+    try {
+        return ['art.ravenhash.org', 'cart.ravenhash.org', 'video.zhubo.asia']
+            .includes(new URL(String(endpoint || '').trim()).hostname.toLowerCase()) ? HM_SEEDANCE20_MODELS[id] : null;
+    } catch { return null; }
+}
+
 function getZhuboVideoModelSpec(model, endpoint) {
     const id = String(model || '').trim();
     if (!Object.hasOwn(ZHUBO_VIDEO_MODELS, id)) return null;
@@ -46,7 +60,8 @@ function isSeedance25Model(model) {
 }
 
 function isSeedanceVideoModel(model) {
-    return isSeedance25Model(model) || /^seedance_v2\.0-933$/i.test(String(model || '').trim());
+    return isSeedance25Model(model) || /^seedance_v2\.0-933$/i.test(String(model || '').trim())
+        || Object.hasOwn(HM_SEEDANCE20_MODELS, String(model || '').trim());
 }
 
 function isYueqiPro720Model(model, endpoint) {
@@ -61,8 +76,19 @@ function isYueqiFastModel(model, endpoint) {
     return isSd2FastProvider({ model, endpoint });
 }
 
+function isYihongSuperModel(model, endpoint) {
+    if (!['seedance2.5 super', 'seedance-2.5-super'].includes(String(model || '').trim())) return false;
+    try {
+        return ['art.ravenhash.org', 'cart.ravenhash.org', 'yihongapi.com']
+            .includes(new URL(String(endpoint || '').trim()).hostname.toLowerCase());
+    } catch { return false; }
+}
+
 function seedanceReferenceLimits(model, endpoint) {
     const id = String(model || '').trim().toLowerCase();
+    const hm20 = getHmSeedance20Spec(model, endpoint);
+    if (hm20) return { ...hm20.references };
+    if (isYihongSuperModel(model, endpoint)) return { image: 30, video: 10, audio: 10 };
     if (getZhuboVideoModelSpec(model, endpoint)) return { image: 30, video: 0, audio: 10 };
     if (isYueqiFastModel(model, endpoint)) return { image: 9, video: 0, audio: 3 };
     if (isYueqiPro720Model(model, endpoint)) return { image: 30, video: 10, audio: 10 };
@@ -243,16 +269,18 @@ function buildSeedance25RequestBody({
     referenceVideos = [],
     referenceAudios = []
     } = {}) {
-    const label = /^seedance_v2\.0-933$/i.test(String(model || '').trim()) ? 'Seedance 2.0' : 'Seedance 2.5';
+    const hm20 = getHmSeedance20Spec(model, endpoint);
+    const label = hm20 || /^seedance_v2\.0-933$/i.test(String(model || '').trim()) ? 'Seedance 2.0' : 'Seedance 2.5';
     const isYueqiPro720 = isYueqiPro720Model(model, endpoint);
+    const isYihongSuper = isYihongSuperModel(model, endpoint);
     const zhuboSpec = getZhuboVideoModelSpec(model, endpoint);
-    const minDuration = isYueqiPro720 ? 1 : 4;
+    const minDuration = isYihongSuper ? 5 : isYueqiPro720 ? 1 : 4;
     const maxDuration = zhuboSpec?.maxDuration ?? (isYueqiPro720 ? 60 : label === 'Seedance 2.0' ? 15 : 30);
     const promptValue = String(prompt || '').trim();
     if (!promptValue) throw new Error(`${label} 提示词不能为空`);
 
     const durationValue = duration === undefined || duration === null || duration === ''
-        ? (isYueqiPro720 ? 10 : maxDuration)
+        ? (isYihongSuper ? 5 : isYueqiPro720 ? 10 : maxDuration)
         : Number(duration);
     if (isSeedance25BackupModel(model)) {
         if (durationValue !== 30) {
@@ -282,6 +310,7 @@ function buildSeedance25RequestBody({
 
     const ratioValue = aspectRatio == null ? '' : String(aspectRatio).trim();
     const allowedRatios = ['16:9', '9:16', '1:1', '4:3', '3:4'];
+    if (isYihongSuper) allowedRatios.push('21:9');
     if (ratioValue && !allowedRatios.includes(ratioValue)) {
         throw new Error(`${label} 不支持画幅比例 ${ratioValue}`);
     }
@@ -289,16 +318,29 @@ function buildSeedance25RequestBody({
     if (isYueqiPro720 && resolution && resolution !== '720p') {
         throw new Error('Seedance 2.5 Pro 720 仅支持 720p');
     }
+    if (isYihongSuper && resolution && resolution !== '720p') {
+        throw new Error('Seedance 2.5 Super 仅支持 720p');
+    }
+    if (hm20 && resolution && !hm20.resolutions.includes(resolution)) {
+        throw new Error(`Seedance 2.0 当前模型仅支持 ${hm20.resolutions.join(' / ')}`);
+    }
+    if (hm20 && [...images, ...videos, ...audios].some(value => {
+        try { return !['http:', 'https:'].includes(new URL(value).protocol); } catch { return true; }
+    })) throw new Error('Seedance 2.0 参考素材必须是公网链接');
+    if (isYihongSuper && [...images, ...videos, ...audios].some(value => {
+        try { return new URL(value).protocol !== 'https:'; } catch { return true; }
+    })) throw new Error('Seedance 2.5 Super 参考素材必须是 HTTPS 链接');
     if (zhuboSpec && resolution && resolution !== zhuboSpec.resolution) {
         throw new Error(`主播当前模型仅支持 ${zhuboSpec.resolution}`);
     }
     const body = {
         model: String(model || '').trim(),
         prompt: promptValue,
-        resolution: zhuboSpec?.resolution ?? (String(model).toLowerCase() === 'seedance-2.5-pro' ? (resolution || '720p') : '720p'),
+        resolution: hm20 ? (resolution || '720p')
+            : zhuboSpec?.resolution ?? (String(model).toLowerCase() === 'seedance-2.5-pro' ? (resolution || '720p') : '720p'),
         seconds: durationValue
     };
-    if (!zhuboSpec && !['480p', '720p'].includes(body.resolution)) throw new Error(`${label} Pro 仅支持 480p 或 720p`);
+    if (!hm20 && !zhuboSpec && !['480p', '720p'].includes(body.resolution)) throw new Error(`${label} Pro 仅支持 480p 或 720p`);
     if (ratioValue) body.ratio = ratioValue;
     if (images.length > 0) body.image_urls = images;
     if (videos.length > 0) body.video_urls = videos;
@@ -463,6 +505,7 @@ function buildVideoGenerationEndpoint(endpoint, model) {
         try {
             const url = new URL(String(endpoint || '').trim());
             const isDirectUpstream = url.hostname.toLowerCase() === 'video.zhubo.asia'
+                || (url.hostname.toLowerCase() === 'yihongapi.com' && isYihongSuperModel(model, endpoint))
                 || (url.hostname.toLowerCase() === 'yueqi.icu' && isYueqiPro720Model(model, endpoint))
                 || /\/v1\/videos\/?$/i.test(url.pathname);
             return isDirectUpstream
@@ -681,6 +724,7 @@ module.exports = {
     getVideoTaskProgress,
     getVideoTaskStatus,
     getZhuboVideoModelSpec,
+    getHmSeedance20Spec,
     isMiniMaxH3Model,
     isMiniMaxH3NativeEndpoint,
     isMiniMaxH3PerSecondEndpoint,
@@ -688,6 +732,7 @@ module.exports = {
     isSeedance25BackupModel,
     isSeedance25Model,
     isSeedanceVideoModel,
+    isYihongSuperModel,
     isYueqiFastModel,
     seedanceReferenceLimits,
     normalizeMiniMaxH3RequestModel,

@@ -366,6 +366,12 @@ function createGateway(options = {}) {
                     } catch { /* Unparseable errors become generic safe errors. */ }
                     if (!normalizedError && !parsed) {
                         fail(status, { error: { message: 'Relay JSON body cannot be safely inspected' } }, { transport: !normalizedError });
+                    } else if (query && value?.corvas_query_state === 'unavailable'
+                        && ['queued', 'pending', 'processing', 'in_progress'].includes(value.status)
+                        && findExplicitTaskId(value)) {
+                        fail(503, { id: findExplicitTaskId(value), task_id: findExplicitTaskId(value),
+                            status: 'in_progress', error: { message: '任务状态暂时无法查询，请稍后继续查询原任务' } },
+                        { code: 'RH_SERVICE_UNAVAILABLE', transport: true, terminal: false });
                     } else if (normalizedError || (value && failureNode(value))) {
                         fail(status, value || { error: { message: isJson ? 'Invalid JSON error response' : decoded.toString('utf8') } }, { terminal: query && isTerminalFailure(value) });
                     } else {

@@ -8,6 +8,31 @@ const Bridge = require('./mcp-bridge');
 const { mapLocalError } = require('../shared/public-api-error.cjs');
 const portraitReason = 'For 肖像保护, Dreamina Seedance 2.5 只支持生成包含您自己的视频. 请换一张参考图, or create a video from text。';
 
+test('retryable task-query errors reconnect to the same accepted video task', async () => {
+    const { normalizeRelayFailure } = require('../shared/public-api-error.cjs');
+    const unavailable = normalizeRelayFailure(503, { id: '67388', task_id: '67388', status: 'in_progress',
+        error: { message: 'Task query temporarily unavailable' } },
+    { query: true, code: 'RH_SERVICE_UNAVAILABLE', transport: true });
+    const requests = [];
+    const progress = [];
+    const result = await Bridge.pollOpenAiVideoTask('https://art.ravenhash.org/v1/video/generations',
+        'fixture', '67388', { id: '67388', status: 'queued' }, {
+            model: 'b_seedance_v2.0', wait: async () => {}, onProgress: event => progress.push(event.stage),
+            fetchTask: async (url, options) => {
+                requests.push({ url, method: options.method });
+                const body = requests.length === 1 ? unavailable.body : { id: '67388',
+                    status: requests.length === 2 ? 'in_progress' : 'completed',
+                    ...(requests.length === 3 ? { video_url: 'https://cdn.test/result.mp4' } : {}) };
+                return { response: { ok: requests.length !== 1, status: requests.length === 1 ? 503 : 200 },
+                    text: JSON.stringify(body) };
+            }
+        });
+    assert.equal(result.taskId, '67388');
+    assert.equal(requests.length, 3);
+    assert.ok(requests.every(request => request.method === 'GET' && request.url.includes('/67388')));
+    assert.deepEqual(progress, ['queued', 'recovering', 'processing', 'download']);
+});
+
 test('pending video URLs are ignored until the existing task returns a completed result', async () => {
     let polls = 0;
     const progress = [];

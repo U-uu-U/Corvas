@@ -43,6 +43,37 @@ async function fixture(t, handler, options = {}) {
     return { directory, port, admin: id => request(port, `/internal/diagnostics?requestId=${id}`, { headers: { 'x-corvas-diagnostics-key': SECRET } }) };
 }
 
+test('a transient query marker becomes retryable 503 without confirming generation failure', async t => {
+    const f = await fixture(t, (_req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ id: '67388', task_id: '67388', status: 'in_progress',
+            corvas_query_state: 'unavailable', retry_after: 5 }));
+    });
+    const response = await request(f.port, '/v1/tasks/67388');
+    assert.equal(response.status, 503);
+    assert.equal(response.json.error.code, 'RH_SERVICE_UNAVAILABLE');
+    assert.equal(response.json.error.confirmedFailure, false);
+    assert.equal(response.json.error.retryable, true);
+    assert.equal(response.json.error.submissionState, 'accepted');
+    assert.equal(response.json.error.action, 'retry_query');
+    assert.equal(response.json.task_id, '67388');
+    assert.equal(response.json.status, undefined);
+});
+
+test('a query marker does not override an explicitly failed task or a submission', async t => {
+    const f = await fixture(t, (req, res) => {
+        req.resume();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ id: '67388', task_id: '67388', status: req.method === 'GET' ? 'failed' : 'queued',
+            corvas_query_state: 'unavailable', ...(req.method === 'GET' ? { error: { message: 'Content rejected' } } : {}) }));
+    });
+    const failed = await request(f.port, '/v1/tasks/67388');
+    assert.equal(failed.json.error.confirmedFailure, true);
+    const submission = await request(f.port, '/v1/video/generations', { method: 'POST' });
+    assert.equal(submission.status, 200);
+    assert.equal(submission.json.status, 'queued');
+});
+
 test('generation statistics require private auth and never reach the generation upstream', async t => {
     let reads = 0;
     const f = await fixture(t, () => assert.fail('Statistics must never reach upstream'), {

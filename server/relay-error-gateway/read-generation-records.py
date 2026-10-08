@@ -3,10 +3,12 @@ import argparse
 import hashlib
 import json
 import subprocess
+from datetime import datetime, timedelta
 
 WRAPPERS = ('data', 'result', 'output', 'task', 'response', 'Response', 'metadata')
 ERROR_KEYS = ('code', 'type', 'message', 'msg', 'reason', 'detail', 'error', 'error_code',
               'failReason', 'fail_reason', 'failure_reason', 'error_message', 'status_msg')
+SUCCESS = {'completed', 'succeeded', 'success', 'done', 'finished'}
 
 
 def error_fields(value, depth=0):
@@ -47,6 +49,37 @@ def project_response(text):
     return {'states': states, 'completedAt': completed, 'hasOutput': output, 'errors': errors}
 
 
+def project_record(row):
+    identity = [row['user_id'], row['channel_id'], row['model'], row['task_id'] or row['log_id'] or row['id']]
+    response = project_response(row['response_content'])
+    record = {'key': hashlib.sha256(json.dumps(identity).encode()).hexdigest(),
+        'sequence': row['id'], 'model': row['model'], 'createdAt': row['created_at'],
+        'statusCode': row['status_code'], 'completed': row['is_completed'] == 1,
+        'async': bool(row['task_id']), 'kind': 'image' if '/images/' in row['endpoint'] else 'video',
+        'latencyMs': row['latency_ms'], 'error': error_fields(row['error_message']), 'response': response}
+    # These relay backends replace latency_ms on terminal settlement with
+    # CURRENT_TIMESTAMP - created_at. Pending HTTP submission latency is not usable.
+    elapsed = row['latency_ms']
+    if (record['kind'] == 'video' and record['async'] and record['completed']
+            and 200 <= record['statusCode'] < 300 and record['statusCode'] != 202
+            and SUCCESS.intersection(response.get('states', []))
+            and not record['error'] and not response.get('errors')
+            and isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool)
+            and 0 < elapsed <= 7 * 86400000):
+        record['completionElapsedMs'] = elapsed
+        record['completionTimeSource'] = 'relay_terminal_elapsed'
+        # Populate the established projection contract so live readers can adopt
+        # the repair without restarting a gateway that has active generations.
+        if not response.get('completedAt'):
+            try:
+                started = datetime.fromisoformat(str(row['created_at']).replace('Z', '+00:00'))
+                if started.tzinfo is not None:
+                    response['completedAt'] = (started + timedelta(milliseconds=elapsed)).isoformat()
+            except (ValueError, OverflowError):
+                pass
+    return record
+
+
 def read_records(site):
     container = {'art': 'tokensbyte-postgres', 'cart': 'tkeapi-postgres'}[site]
     names = subprocess.check_output(['docker', 'exec', container, 'sh', '-c',
@@ -67,15 +100,7 @@ def read_records(site):
         '-U', names[0], '-d', names[1], '-v', 'ON_ERROR_STOP=1'], input=sql, text=True,
         capture_output=True, check=True, timeout=12)
     rows = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-    records = []
-    for row in rows[:5000]:
-        identity = [row['user_id'], row['channel_id'], row['model'], row['task_id'] or row['log_id'] or row['id']]
-        records.append({'key': hashlib.sha256(json.dumps(identity).encode()).hexdigest(),
-            'sequence': row['id'], 'model': row['model'], 'createdAt': row['created_at'],
-            'statusCode': row['status_code'], 'completed': row['is_completed'] == 1,
-            'async': bool(row['task_id']), 'kind': 'image' if '/images/' in row['endpoint'] else 'video',
-            'latencyMs': row['latency_ms'], 'error': error_fields(row['error_message']),
-            'response': project_response(row['response_content'])})
+    records = [project_record(row) for row in rows[:5000]]
     return {'records': records, 'truncated': len(rows) > 5000}
 
 

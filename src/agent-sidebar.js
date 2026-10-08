@@ -369,6 +369,16 @@ export class AgentSidebar {
         this.rhinoPanel = createRhinoPanel(handoffOptions('rhino'));
         this.blenderPanel = createBlenderPanel(handoffOptions('blender'));
         this.applicationLauncher = createApplicationLauncher({ onSelect: mode => {
+            if (mode === 'settings') {
+                this._closeAgentHeaderPopovers();
+                this.setMode(this.currentMode === 'settings' && document.body.classList.contains('agent-open')
+                    ? 'canvas' : 'settings');
+                return;
+            }
+            if (mode === 'relay') {
+                if (!window.flowCanvas?.relay) throw new Error('请重启 Corvas 后打开中转站');
+                return window.flowCanvas.relay.open();
+            }
             if (mode === 'tripo' || mode === 'jimeng') {
                 const api = window.flowCanvas?.creativeWeb;
                 if (!api) throw new Error('请重启 Corvas 后打开网页创作平台');
@@ -2641,6 +2651,13 @@ export class AgentSidebar {
             this._renderGenerationTasks();
         });
         this.taskHistoryList?.addEventListener('click', (event) => {
+            const relayButton = event.target.closest('[data-relay-task]');
+            if (relayButton) {
+                const task = this.generationTasks.find(item => item.id === relayButton.dataset.relayTask);
+                void window.flowCanvas?.relay?.open({ clientTaskId: task?.id, taskId: task?.taskId, site: task?.site })
+                    ?.catch(error => showStatusNotification(error.message, { kind: 'error' }));
+                return;
+            }
             const reportButton = event.target.closest('[data-report-task]');
             if (reportButton) {
                 this._reportGenerationTask(reportButton.dataset.reportTask);
@@ -2697,12 +2714,6 @@ export class AgentSidebar {
                 this._closeAgentComposerPopovers();
                 this._closeAgentHeaderPopovers();
             }
-        });
-        // 左侧工具栏中的齿轮切换设置面板。
-        document.getElementById('agentSettingsBtn')?.addEventListener('click', () => {
-            this._closeAgentHeaderPopovers();
-            this.setMode(this.currentMode === 'settings' && document.body.classList.contains('agent-open')
-                ? 'canvas' : 'settings');
         });
 
         // 模板点击
@@ -2906,8 +2917,13 @@ export class AgentSidebar {
         const clientTaskId = String(event.clientTaskId || '').trim();
         const remoteTaskId = String(event.remoteTaskId || event.taskId || '').trim();
         const task = this.generationTasks.find(item => item.id === clientTaskId)
-            || this.generationTasks.find(item => item.taskId === remoteTaskId);
-        if (!task) return;
+            || this.generationTasks.find(item => item.taskId === remoteTaskId && (!event.site || item.site === event.site));
+        if (!task) {
+            if (event.site) void this._syncRecoverableGenerations().then(() => {
+                if (this.generationTasks.some(item => item.id === clientTaskId)) this._handleTaskCompleted(event);
+            });
+            return;
+        }
         if (this.recoveringGenerationTasks?.has(task.id) && !event.recovered) return;
         this._updateGenerationTask(task.id, {
             status: 'success',
@@ -3390,6 +3406,7 @@ export class AgentSidebar {
             const outputPaths = status === 'success' ? this._generationTaskOutputPaths(task) : [];
             const canLocate = this._canLocateGenerationTask(task);
             const recoveryControls = `<div class="agent-task-recovery">
+                ${task.kind === 'video' && task.taskId ? `<button type="button" data-relay-task="${this._escapeTaskText(task.id)}"><svg class="flow-icon flow-icon-xs"><use href="./icons/flow-icons.svg#icon-window"></use></svg>查看后台任务</button>` : ''}
                 <button type="button" data-recover-task="${this._escapeTaskText(task.id)}" ${recovering ? 'disabled' : ''}>${recovering ? '正在恢复' : (promptModerationFailed ? '继续恢复' : '拉取产物')}</button>
                 ${recovering ? `<button type="button" data-stop-recovery="${this._escapeTaskText(task.id)}">停止</button>` : ''}
             </div>`;
@@ -3504,6 +3521,7 @@ export class AgentSidebar {
                 if (!task) {
                     if (!record.taskId && !record.filePath) continue;
                     task = { id: record.clientTaskId, kind: record.kind, projectId: record.projectId,
+                        site: errorReportContract.classifyErrorReportSite(record.endpoint),
                         providerId: record.providerId, providerName: record.model, model: record.model,
                         prompt: record.prompt, sourcePaths: record.sourcePaths || [], params: record.params || {}, attempts: 1,
                         createdAt: record.createdAt || record.updatedAt, updatedAt: record.updatedAt,

@@ -145,6 +145,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         assert.equal(await dialog.locator('[data-report-submit]').isDisabled(), true);
         assert.equal(await app.evaluate(() => globalThis.errorReportSmoke.requests.length), 0);
         await dialog.locator('[data-report-close]').click();
+        await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
         await page.locator('#agentApiSettingsTab').click();
         await page.locator('#diagnosticsSettings summary').click();

@@ -20,6 +20,9 @@ test('registry exposes stable OpenAI-compatible tool definitions', () => {
     const applySchema = tools.find(tool => tool.function.name === 'flow_canvas.board.transaction.apply').function.parameters;
     assert.equal(applySchema.properties.schema.const, 'flow-canvas.board-transaction.v1');
     assert.ok(applySchema.properties.operations.items.properties.patch.properties.config);
+    assert.ok(applySchema.properties.operations.items.properties.patch.properties.referenceAnnotation);
+    assert.ok(applySchema.properties.operations.items.properties.op.enum.includes('node.set-prompt'));
+    assert.ok(applySchema.properties.operations.items.properties.promptParts);
     assert.deepEqual(applySchema.properties.operations.items.properties.mode.enum, ['horizontal', 'vertical', 'grid']);
 });
 
