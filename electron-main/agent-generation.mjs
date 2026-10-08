@@ -92,6 +92,7 @@ const error = (code, message) => Object.assign(new Error(message), { code });
 const fingerprint = (node, connections) => crypto.createHash('sha256').update(JSON.stringify({
     id: node.id, kind: node.kind, nodeType: node.nodeType, config: node.config,
     filePath: node.filePath,
+    referenceAnnotation: node.referenceAnnotation,
     primaryResult: getGeneratorResultEntries(node)[0]?.filePath || null,
     generation: node.kind === 'op' ? undefined : node.generation,
     inputs: connections.filter(c => c.to.nodeId === node.id && c.kind !== 'history')
@@ -239,7 +240,11 @@ export class AgentGeneration {
             }
             if (!targets.has(id) && this._pathFor(node)) continue;
             let config = copy(node.config || {});
-            if (node.id === run.source?.nodeId) Object.assign(config, run.source.parameters || {});
+            if (node.id === run.source?.nodeId) {
+                const currentPromptFields = Object.fromEntries(Object.entries(config).filter(([key]) =>
+                    key.startsWith('referenceCitation') || key === 'referenceMaterialNotes' || key === 'agentCompiledPrompt'));
+                Object.assign(config, run.source.parameters || {}, currentPromptFields);
+            }
             if (node.id === run.source?.nodeId && excluded.size) {
                 const removedIds = new Set(removedInputs.map(connection => connection.from.nodeId));
                 const removedConnections = new Set(removedInputs.map(connection => connection.id));
@@ -356,7 +361,6 @@ export class AgentGeneration {
             return { ...reference, nodeId: generatedSource?.nodeIds?.[0] || reference.nodeId };
         });
         const draft = copy(config);
-        if (step.nodeId === run.source?.nodeId && typeof run.source.prompt === 'string') draft.prompt = run.source.prompt;
         for (const occurrence of draft.referenceCitationOccurrences || []) {
             const index = references.findIndex(reference => reference.nodeId === occurrence.sourceNodeId);
             if (index >= 0) occurrence.sourceNodeId = outputReferences[index].nodeId;

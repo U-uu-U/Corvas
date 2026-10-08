@@ -96,6 +96,8 @@ export class SidebarManager {
             exportMdBtn: document.getElementById('exportMdBtn'),
             resourceSaverBtn: document.getElementById('resourceSaverBtn'),
             resourceSaverState: document.getElementById('resourceSaverState'),
+            boardResourceSaverBtn: document.getElementById('boardResourceSaverBtn'),
+            boardResourceSaverLabel: document.getElementById('boardResourceSaverLabel'),
             stats: document.getElementById('sidebarStats'),
             alwaysOnTopBtn: document.getElementById('alwaysOnTopBtn'),
             alwaysOnTopLabel: document.getElementById('alwaysOnTopLabel')
@@ -1320,24 +1322,37 @@ export class SidebarManager {
         if (this.dom.exportMdBtn) {
             this.dom.exportMdBtn.addEventListener('click', () => this.emit('exportMd'));
         }
-        if (this.dom.resourceSaverBtn) {
-            this.dom.resourceSaverBtn.addEventListener('click', () => {
-                const enabled = !this.dom.resourceSaverBtn.classList.contains('active');
+        for (const button of [this.dom.resourceSaverBtn, this.dom.boardResourceSaverBtn]) {
+            button?.addEventListener('click', () => {
+                const enabled = !this.storeData.resourceSaver;
                 this.storeData.resourceSaver = enabled;
-                this._updateResourceSaverButton(enabled);
+                this._updateResourceSaverButton(enabled, true);
                 this._saveStore();
                 this.emit('resourceSaverChange', enabled);
             });
         }
     }
 
-    _updateResourceSaverButton(enabled) {
+    _updateResourceSaverButton(enabled, showLabel = false) {
         if (this.dom.resourceSaverBtn) {
             this.dom.resourceSaverBtn.classList.toggle('active', enabled);
             this.dom.resourceSaverBtn.setAttribute('aria-checked', enabled ? 'true' : 'false');
         }
         if (this.dom.resourceSaverState) {
             this.dom.resourceSaverState.textContent = enabled ? '开启' : '关闭';
+        }
+        const button = this.dom.boardResourceSaverBtn;
+        if (button) {
+            const mode = enabled ? '节约' : '清晰';
+            button.classList.toggle('active', enabled);
+            button.setAttribute('aria-checked', enabled ? 'true' : 'false');
+            button.title = `当前：${mode}；点击切换为${enabled ? '清晰' : '节约'}`;
+            if (this.dom.boardResourceSaverLabel) this.dom.boardResourceSaverLabel.textContent = mode;
+            if (showLabel) {
+                clearTimeout(this._resourceSaverLabelTimer);
+                button.classList.add('is-label-visible');
+                this._resourceSaverLabelTimer = setTimeout(() => button.classList.remove('is-label-visible'), 1000);
+            }
         }
     }
 

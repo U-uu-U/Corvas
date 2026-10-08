@@ -11,6 +11,7 @@ import { DEFAULT_MODEL_CONFIG } from '../src/model-config-default.js';
 import { imageGenerationRequestParams } from '../src/generation-request-params.js';
 import { createAgentServices } from './agent-services.cjs';
 import { applyGeneratorStackResult } from '../shared/generation-result-state.mjs';
+import { applyBoardTransaction, createBoardSnapshot } from '../src/board-transaction.js';
 
 const copy = value => structuredClone(value);
 const op = (id, nodeType = 'image', config = {}) => ({
@@ -959,6 +960,46 @@ describe('AgentGeneration execution', () => {
         assert.equal(output.generation.agentRunId, run.id);
         assert.equal(output.resultEntries[0].filePath, result.filePaths[0]);
         assert.equal(h.projects.original.connections[0].kind, 'history');
+    });
+
+    test('Agent-created annotations and capsules reach generation despite stale source context', async t => {
+        const h = await setup(t);
+        const first = await h.file('first.png'), second = await h.file('second.png');
+        h.projects.original.items.push({ id: 'first', kind: 'media', mediaType: 'image', filePath: first },
+            { id: 'second', kind: 'media', mediaType: 'image', filePath: second });
+        h.projects.original.connections = [edge('second', 'image'), edge('first', 'image')];
+        const transaction = { id: 'agent-citations', baseRevision: 0, operations: [
+            { op: 'node.update', nodeId: 'first', patch: { referenceAnnotation: '男主外观' } },
+            { op: 'node.update', nodeId: 'second', patch: { referenceAnnotation: '办公室背景' } },
+            { op: 'node.set-prompt', nodeId: 'image', promptParts: [
+                { sourceNodeId: 'first' }, { text: '进入' }, { sourceNodeId: 'second' }, { text: '，保持' }, { sourceNodeId: 'first' }, { text: '外观' }
+            ] }
+        ] };
+        const applied = applyBoardTransaction(createBoardSnapshot(h.projects.original), transaction);
+        Object.assign(h.projects.original, { items: applied.snapshot.items, connections: applied.snapshot.connections });
+        const source = { nodeId: 'image', prompt: 'OLD PROMPT', parameters: {
+            referenceCitationIds: [], referenceCitationOccurrences: [], referenceCitationLabels: [], referenceMaterialNotes: [] } };
+        const run = h.plan(['image'], source);
+        assert.match(run.steps[0].prompt, /素材用途标注：图一=办公室背景；图二=男主外观/);
+        assert.match(run.steps[0].prompt, /图二进入图一，保持图二外观$/);
+        const result = await h.execute(run.steps[0], run);
+        assert.deepEqual(h.requests[0].body.sourceReferences.map(ref => ref.filePath), [second, first]);
+        assert.equal(h.requests[0].body.promptDraftConfig.prompt, '进入，保持外观');
+        assert.equal(h.requests[0].body.promptDraftConfig.referenceCitationOccurrences.length, 3);
+        const output = h.projects.original.items.find(node => node.id === result.nodeIds[0]);
+        assert.equal(getGenerationReuseConfig(output).referenceCitationOccurrences.length, 3);
+        assert.deepEqual(h.requests[0].body.referenceBindings.map(ref => ref.annotation), ['办公室背景', '男主外观']);
+    });
+
+    test('changed material annotations require a fresh Agent plan before spending', async t => {
+        const h = await setup(t);
+        const filePath = await h.file('reference.png');
+        h.projects.original.items.push({ id: 'ref', kind: 'media', mediaType: 'image', filePath, referenceAnnotation: '原角色' });
+        h.projects.original.connections = [edge('ref', 'image')];
+        const run = h.plan();
+        h.projects.original.items.find(node => node.id === 'ref').referenceAnnotation = '新角色';
+        await assert.rejects(h.execute(run.steps[0], run), { code: 'SOURCE_CHANGED' });
+        assert.equal(h.requests.length, 0);
     });
 
     test('approved plans reuse an existing named empty generator node instead of creating a result child', async t => {

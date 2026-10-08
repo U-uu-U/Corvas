@@ -26,6 +26,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await app.evaluate(() => console.error('diagnostic-main-fixture fixture-private-credential Bearer another-secret'));
         await page.evaluate(() => window.flowCanvas.mcp.generateImage({ clientTaskId: 'diagnostic-task', projectId: 'diagnostic-project', nodeId: 'diagnostic-node' }));
         await page.waitForFunction(async () => (await window.flowCanvas.diagnostics.summary()).errors.some(entry => JSON.stringify(entry).includes('diagnostic-unhandled-fixture')));
+        await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
         await page.locator('#diagnosticsSettings summary').click();
         await page.locator('[data-debug=copy]').click();

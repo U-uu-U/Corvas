@@ -24,8 +24,10 @@ export function describeGenerationHealth(metric, now = Date.now()) {
         '黄色：成功，但生成耗时超过 30 分钟',
         `平均耗时样本 ${metric?.durationSamples || 0} 次（含排队）`,
         `参数、账户或审核等原因排除 ${metric?.excludedCount || 0} 次`].filter(Boolean).join('\n');
+    // The aggregate needs multiple samples; each confirmed task is still observable.
+    const showSamples = fresh && (state !== 'unknown' || metric.reason === 'insufficient');
     const lights = samples.map((value, index) => {
-        if (state === 'unknown') return 'unknown';
+        if (!showSamples) return 'unknown';
         const elapsed = metric?.sampleDurationsSeconds?.[index];
         if (value === 'success' && Number.isFinite(elapsed) && elapsed > 1800) return 'slow';
         return ['success', 'failure'].includes(value) ? value : 'unknown';

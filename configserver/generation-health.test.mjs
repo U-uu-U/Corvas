@@ -34,6 +34,21 @@ test('invalid statistics fail closed and cannot leak extra fields', () => {
     assert.equal(projectHealth({ ...metric, averageSeconds: NaN }, checkedAt, now).state, 'unknown');
 });
 
+test('single confirmed outcomes remain visible while aggregate health stays insufficient', () => {
+    const single = { ...metric, state: 'unknown', reason: 'insufficient', samples: ['success'],
+        successCount: 1, failureCount: 0, durationSamples: 1, averageSeconds: 406,
+        sampleDurationsSeconds: [405.916] };
+    const display = describeGenerationHealth(single, now);
+    assert.equal(display.state, 'unknown');
+    assert.match(display.title, /有效样本不足/);
+    assert.deepEqual(display.samples, [...Array(9).fill('unknown'), 'success']);
+    assert.equal(display.duration, '平均 6分46秒');
+    assert.equal(describeGenerationHealth({ ...single, sampleDurationsSeconds: [1801] }, now).samples.at(-1), 'slow');
+    assert.equal(describeGenerationHealth({ ...single, samples: ['failure'] }, now).samples.at(-1), 'failure');
+    assert.ok(describeGenerationHealth(single, now + 180001).samples.every(value => value === 'unknown'));
+    assert.ok(describeGenerationHealth({ ...single, reason: 'unavailable' }, now).samples.every(value => value === 'unknown'));
+});
+
 test('per-task durations survive projection without changing the legacy health envelope', () => {
     const config = { models: [{ kind: 'video', catalog: { model: 'm', hosts: ['art.ravenhash.org'] } }] };
     const result = withCatalogGenerationHealth(config, { 'art.ravenhash.org': { checkedAt,

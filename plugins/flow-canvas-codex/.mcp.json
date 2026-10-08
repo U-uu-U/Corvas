@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "flow-canvas": {
+      "command": "node",
+      "args": [
+        "scripts/launch.cjs"
+      ],
+      "cwd": ".",
+      "enabled": true,
+      "env_vars": [
+        "FLOW_CANVAS_ROOT",
+        "FLOW_CANVAS_MCP_ENTRY",
+        "FLOW_CANVAS_BRIDGE_URL",
+        "FLOW_CANVAS_MCP_PORT",
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+        "LOCALAPPDATA"
+      ],
+      "startup_timeout_sec": 15,
+      "tool_timeout_sec": 3600
+    }
+  }
+}

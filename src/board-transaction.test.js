@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { restoreReferenceCitations, referenceCitationGuide } from './reference-citations.js';
 
 let B;
 test.before(async () => {
@@ -52,6 +53,54 @@ test('viewport snapshot includes every node when bounds are omitted', () => {
         items: [op('left', 'text', {}, -1000, -500), op('right', 'text', {}, 1200, 900)]
     }, { scope: 'viewport' });
     assert.deepEqual(current.items.map(item => item.id), ['left', 'right']);
+});
+
+test('Agent transactions annotate materials and create repeated capsules with stable source identities', () => {
+    const current = snapshot({ items: [media('a', 'C:/a.png'), media('b', 'C:/b.png')], connections: [] });
+    const transaction = { id: 'annotate-and-cite', baseRevision: 4, operations: [
+        { op: 'node.update', nodeId: 'a', patch: { referenceAnnotation: '  男主\n外观 ' } },
+        { op: 'node.update', nodeId: 'b', patch: { referenceAnnotation: '办公室' } },
+        { op: 'node.create', tempId: 'target', nodeType: 'video' },
+        { op: 'connection.create', from: { nodeId: 'b' }, to: { nodeId: 'target' } },
+        { op: 'connection.create', from: { nodeId: 'a' }, to: { nodeId: 'target' } },
+        { op: 'node.set-prompt', nodeId: 'target', promptParts: [
+            { sourceNodeId: 'a' }, { text: '走入' }, { sourceNodeId: 'b' }, { text: '，保持' }, { sourceNodeId: 'a' }, { text: '外观。' }
+        ] }
+    ] };
+    const preview = B.previewBoardTransaction(current, transaction);
+    assert.equal(preview.ok, true);
+    assert.equal(current.items[0].referenceAnnotation, undefined);
+    const applied = B.applyBoardTransaction(current, transaction);
+    const next = applied.snapshot;
+    assert.equal(next.items[0].referenceAnnotation, '男主 外观');
+    assert.equal(next.items[0].filePath, current.items[0].filePath);
+    const config = next.items.find(item => item.id === applied.tempIds.target).config;
+    assert.equal(config.prompt, '走入，保持外观。');
+    assert.equal(restoreReferenceCitations(config.prompt, config), '图二走入图一，保持图二外观。');
+    assert.match(referenceCitationGuide(config), /图一=办公室；图二=男主 外观/);
+    assert.deepEqual(config.referenceCitationOccurrences.map(item => item.sourceNodeId), ['a', 'b', 'a']);
+    assert.equal(new Set(config.referenceCitationOccurrences.map(item => item.id)).size, 3);
+    assert.equal(applied.summary.nodesUpdated, 3);
+    const undone = B.undoBoardTransaction(next, applied.undoRecord);
+    assert.deepEqual(undone.snapshot.items, current.items);
+    assert.deepEqual(undone.snapshot.connections, current.connections);
+});
+
+test('invalid or unconnected capsules roll back all annotations; history edges cannot become reference capsules', () => {
+    const current = snapshot({ items: [media('a', 'C:/a.png'), op('target', 'video')],
+        connections: [{ id: 'history', kind: 'history', from: { nodeId: 'a', port: 'image' }, to: { nodeId: 'target', port: 'source' } }] });
+    for (const part of [{ sourceNodeId: 'a' }, { sourceNodeId: 'missing' }, { text: 'a', sourceNodeId: 'a' }]) {
+        const transaction = { id: 'invalid-capsule', baseRevision: 4, operations: [
+            { op: 'node.update', nodeId: 'a', patch: { referenceAnnotation: 'keep original' } },
+            { op: 'node.set-prompt', nodeId: 'target', promptParts: [part] }
+        ] };
+        assert.throws(() => B.applyBoardTransaction(current, transaction));
+        assert.equal(current.items[0].referenceAnnotation, undefined);
+    }
+    for (const referenceAnnotation of [{ text: 'bad' }, 'x'.repeat(81)]) {
+        assert.throws(() => B.applyBoardTransaction(current, { id: 'invalid-note', baseRevision: 4,
+            operations: [{ op: 'node.update', nodeId: 'a', patch: { referenceAnnotation } }] }));
+    }
 });
 
 test('preview resolves temporary ids and leaves the input snapshot untouched', () => {

@@ -1,0 +1,24 @@
+[Unit]
+Description=Corvas product releases and downloads
+After=network.target
+
+[Service]
+Type=simple
+User=corvasrelease
+Group=corvasrelease
+WorkingDirectory=/opt/corvas-release-page
+Environment=RELEASE_DATA_DIR=/var/lib/corvas-releases
+Environment=PORT=18091
+ExecStart=/opt/corvas-release-page/runtime/node /opt/corvas-release-page/server.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/corvas-releases
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

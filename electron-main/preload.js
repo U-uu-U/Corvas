@@ -103,6 +103,9 @@ contextBridge.exposeInMainWorld('flowCanvas', {
     creativeWeb: {
         open: platform => ipcRenderer.invoke('creative-web:open', platform)
     },
+    relay: {
+        open: options => ipcRenderer.invoke('relay-browser:open', options)
+    },
 
     rhino: {
         status: () => ipcRenderer.invoke('rhino:status'),

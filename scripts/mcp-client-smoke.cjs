@@ -47,6 +47,7 @@ const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio
         originalClipboard = await app.evaluate(({ clipboard }) => clipboard.readText());
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
+        await page.locator('#agentToggleBtn').hover();
         await page.waitForSelector('#agentSettingsBtn');
         await page.locator('#agentSettingsBtn').click();
         await page.locator('#agentApiSettingsTab').click();
@@ -117,6 +118,7 @@ const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio
             await panel.screenshot({ path: path.join(__dirname, `../output/playwright/external-handoff-${label}.png`) });
         }
         await client.close(); client = null;
+        await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
         await page.locator('#agentApiSettingsTab').click();
         await root.locator('[data-action=edit]').click();
