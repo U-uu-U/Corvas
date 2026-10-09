@@ -1,4 +1,5 @@
 import { CanvasManager } from './canvas.js';
+import './mcp-server-settings.js';
 import './mcp-client-settings.js';
 import './diagnostics-settings.js';
 import './app-update-settings.js';

@@ -71,6 +71,13 @@ contextBridge.exposeInMainWorld('flowCanvas', {
         test: request => ipcRenderer.invoke('mcp-client:test', request),
     },
 
+    mcpServer: {
+        status: () => ipcRenderer.invoke('mcp-server:status'),
+        start: () => ipcRenderer.invoke('mcp-server:start'),
+        stop: () => ipcRenderer.invoke('mcp-server:stop'),
+        copy: () => ipcRenderer.invoke('mcp-server:copy'),
+    },
+
     handoff: {
         create: request => ipcRenderer.invoke('handoff:create', request),
         list: request => ipcRenderer.invoke('handoff:list', request),
