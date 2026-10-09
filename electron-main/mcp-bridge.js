@@ -11,6 +11,7 @@ const { PlanService, DEFAULT_MCP_CONFIG } = require('../shared/plan-service-core
 const { WORKFLOW_TOOL_DEFINITIONS } = require('../shared/workflow-tools.cjs');
 const { HANDOFF_TOOL_DEFINITIONS } = require('../shared/handoff-tools.cjs');
 const { createModelConfigSnapshotReader } = require('./model-config-service.cjs');
+const { MCP_HTTP_PATH, mcpHttpUrl, handleMcpHttpRequest } = require('./mcp-http-server.cjs');
 const { isGlobalAiOpcModel, buildGlobalAiOpcBody, GlobalAiOpcAssets, LIMITS: GLOBALAIOPC_LIMITS } = require('./globalaiopc-video.cjs');
 const { isStarFrameModel, buildStarFrameBody, starFrameContentUrl, starFrameDownloadRequest, starFrameLimits } = require('./starframe-video.cjs');
 const { isShanhaiEndpoint, isShanhaiModel, isShanhaiDola30Model, shanhaiReferenceLimits,
@@ -451,7 +452,8 @@ class FlowCanvasBridge {
         this.allowedTools = new Set(sanitizeAllowedTools(merged.allowedTools));
         if (this.server) return true;
 
-        this.server = http.createServer((req, res) => {
+        this.lastListenError = null;
+        const server = this.server = http.createServer((req, res) => {
             this._handleRequest(req, res).catch(error => {
                 const serialized = serializeBridgeError(error);
                 this._sendJson(res, serialized.status, {
@@ -463,11 +465,14 @@ class FlowCanvasBridge {
             });
         });
 
-        this.server.on('error', error => {
+        server.on('error', error => {
             console.error('[FlowCanvasBridge] failed:', error.message);
+            this.lastListenError = error.code === 'EADDRINUSE'
+                ? `端口 ${this.port} 已被占用` : error.message;
+            if (this.server === server && !server.listening) this.server = null;
         });
 
-        this.server.listen(this.port, this.host, () => {
+        server.listen(this.port, this.host, () => {
             console.log(`[FlowCanvasBridge] listening on http://${this.host}:${this.port}`);
         });
         return true;
@@ -482,6 +487,17 @@ class FlowCanvasBridge {
             this.server.close();
             this.server = null;
         }
+    }
+
+    // Stops accepting connections without touching renderer readiness: the in-app
+    // Agent shares the board tool queue and must keep working while the server is off.
+    // In-flight requests (e.g. long generations) are left to finish.
+    closeServer() {
+        const server = this.server;
+        this.server = null;
+        if (!server) return;
+        server.close();
+        server.closeIdleConnections?.();
     }
 
     setBoardToolsReady(ready, reason = {}) {
@@ -591,6 +607,10 @@ class FlowCanvasBridge {
         }
 
         const url = new URL(req.url, `http://${this.host}:${this.port}`);
+        if (url.pathname === MCP_HTTP_PATH) {
+            await handleMcpHttpRequest(req, res, { host: this.host, port: this.port });
+            return;
+        }
         const body = await readJsonBody(req);
         const route = this._matchRoute(req.method, url.pathname);
         if (!route) {
@@ -708,6 +728,7 @@ class FlowCanvasBridge {
                 host: this.host,
                 port: this.port,
                 enabled: true,
+                url: mcpHttpUrl(this.host, this.port),
                 boardToolsReady: this.boardToolsReady,
                 allowedTools: [...this.allowedTools]
             }
@@ -1519,6 +1540,10 @@ class FlowCanvasBridge {
     }
 
     _sendJson(res, statusCode, payload) {
+        if (res.headersSent) {
+            if (!res.writableEnded) res.end();
+            return;
+        }
         res.statusCode = statusCode;
         res.setHeader('Access-Control-Allow-Origin', 'http://127.0.0.1');
         res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');

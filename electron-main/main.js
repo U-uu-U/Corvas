@@ -676,7 +676,8 @@ async function initServices() {
         getAccounts: getHunyuanAccounts, getWorkflow: () => { getHunyuanAccounts(); return hunyuanRhinoWorkflow; },
         getRuntime: () => agentServices.runtime });
     flowCanvasBridge.workflowExecutor = (name, input) => workflows.execute(name, input);
-    flowCanvasBridge.start(mcpConfig);
+    if (readMcpServerEnabled()) flowCanvasBridge.start(mcpConfig);
+    else flowCanvasBridge.port = Number(mcpConfig.port) || DEFAULT_MCP_CONFIG.port;
 
     const activeGroup = (boardData.folderGroups || []).find(group => group.id === boardData.activeGroupId);
     const assetLibraryFolders = getAssetLibraryContext(boardData).allFolders;
@@ -1538,6 +1539,65 @@ for (const action of ['list', 'save', 'remove', 'test']) {
         if (!isCurrentMainWindowSender(event)) throw new Error('MCP 请求来源无效');
         if (!agentServices) throw new Error('Agent 服务尚未初始化');
         return agentServices.mcpClient[action](request || {});
+    });
+}
+
+// Kept outside board.json: renderer board saves carry a full `mcp` copy and would revert the switch.
+function mcpServerSettingsPath() {
+    return path.join(app.getPath('userData'), 'data', 'mcp-server.json');
+}
+function readMcpServerEnabled() {
+    try { return JSON.parse(fs.readFileSync(mcpServerSettingsPath(), 'utf-8')).enabled !== false; }
+    catch { return true; }
+}
+function writeMcpServerEnabled(enabled) {
+    fs.mkdirSync(path.dirname(mcpServerSettingsPath()), { recursive: true });
+    fs.writeFileSync(mcpServerSettingsPath(), JSON.stringify({ enabled: enabled === true }, null, 2), 'utf-8');
+}
+function mcpServerStatus() {
+    const bridge = flowCanvasBridge;
+    const port = bridge?.port || DEFAULT_MCP_CONFIG.port;
+    return {
+        enabled: readMcpServerEnabled(),
+        running: Boolean(bridge?.server?.listening),
+        url: `http://127.0.0.1:${port}/mcp`,
+        port,
+        error: bridge?.lastListenError || null
+    };
+}
+async function startMcpServer() {
+    const bridge = flowCanvasBridge;
+    const data = store.load();
+    bridge.start({ ...DEFAULT_MCP_CONFIG, ...(data.mcp || {}), enabled: true, host: '127.0.0.1' });
+    const server = bridge.server;
+    if (server && !server.listening) {
+        await new Promise(resolve => {
+            const done = () => { server.off('listening', done); server.off('error', done); resolve(); };
+            server.once('listening', done);
+            server.once('error', done);
+        });
+    }
+}
+function mcpServerConnectionInfo(url) {
+    return JSON.stringify({ mcpServers: { corvas: { type: 'http', url } } }, null, 2);
+}
+
+for (const action of ['status', 'start', 'stop', 'copy']) {
+    ipcMain.handle(`mcp-server:${action}`, async event => {
+        if (!isCurrentMainWindowSender(event)) throw new Error('MCP 请求来源无效');
+        if (!flowCanvasBridge) throw new Error('MCP 服务尚未初始化');
+        if (action === 'start') {
+            writeMcpServerEnabled(true);
+            await startMcpServer();
+        } else if (action === 'stop') {
+            writeMcpServerEnabled(false);
+            flowCanvasBridge.closeServer();
+        } else if (action === 'copy') {
+            const status = mcpServerStatus();
+            clipboard.writeText(mcpServerConnectionInfo(status.url));
+            return { ...status, copied: true };
+        }
+        return mcpServerStatus();
     });
 }
 

@@ -183,7 +183,30 @@ GET  /v1/video/generations/{task_id}
 
 ## MCP 接入
 
-先启动 Corvas，再把 stdio 服务加入支持 MCP 的客户端。Windows 配置示例：
+Corvas 运行时同时作为 MCP Server 供其他 Agent 调用，有两种接入方式，工具列表和权限设置完全一致。
+
+### Streamable HTTP（推荐）
+
+Corvas 启动后，本地桥接直接提供 `http://127.0.0.1:18765/mcp`，客户端填 URL 即可，无需启动额外进程：
+
+```json
+{
+  "mcpServers": {
+    "corvas": {
+      "type": "http",
+      "url": "http://127.0.0.1:18765/mcp"
+    }
+  }
+}
+```
+
+在“设置 → API → MCP Server”中可以启动、关闭服务，并一键复制上面的连接配置；开关状态保存在 `data/mcp-server.json`，重启后保持。关闭后外部 Agent 和 stdio 入口都无法连接，Corvas 内置 Agent 不受影响。
+
+Claude Code 可用 `claude mcp add --transport http corvas http://127.0.0.1:18765/mcp`。该端点为无状态模式，只监听本机，并校验 `Host`/`Origin` 头以防 DNS 重绑定；没有额外认证，本机任何进程都可调用，与原有桥接接口一致。
+
+### stdio
+
+不支持 HTTP 的客户端可使用 stdio 入口。先启动 Corvas，Windows 配置示例：
 
 ```json
 {
@@ -279,7 +302,7 @@ flowchart LR
 | `src/` | Vite 前端、Konva 画布、素材侧栏、Agent 及图片/视频生成节点 |
 | `electron-main/` | Electron 主进程、文件监听、缩略图、剪贴板、任务恢复与下载 |
 | `shared/` | Electron、renderer 与 MCP 共用的数据服务、schema 和画板工具契约 |
-| `mcp/` | stdio MCP 服务入口和工具定义 |
+| `mcp/` | MCP 工具定义（`flow-canvas-tools.mjs`）和 stdio 入口；HTTP 入口在 `electron-main/mcp-http-server.cjs` |
 | `browser-extension/flow-canvas-sync/` | 可选 Chrome 任务同步扩展 |
 
 核心技术：Electron 28、Vite 5、Konva 9、Sharp、Chokidar 和 GSAP。
