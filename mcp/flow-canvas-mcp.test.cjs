@@ -114,6 +114,22 @@ test('workflow schemas require scoped IDs and reject unsupported inputs', () => 
         ['download', 'connect', 'import', 'inspect', 'clean', 'quad', 'validate']);
 });
 
+test('stdio builtin generation checks the live allowlist before accessing sources or writing files', async t => {
+    const requests = [];
+    const bridge = http.createServer((req, res) => {
+        requests.push(req.url);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, runtime: { allowedTools: ['flow_canvas.context.get_active_group'] } }));
+    });
+    await listen(bridge);
+    t.after(() => closeServer(bridge));
+    const response = await spawnMcpClient(t, bridge).request('tools/call', {
+        name: 'flow_canvas.image.generate', arguments: { provider: 'builtin', prompt: 'Permission test', addToCanvas: false }
+    });
+    assert.match(response.error.message, /not allowed/);
+    assert.deepEqual(requests, ['/config']);
+});
+
 test('model CONFIG tools read and refresh the renderer separately from MCP settings', async t => {
     const requests = [];
     const bridge = http.createServer(async (req, res) => {

@@ -297,6 +297,7 @@ function createWindow() {
     mainWindow.once('show', () => {
         if (!mainWindow || mainWindow.isDestroyed()) return;
         mainWindow.focus();
+        mainWindow.webContents.send('mcp-server:shown');
     });
 
     // 拦截外部拖拽图片导致的页面导航，自动下载图片并通知渲染进程
@@ -676,7 +677,8 @@ async function initServices() {
         getAccounts: getHunyuanAccounts, getWorkflow: () => { getHunyuanAccounts(); return hunyuanRhinoWorkflow; },
         getRuntime: () => agentServices.runtime });
     flowCanvasBridge.workflowExecutor = (name, input) => workflows.execute(name, input);
-    flowCanvasBridge.start(mcpConfig);
+    if (readMcpServerEnabled()) flowCanvasBridge.start({ ...mcpConfig, enabled: true });
+    else flowCanvasBridge.port = Number(mcpConfig.port) || DEFAULT_MCP_CONFIG.port;
 
     const activeGroup = (boardData.folderGroups || []).find(group => group.id === boardData.activeGroupId);
     const assetLibraryFolders = getAssetLibraryContext(boardData).allFolders;
@@ -1538,6 +1540,71 @@ for (const action of ['list', 'save', 'remove', 'test']) {
         if (!isCurrentMainWindowSender(event)) throw new Error('MCP 请求来源无效');
         if (!agentServices) throw new Error('Agent 服务尚未初始化');
         return agentServices.mcpClient[action](request || {});
+    });
+}
+
+// Kept outside board.json: renderer board saves carry a full `mcp` copy and would revert the switch.
+function mcpServerSettingsPath() {
+    return path.join(app.getPath('userData'), 'data', 'mcp-server.json');
+}
+function readMcpServerEnabled() {
+    try { return JSON.parse(fs.readFileSync(mcpServerSettingsPath(), 'utf-8')).enabled !== false; }
+    catch { return store?.load()?.mcp?.enabled !== false; }
+}
+function writeMcpServerEnabled(enabled) {
+    fs.mkdirSync(path.dirname(mcpServerSettingsPath()), { recursive: true });
+    fs.writeFileSync(mcpServerSettingsPath(), JSON.stringify({ enabled: enabled === true }, null, 2), 'utf-8');
+}
+function mcpServerStatus() {
+    const bridge = flowCanvasBridge;
+    const port = bridge?.port || DEFAULT_MCP_CONFIG.port;
+    return {
+        enabled: readMcpServerEnabled(),
+        running: Boolean(bridge?.server?.listening),
+        url: `http://127.0.0.1:${port}/mcp`,
+        port,
+        windowVisible: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()),
+        boardToolsReady: bridge?.boardToolsReady === true,
+        error: bridge?.lastListenError || null
+    };
+}
+async function startMcpServer() {
+    const bridge = flowCanvasBridge;
+    const data = store.load();
+    bridge.start({ ...DEFAULT_MCP_CONFIG, ...(data.mcp || {}), enabled: true, host: '127.0.0.1',
+        port: Number(data.mcp?.port) === 8765 ? DEFAULT_MCP_CONFIG.port : (data.mcp?.port || DEFAULT_MCP_CONFIG.port) });
+    const server = bridge.server;
+    if (server && !server.listening) {
+        await new Promise(resolve => {
+            const done = () => { server.off('listening', done); server.off('error', done); resolve(); };
+            server.once('listening', done);
+            server.once('error', done);
+        });
+    }
+}
+function mcpServerConnectionInfo(url) {
+    return JSON.stringify({ mcpServers: { corvas: { type: 'http', url } } }, null, 2);
+}
+
+let mcpServerOperation = Promise.resolve();
+for (const action of ['status', 'start', 'stop', 'copy', 'copy-url']) {
+    ipcMain.handle(`mcp-server:${action}`, async event => {
+        if (!isCurrentMainWindowSender(event)) throw new Error('MCP 请求来源无效');
+        if (!flowCanvasBridge) throw new Error('MCP 服务尚未初始化');
+        if (action === 'start' || action === 'stop') {
+            const operation = mcpServerOperation.catch(() => {}).then(async () => {
+                writeMcpServerEnabled(action === 'start');
+                if (action === 'start') await startMcpServer();
+                else flowCanvasBridge.closeServer();
+            });
+            mcpServerOperation = operation;
+            await operation;
+        } else if (action === 'copy' || action === 'copy-url') {
+            const status = mcpServerStatus();
+            clipboard.writeText(action === 'copy-url' ? status.url : mcpServerConnectionInfo(status.url));
+            return { ...status, copied: true };
+        }
+        return mcpServerStatus();
     });
 }
 

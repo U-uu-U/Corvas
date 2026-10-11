@@ -24,3 +24,5 @@
 .mcp-client-actions { display: flex; gap: 8px; }
 .mcp-client-actions button { padding: 8px 12px; font-size: 12px; }
 .mcp-secret:not(:focus) { -webkit-text-security: disc; }
+.mcp-server-hint { display: block; font-size: 12px; opacity: .65; margin: 6px 0 2px; line-height: 1.5; }
+.mcp-server-settings .mcp-client-actions { margin-top: 4px; }
