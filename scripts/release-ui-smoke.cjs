@@ -21,6 +21,8 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         }
         assert.ok(page, 'The main renderer window must open');
         await page.waitForFunction(() => window.flowCanvas?.store && document.querySelector('#agentToggleBtn'));
+        await page.locator('#mcpStartupNotice').waitFor({ state: 'visible' });
+        await page.locator('#mcpStartupNotice [data-action=close]').click();
         await app.evaluate(({ ipcMain }) => {
             ipcMain.removeHandler('relay-browser:open');
             globalThis.relayRouteRequest = new Promise(resolve => {

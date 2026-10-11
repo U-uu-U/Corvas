@@ -19,7 +19,7 @@ export function createApplicationLauncher({ onSelect }) {
         </div>
         <div class="corvas-app-launcher-group" role="group" aria-label="网页创作">
         <span class="corvas-app-launcher-label">网页创作</span>
-        <button type="button" data-app="relay" title="打开个人站或企业站">${icon('window')}<span>中转站</span></button>
+        <button type="button" data-app="relay" title="打开已选站点后台">${icon('window')}<span>站点后台</span></button>
         <button type="button" data-app="tripo" title="打开 Tripo 创作平台">${creativeAppIcon('tripo')}<span>Tripo</span></button>
         <button type="button" data-app="hunyuan">${hunyuanLogo}<span>混元 3D</span></button>
         <button type="button" data-app="jimeng" title="打开即梦创作平台">${creativeAppIcon('jimeng')}<span>即梦</span></button>

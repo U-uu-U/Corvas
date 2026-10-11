@@ -28,6 +28,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await page.waitForFunction(async () => (await window.flowCanvas.diagnostics.summary()).errors.some(entry => JSON.stringify(entry).includes('diagnostic-unhandled-fixture')));
         await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
+        await page.locator('#agentCreationSettingsTab').click();
         await page.locator('#diagnosticsSettings summary').click();
         await page.locator('[data-debug=copy]').click();
         const copied = await app.evaluate(({ clipboard }) => clipboard.readText());

@@ -1,10 +1,13 @@
 import { CanvasManager } from './canvas.js';
+import mediaPolicy from '../shared/board-media-policy.cjs';
+import { findUnavailableBoardItems, pruneBoardMedia } from './board-media-reconcile.js';
 import './mcp-server-settings.js';
 import './mcp-client-settings.js';
 import './diagnostics-settings.js';
 import './app-update-settings.js';
 import './generation-recovery.css';
 import './light-theme.css';
+import './site-login.css';
 import './hunyuan-accounts.css';
 import './rhino-workbench.css';
 import './blender-workbench.css';
@@ -43,6 +46,7 @@ let lastBoardSemanticFingerprint = '';
 let switchGroupRunId = 0;
 const assetClassificationQueue = [];
 const queuedAssetClassifications = new Set();
+const { isBoardMediaFile: isSupportedBoardFile, isTemporaryBoardFile } = mediaPolicy;
 let assetClassificationRunning = false;
 
 document.body.classList.add(`platform-${window.flowCanvas?.platform || 'web'}`);
@@ -69,6 +73,17 @@ async function bootstrap() {
             .filter(item => item?.kind !== 'generation');
         delete storeData.generationNodes;
         storeData.folderGroups = Array.isArray(storeData.folderGroups) ? storeData.folderGroups : [];
+        const startupGroup = storeData.folderGroups.find(group => group.id === storeData.activeGroupId);
+        const unavailableItems = await findUnavailableBoardItems(storeData.items, {
+            folders: startupGroup?.folders || storeData.watchFolders || [],
+            inspect: window.flowCanvas.file?.inspect, platform: window.flowCanvas.platform
+        });
+        pruneBoardMedia(storeData, unavailableItems);
+        if (startupGroup && unavailableItems.length) {
+            startupGroup.savedItems = cloneData(storeData.items);
+            startupGroup.connections = cloneData(storeData.connections);
+            pruneBoardMedia({ items: [], plans: startupGroup.plans }, unavailableItems);
+        }
         const assetLibraryContext = await window.flowCanvas.asset.getLibraryContext();
         planService = new PlanService(storeData);
         console.log('[Main] 数据加载完成', storeData);
@@ -333,10 +348,16 @@ async function bootstrap() {
         sidebarManager.on('switchGroup', async (data = {}) => {
             const currentSwitchRun = ++switchGroupRunId;
             const folders = Array.isArray(data.folders) ? data.folders : [];
-            const items = Array.isArray(data.items) ? data.items : [];
+            const snapshot = { items: Array.isArray(data.items) ? data.items : [], connections: cloneData(data.connections || []),
+                plans: cloneData(data.plans || []) };
+            const unavailable = snapshot.items.filter(item => item?.kind !== 'op' && item?.filePath && !isSupportedBoardFile(item.filePath));
+            pruneBoardMedia(snapshot, unavailable);
+            const items = snapshot.items;
             console.log('[Main] 切换文件夹组, folders:', folders.length, ', items:', items.length);
 
             canvasManager.clearAll();
+            const activeGroup = sidebarManager.getActiveGroup();
+            if (activeGroup && unavailable.length) activeGroup.plans = snapshot.plans;
             planService.migrateStoreData();
 
             storeData.items = [...items];
@@ -355,7 +376,7 @@ async function bootstrap() {
                 canvasManager.renderPlans();
             }
 
-            storeData.connections = cloneData(data.connections || []);
+            storeData.connections = snapshot.connections;
             canvasManager.graphView?.load(storeData.connections);
 
             if (folders.length > 0) {
@@ -425,7 +446,7 @@ async function bootstrap() {
                 }
             } else if (event === 'remove') {
                 canvasManager.removeFile(filePath);
-                storeData.items = storeData.items.filter(i => i.filePath !== filePath);
+                storeData.items = storeData.items.filter(i => normalizeFsPath(i.filePath) !== normalizeFsPath(filePath));
                 saveStoreThrottled();
                 commitHistory('file-remove');
             }
@@ -544,11 +565,19 @@ async function bootstrap() {
         resetHistory('initial');
         startBoardUsageMonitor();
         registerBoardToolBridge();
+        if (unavailableItems.length) saveStoreNow();
+        void Promise.all([canvasManager.prepareStartupContent(), agentSidebar?.apiConfigReady])
+            .then(([content]) => { if (content.ready) window.flowCanvas?.startup?.ready(); })
+            .catch(error => {
+                console.warn('[Main] Startup preload incomplete:', error);
+                window.flowCanvas?.startup?.ready();
+            });
 
     } catch (err) {
         window.flowCanvas?.mcp?.setBoardToolsReady?.(false);
         console.error('[Main] 启动失败:', err);
         showStartupError(err);
+        window.flowCanvas?.startup?.ready();
     }
 }
 
@@ -1106,11 +1135,15 @@ async function reconcileGroupFiles(folders, currentSwitchRun) {
     }
 
     if (successfulFolders.length > 0) {
-        const removedItems = storeData.items.filter(item => {
+        const candidates = storeData.items.filter(item => {
             if (!item?.filePath) return false;
             return successfulFolders.some(folder => isPathInsideFolder(item.filePath, folder)) &&
                 !discoveredFiles.has(normalizeFsPath(item.filePath));
         });
+        const removedItems = await findUnavailableBoardItems(candidates, {
+            folders: successfulFolders, inspect: window.flowCanvas.file?.inspect, platform: window.flowCanvas.platform
+        });
+        if (currentSwitchRun !== switchGroupRunId) return;
 
         removedItems.forEach(item => {
             canvasManager.removeItemById(item.id);
@@ -1456,20 +1489,6 @@ function isAssetLibraryFile(filePath) {
     if (folders.length === 0) return false;
     const normalizedPath = normalizeFsPath(filePath);
     return folders.some(folder => isPathInsideFolder(normalizedPath, folder));
-}
-
-function isSupportedBoardFile(filePath) {
-    return /\.(jpg|jpeg|png|gif|webp|bmp|tiff|tif|svg|ico|mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|aac|flac|ogg|wma|m4a|pdf|doc|docx|txt|ppt|pptx|xls|xlsx)$/i.test(filePath);
-}
-
-function isTemporaryBoardFile(filePath) {
-    const name = String(filePath).split(/[/\\]/).pop() || '';
-    const lower = name.toLowerCase();
-    if (!name || name.startsWith('.') || name.startsWith('~') || name.endsWith('~')) return true;
-    if (lower === 'thumbs.db' || lower === 'desktop.ini') return true;
-    if (/\.(tmp|temp|part|partial|crdownload|download|swp|swo)$/i.test(lower)) return true;
-    if (/\.(jpg|jpeg|png|gif|webp|bmp|tif|tiff)\.(tmp|temp|part|partial|download)$/i.test(lower)) return true;
-    return false;
 }
 
 function normalizeFsPath(filePath) {

@@ -529,7 +529,7 @@
                         <button class="agent-settings-tab" id="agentApiSettingsTab" type="button"
                             role="tab" aria-selected="false" aria-controls="agentApiSettingsPane" data-settings-tab="api">
                             <svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-settings"></use></svg>
-                            API
+                            登录认证
                         </button>
                         <button class="agent-settings-tab" id="agentUpdateSettingsTab" type="button"
                             role="tab" aria-selected="false" aria-controls="agentUpdateSettingsPane" data-settings-tab="updates">
@@ -654,18 +654,21 @@
                             </div>
                             <div class="agent-library-location-status" id="agentAssetLibraryFolderStatus" aria-live="polite"></div>
                         </div>
+                        <div id="agentApiDiagnostics"></div>
                     </section>
 
                     <section class="agent-settings-pane agent-api-settings" id="agentApiSettingsPane"
                         role="tabpanel" aria-labelledby="agentApiSettingsTab" hidden>
                         <div class="agent-settings-section-head agent-api-settings-head">
                             <div>
-                                <strong>API 服务</strong>
-                                <span>配置文字、图片与视频模型</span>
+                                <strong>登录认证</strong>
                             </div>
                         </div>
 
-                        <!-- 已保存的 API 列表 -->
+                        <div id="agentStationAccounts" class="site-account-list"></div>
+                        <p id="agentStationStatus" class="site-login-status" role="status"></p>
+                        <div id="agentLegacyApiConfiguration" class="agent-manual-api-settings">
+                        <div class="agent-settings-section-head"><strong>手动 API 配置</strong></div>
                         <div class="agent-provider-list" id="agentProviderList">
                             <!-- 动态渲染 -->
                         </div>
@@ -689,7 +692,6 @@
                                 <button class="agent-template-chip" data-template="ravenhash">RavenHash Image</button>
                                 <button class="agent-template-chip" data-template="ravenhash-video">RavenHash Video</button>
                                 <button class="agent-template-chip" data-template="ravenhash-video-cart">RavenHash 新站</button>
-                                <button class="agent-template-chip" data-template="shanhai">Shanhai Video</button>
                             </div>
                         </div>
 
@@ -761,7 +763,7 @@
 
                             <button class="agent-save-settings-btn" id="agentFormSaveBtn">保存</button>
                         </div>
-                        <div id="agentApiDiagnostics"></div>
+                        </div>
                     </section>
                 </div>
 

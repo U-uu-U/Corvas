@@ -39,6 +39,7 @@ function savedStore(result) {
 
 contextBridge.exposeInMainWorld('flowCanvas', {
     platform: process.platform,
+    startup: { ready: () => ipcRenderer.send('startup:ready') },
     appUpdates: {
         snapshot: () => ipcRenderer.invoke('app-updates:snapshot'),
         check: () => ipcRenderer.invoke('app-updates:check'),
@@ -117,7 +118,14 @@ contextBridge.exposeInMainWorld('flowCanvas', {
         open: platform => ipcRenderer.invoke('creative-web:open', platform)
     },
     relay: {
-        open: options => ipcRenderer.invoke('relay-browser:open', options)
+        open: options => ipcRenderer.invoke('relay-browser:open', options),
+        status: () => ipcRenderer.invoke('relay-browser:status'),
+        skipOnboarding: () => ipcRenderer.invoke('relay-browser:skip-onboarding'),
+        onState: callback => {
+            const listener = (_, state) => callback(state);
+            ipcRenderer.on('relay-browser:accounts', listener);
+            return () => ipcRenderer.removeListener('relay-browser:accounts', listener);
+        }
     },
 
     rhino: {
@@ -169,6 +177,15 @@ contextBridge.exposeInMainWorld('flowCanvas', {
     apiConfig: {
         load: () => ipcRenderer.invoke('api-config:load'),
         save: (config) => ipcRenderer.invoke('api-config:save', config),
+        onRelayAccount: callback => {
+            const listener = (_, { id, account }) => {
+                Promise.resolve().then(() => callback(account)).then(result => {
+                    ipcRenderer.send('relay-account:complete', id, { success: result?.success === true });
+                }).catch(() => ipcRenderer.send('relay-account:complete', id, { success: false }));
+            };
+            ipcRenderer.on('relay-account:connect', listener);
+            return () => ipcRenderer.removeListener('relay-account:connect', listener);
+        },
     },
 
     // 文件夹管理

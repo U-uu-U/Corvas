@@ -147,7 +147,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await dialog.locator('[data-report-close]').click();
         await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
-        await page.locator('#agentApiSettingsTab').click();
+        await page.locator('#agentCreationSettingsTab').click();
         await page.locator('#diagnosticsSettings summary').click();
         await page.locator('[data-debug=submit]').click();
         await dialog.waitFor({ state: 'visible' });

@@ -3,6 +3,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { SITES, identifier, publicTask } = require('./relay-browser-contract.cjs');
+const { resolveRelayAccount } = require('./relay-account-link.cjs');
 
 const fail = message => Object.assign(new Error(message), { publicMessage: message });
 const MAX_BYTES = 512 * 1024 * 1024;
@@ -17,8 +18,8 @@ async function bounded(work, milliseconds = 10000) {
 }
 
 class RelayBrowser {
-    constructor({ BrowserWindow, BrowserView, session, shell, directory, importer, sites = SITES }) {
-        Object.assign(this, { BrowserWindow, BrowserView, session, shell, directory, importer, sites });
+    constructor({ BrowserWindow, BrowserView, session, shell, directory, importer, sites = SITES, onAccount, getLinkedAccount, onState }) {
+        Object.assign(this, { BrowserWindow, BrowserView, session, shell, directory, importer, sites, onAccount, getLinkedAccount, onState });
         this.window = null;
         this.views = new Map();
         this.sessions = new Map();
@@ -27,25 +28,47 @@ class RelayBrowser {
         this.site = null;
         this.focus = null;
         this.status = '';
+        this.accountStates = new Map();
+        this.accountAuth = new Map();
+        this.accountChecks = new Set();
+        this.capturedAuth = new Map();
+        this.preferences = {};
         this.preferenceFile = path.join(directory, 'relay-browser.json');
         try {
             const saved = JSON.parse(fs.readFileSync(this.preferenceFile, 'utf8'));
+            this.preferences = saved;
             if (Object.hasOwn(sites, saved.site)) this.site = saved.site;
         } catch { /* First launch starts with the site picker. */ }
     }
 
     send(status) {
         if (status !== undefined) this.status = status;
+        this.onState?.(this.snapshot());
         if (!this.window || this.window.isDestroyed()) return;
         this.window.webContents.send('relay-browser:state', { site: this.site,
             siteName: this.sites[this.site]?.name || '', taskId: this.focus?.site === this.site ? this.focus.taskId : '',
-            status: this.status });
+            status: this.status, account: this.accountStates.get(this.site) || { state: 'signed-out' } });
     }
 
-    async open({ site, taskId, clientTaskId } = {}) {
+    snapshot() {
+        return { site: this.site || this.preferences.site || null, onboardingSkipped: this.preferences.onboardingSkipped === true,
+            accounts: Object.fromEntries(this.accountStates) };
+    }
+
+    savePreferences(patch) {
+        this.preferences = { ...this.preferences, ...patch };
+        fs.mkdirSync(this.directory, { recursive: true });
+        const temporary = this.preferenceFile + '.tmp';
+        fs.writeFileSync(temporary, JSON.stringify(this.preferences));
+        fs.renameSync(temporary, this.preferenceFile);
+    }
+
+    skipOnboarding() { this.savePreferences({ onboardingSkipped: true }); return this.snapshot(); }
+
+    async open({ site, taskId, clientTaskId, login = false } = {}) {
         if (!this.window || this.window.isDestroyed()) {
             this.window = new this.BrowserWindow({ width: 1280, height: 880, minWidth: 620, minHeight: 500,
-                title: '中转站 · Corvas', backgroundColor: '#191b1e', autoHideMenuBar: true,
+                title: '站点后台 · Corvas', backgroundColor: '#191b1e', autoHideMenuBar: true,
                 webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false,
                     preload: path.join(__dirname, 'relay-browser-preload.cjs') } });
             this.window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -53,14 +76,19 @@ class RelayBrowser {
             this.window.webContents.on('will-attach-webview', event => event.preventDefault());
             this.window.on('resize', () => this.layout());
             this.window.on('closed', () => {
+                clearInterval(this.accountTimer);
+                this.accountAuth.clear(); this.accountStates.clear();
+                this.capturedAuth.clear();
                 for (const view of this.views.values()) if (!view.webContents.isDestroyed()) view.webContents.close();
                 this.views.clear(); this.window = null;
             });
             await this.window.loadFile(path.join(__dirname, 'relay-browser.html'));
+            if (this.onAccount) this.accountTimer = setInterval(() => { void this.checkAccount(); }, 2000);
         }
         if (this.window.isMinimized()) this.window.restore();
         this.window.show(); this.window.focus();
         if (site || this.site) await this.selectSite(site || this.site);
+        if (login && this.site) void this.navigate(this.sites[this.site].loginPath || '/login');
         if (taskId) {
             this.focus = { site: this.site, taskId: identifier(taskId), clientTaskId: clientTaskId || null };
             void this.navigate('/task-logs');
@@ -84,11 +112,10 @@ class RelayBrowser {
     }
 
     async selectSite(site) {
-        if (!Object.hasOwn(this.sites, site)) throw fail('请选择个人站或企业站');
+        if (!Object.hasOwn(this.sites, site)) throw fail('请选择生图站、视频站或企业站');
         if (site !== this.site) this.focus = null;
         this.site = site;
-        fs.mkdirSync(this.directory, { recursive: true });
-        fs.writeFileSync(this.preferenceFile, JSON.stringify({ site }));
+        this.savePreferences({ site });
         if (!this.views.has(site)) {
             const browserSession = this.session.fromPartition(`persist:corvas-relay-${site}`);
             const view = new this.BrowserView({ webPreferences: { session: browserSession,
@@ -114,6 +141,7 @@ class RelayBrowser {
             };
             web.on('did-navigate-in-page', navigated);
             web.on('did-finish-load', navigated);
+            web.on('did-finish-load', () => { if (site === this.site) void this.checkAccount(); });
             web.on('did-start-loading', () => { if (site === this.site) this.send('正在加载网页…'); });
             web.on('did-stop-loading', () => { if (site === this.site && this.status === '正在加载网页…') this.send(''); });
             web.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
@@ -121,9 +149,50 @@ class RelayBrowser {
             });
             this.watchSession(site, browserSession);
             this.layout();
-            void this.navigate('/login');
+            void this.navigate(this.sites[site].loginPath || '/login');
         }
         this.layout(); this.send();
+        void this.checkAccount();
+    }
+
+    async readAccountAuth(site, web) {
+        if (!web || web.isDestroyed() || !this.sameOrigin(site, web.getURL())) return '';
+        if (site === 'ai') return this.capturedAuth.get(site) || '';
+        const token = await bounded(web.executeJavaScript("sessionStorage.getItem('token') || localStorage.getItem('token') || ''"));
+        if (web.isDestroyed() || !this.sameOrigin(site, web.getURL())) return '';
+        return typeof token === 'string' && token.length <= 16384 ? token : '';
+    }
+
+    async checkAccount(manual = false) {
+        const site = this.site, web = this.views.get(site)?.webContents;
+        if (!this.onAccount || !site || !web || this.accountChecks.has(site)) return;
+        this.accountChecks.add(site);
+        try {
+            const auth = await this.readAccountAuth(site, web);
+            if (!auth) {
+                this.accountAuth.delete(site);
+                this.accountStates.set(site, { state: 'signed-out', message: '登录后自动连接画布' });
+                if (site === this.site) this.send();
+                if (manual) void this.navigate(this.sites[site].loginPath || '/login');
+                return;
+            }
+            const fingerprint = crypto.createHash('sha256').update(auth).digest('hex');
+            if (!manual && this.accountAuth.get(site) === fingerprint) return;
+            this.accountAuth.set(site, fingerprint);
+            this.accountStates.set(site, { state: 'connecting', message: '正在连接画布' });
+            if (site === this.site) this.send();
+            const stillCurrent = async () => this.views.get(site)?.webContents === web
+                && !web.isDestroyed() && await this.readAccountAuth(site, web) === auth;
+            const account = await resolveRelayAccount({ site, origin: this.sites[site].origin,
+                session: web.session, auth, getPrevious: this.getLinkedAccount, stillCurrent, manual });
+            await this.onAccount(account);
+            this.accountStates.set(site, { state: 'connected', username: account.username, message: '已连接画布' });
+        } catch (error) {
+            this.accountStates.set(site, { state: 'error', message: error.publicMessage || '连接未完成，请点击连接画布重试' });
+        } finally {
+            this.accountChecks.delete(site);
+            if (site === this.site) this.send();
+        }
     }
 
     async navigate(route) {
@@ -135,6 +204,23 @@ class RelayBrowser {
 
     watchSession(site, browserSession) {
         if (this.sessions.has(site)) return;
+        if (site === 'ai') {
+            browserSession.webRequest.onBeforeSendHeaders({ urls: [`${this.sites[site].origin}/api/*`] }, (details, callback) => {
+                const web = this.views.get(site)?.webContents;
+                const frame = details.frame;
+                if (web && !web.isDestroyed() && details.webContentsId === web.id && frame
+                    && frame.processId === web.mainFrame.processId && frame.routingId === web.mainFrame.routingId
+                    && this.sameOrigin(site, frame.url) && this.sameOrigin(site, web.getURL())) {
+                    if (new URL(details.url).pathname === '/api/user/auth/logout') {
+                        this.capturedAuth.delete(site); this.accountAuth.delete(site);
+                    } else {
+                        const value = Object.entries(details.requestHeaders).find(([key]) => key.toLowerCase() === 'authorization')?.[1];
+                        if (typeof value === 'string' && /^Bearer [^\s]{1,16384}$/.test(value)) this.capturedAuth.set(site, value.slice(7));
+                    }
+                }
+                callback({ requestHeaders: details.requestHeaders });
+            });
+        }
         // Keep the station's own task UI. Only a canvas deep link adds an exact task
         // filter to its existing request; the toolbar makes that filter removable.
         browserSession.webRequest.onBeforeRequest({ urls: [`${this.sites[site].origin}/api/v1/task_logs*`] }, (details, callback) => {
@@ -200,6 +286,7 @@ class RelayBrowser {
     }
 
     async matchTask(site, query, urls, focus, projectId) {
+        if (site === 'ai') return null;
         const web = this.views.get(site)?.webContents;
         if (!web || web.isDestroyed() || !this.sameOrigin(site, web.getURL())) return null;
         const token = await bounded(web.executeJavaScript("sessionStorage.getItem('token') || localStorage.getItem('token') || ''"));
@@ -236,8 +323,9 @@ class RelayBrowser {
                 case 'back': if (web?.canGoBack()) web.goBack(); break;
                 case 'forward': if (web?.canGoForward()) web.goForward(); break;
                 case 'reload': web?.reload(); break;
-                case 'home': this.focus = null; void this.navigate('/dashboard'); this.send(); break;
-                case 'logs': void this.navigate('/task-logs'); break;
+                case 'home': this.focus = null; void this.navigate(this.sites[this.site].homePath || '/dashboard'); this.send(); break;
+                case 'logs': void this.navigate(this.sites[this.site].logsPath || '/task-logs'); break;
+                case 'connect': await this.checkAccount(true); break;
                 default: throw fail('未知操作');
             }
             return { ok: true };
@@ -245,10 +333,13 @@ class RelayBrowser {
     }
 
     close() {
+        clearInterval(this.accountTimer);
         for (const job of this.jobs.values()) if (job.status === 'downloading') job.item.cancel();
         for (const { browserSession, listener } of this.sessions.values()) {
+            browserSession.flushStorageData?.();
             browserSession.removeListener('will-download', listener);
             browserSession.webRequest.onBeforeRequest(null);
+            browserSession.webRequest.onBeforeSendHeaders(null);
         }
         this.sessions.clear();
         if (this.window && !this.window.isDestroyed()) this.window.close();

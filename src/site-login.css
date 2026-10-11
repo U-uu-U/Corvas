@@ -1,0 +1,34 @@
+.site-login-dialog { position:fixed; inset:0; margin:auto; width:min(640px,calc(100vw - 32px)); height:fit-content; max-height:calc(100vh - 32px); overflow:auto; padding:28px; border:1px solid var(--border-color,#45484e); border-radius:8px; background:var(--panel-bg,#1b1d21); color:var(--text-primary,#eceef1); }
+.site-login-dialog::backdrop { background:#0009; }
+.site-login-dialog header { display:flex; gap:14px; align-items:center; margin-bottom:24px; }
+.site-login-dialog header img { width:40px; height:40px; object-fit:contain; }
+.site-login-dialog h1 { font-size:22px; line-height:1.3; margin:0; letter-spacing:0; }
+.site-login-choices { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.site-login-choices button { min-width:0; min-height:148px; padding:18px 12px; display:flex; flex-direction:column; align-items:flex-start; gap:10px; border:1px solid #4b5159; border-radius:6px; background:#252a30; color:inherit; text-align:left; cursor:pointer; }
+.site-login-choices button:hover { border-color:#80bda0; background:#2b3632; }
+.site-login-choices .flow-icon { width:26px; height:26px; color:#8ac6b3; }
+.site-login-choices button:nth-child(2) .flow-icon { color:#e0b576; }
+.site-login-choices button:nth-child(3) .flow-icon { color:#8abce8; }
+.site-login-choices strong { font-size:16px; font-weight:600; }
+.site-login-choices small { font-size:11px; color:#a4aab2; overflow-wrap:anywhere; }
+.site-login-dialog footer { display:flex; justify-content:flex-end; margin-top:16px; }
+.site-login-dialog footer button { border:0; background:transparent; color:#aeb6bf; font:inherit; padding:8px; cursor:pointer; }
+.site-login-dialog button:focus-visible,.site-account button:focus-visible { outline:2px solid #7db9a8; outline-offset:3px; }
+.site-login-status { min-height:18px; font-size:12px; line-height:1.5; color:#deb089; margin:14px 0 0; overflow-wrap:anywhere; }
+.site-account-list { display:flex; flex-direction:column; gap:12px; }
+.agent-manual-api-settings { margin-top:24px; padding-top:18px; border-top:1px solid rgba(128,128,128,.2); }
+.site-account { padding:16px; border:1px solid #3e444c; border-radius:6px; background:#212429; }
+.site-account-heading { display:flex; gap:9px; align-items:center; }
+.site-account-heading .flow-icon { width:19px; height:19px; color:#a6c5d0; }
+.site-account-heading strong { font-size:14px; }
+.site-account-heading [data-station-state] { margin-left:auto; color:#929ba6; font-size:11px; flex-shrink:0; }
+.site-account[data-state=connected] [data-station-state] { color:#8fc3a2; }
+.site-account[data-state=error] [data-station-state] { color:#ddb078; }
+.site-account-domain,.site-account-user { display:block; color:#9ca7b4; font-size:12px; line-height:1.5; margin-top:7px; overflow-wrap:anywhere; }
+.site-account-user:empty { display:none; }
+.site-account-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:13px; }
+.site-account-actions button { border:1px solid #4b545d; border-radius:5px; padding:6px 12px; min-height:32px; background:#30363d; color:#e6ebef; font:inherit; font-size:12px; line-height:1.4; cursor:pointer; }
+.site-account-actions [data-open-site] { width:34px; padding:6px; }
+.site-account-actions .flow-icon { width:16px; height:16px; }
+.site-account button:disabled,.site-login-dialog button:disabled { opacity:.5; cursor:default; }
+@media(max-width:540px) { .site-login-dialog { padding:20px; } .site-login-choices { grid-template-columns:minmax(0,1fr); } .site-login-choices button { min-height:86px; display:grid; grid-template-columns:30px minmax(0,1fr); gap:7px 12px; align-content:center; } .site-login-choices .flow-icon { grid-row:1/3; align-self:center; } }

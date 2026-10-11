@@ -33,13 +33,16 @@ const { CreativeWebApps } = require('./creative-web-apps.cjs');
 const { RelayBrowser } = require('./relay-browser.cjs');
 const { createRelayImporter } = require('./relay-browser-import.cjs');
 const { relaySite } = require('./relay-browser-contract.cjs');
+const { createStartupGate, MAX_DISPLAY_MS } = require('./startup-gate.cjs');
+const { BOARD_MEDIA_EXTENSIONS, isBoardMediaFile } = require('../shared/board-media-policy.cjs');
+const { RelayAccountDelivery } = require('./relay-account-link.cjs');
+const relayAccountDelivery = new RelayAccountDelivery();
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
 const DEV_RENDERER_ORIGIN = 'http://127.0.0.1:15321';
 const MAIN_WINDOW_WIDTH = 1400;
 const MAIN_WINDOW_HEIGHT = 900;
-const SPLASH_MIN_DISPLAY_MS = 1500;
 
 // Some OpenAI-compatible relays close long-running HTTP/2 streams after completing the job.
 // Keep Electron's proxy-aware network stack, but force HTTP/1.1 for reliable response delivery.
@@ -47,7 +50,9 @@ app.commandLine.appendSwitch('disable-http2');
 
 let mainWindow = null;
 let splashWindow = null;
-let splashMinimumDisplay = Promise.resolve();
+let splashStartup = null;
+let startupReveal = null;
+let startupRevealRequested = false;
 let orbWindow = null;
 let orbPosition = null;
 let orbDragTimer = null;
@@ -234,6 +239,7 @@ function createWindow() {
         minHeight: 600,
         backgroundColor: '#0f0f14',
         show: false,
+        paintWhenInitiallyHidden: true,
         icon: path.join(__dirname, 'assets/app-icon.png'),
         frame: IS_MAC,
         titleBarStyle: IS_MAC ? 'hiddenInset' : 'hidden',
@@ -248,6 +254,7 @@ function createWindow() {
             }),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
+            backgroundThrottling: false,
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: true
@@ -267,32 +274,24 @@ function createWindow() {
     nextMainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     nextMainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
     const startupSplash = splashWindow;
-    const minimumDisplay = splashMinimumDisplay;
     let mainWindowRevealed = false;
     const revealMainWindow = () => {
-        if (mainWindowRevealed || nextMainWindow.isDestroyed()) return;
+        if (mainWindowRevealed || isQuitting || nextMainWindow.isDestroyed() || mainWindow !== nextMainWindow) return;
         mainWindowRevealed = true;
-        void minimumDisplay.then(() => {
-            if (isQuitting || nextMainWindow.isDestroyed() || mainWindow !== nextMainWindow) return;
-            nextMainWindow.show();
-            if (startupSplash && !startupSplash.isDestroyed()) startupSplash.close();
-        });
+        nextMainWindow.show();
+        nextMainWindow.webContents.setBackgroundThrottling(true);
+        if (startupSplash && !startupSplash.isDestroyed()) startupSplash.close();
     };
-
-    mainWindow.once('ready-to-show', revealMainWindow);
-    // ready-to-show may not fire for a hidden window on some Electron/macOS builds.
-    mainWindow.webContents.once('did-finish-load', revealMainWindow);
-    const revealTimeout = setTimeout(() => {
-        // A splash that never painted must not block the existing startup fallback.
-        if (startupSplash && !startupSplash.isDestroyed() && !startupSplash.isVisible()) startupSplash.close();
-        if (!mainWindowRevealed) {
-            console.warn('[Main] Main window reveal timed out; showing it anyway.');
-            revealMainWindow();
-        }
-    }, 12000);
-    revealTimeout.unref?.();
-    nextMainWindow.once('show', () => clearTimeout(revealTimeout));
-    nextMainWindow.once('closed', () => clearTimeout(revealTimeout));
+    if (startupSplash) startupReveal = revealMainWindow;
+    const revealWithoutSplash = () => { if (!startupSplash) revealMainWindow(); };
+    mainWindow.once('ready-to-show', revealWithoutSplash);
+    mainWindow.webContents.once('did-finish-load', revealWithoutSplash);
+    const revealFallback = startupSplash ? null : setTimeout(revealMainWindow, MAX_DISPLAY_MS);
+    nextMainWindow.once('show', () => clearTimeout(revealFallback));
+    nextMainWindow.once('closed', () => {
+        clearTimeout(revealFallback);
+        if (startupReveal === revealMainWindow) { startupReveal = null; splashStartup?.cancel(); }
+    });
 
     mainWindow.once('show', () => {
         if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -363,6 +362,7 @@ function createWindow() {
     } else {
         mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
     }
+    if (startupSplash && startupRevealRequested) revealMainWindow();
 
     mainWindow.on('closed', () => {
         creativeWebApps?.close();
@@ -404,26 +404,39 @@ function createSplashWindow() {
         }
     });
     splashWindow = nextSplashWindow;
-    let finishMinimumDisplay;
-    let minimumDisplayTimer = null;
-    splashMinimumDisplay = new Promise(resolve => { finishMinimumDisplay = resolve; });
+    startupRevealRequested = false;
+    const requestReveal = () => { startupRevealRequested = true; startupReveal?.(); };
+    const gate = createStartupGate({ onReveal: requestReveal });
+    splashStartup = gate;
+    const paintFallback = setTimeout(() => {
+        if (nextSplashWindow.isDestroyed() || nextSplashWindow.isVisible()) return;
+        gate.cancel();
+        requestReveal();
+    }, MAX_DISPLAY_MS);
     nextSplashWindow.once('show', () => {
-        minimumDisplayTimer = setTimeout(finishMinimumDisplay, SPLASH_MIN_DISPLAY_MS);
+        clearTimeout(paintFallback);
+        gate.start();
     });
     nextSplashWindow.once('ready-to-show', () => {
         if (!nextSplashWindow.isDestroyed()) nextSplashWindow.show();
     });
     nextSplashWindow.on('closed', () => {
-        clearTimeout(minimumDisplayTimer);
-        finishMinimumDisplay();
+        clearTimeout(paintFallback);
+        gate.start();
+        gate.ready();
         if (splashWindow === nextSplashWindow) splashWindow = null;
     });
-    void nextSplashWindow.loadFile(path.join(__dirname, 'splash.html')).catch(error => {
+    void nextSplashWindow.loadFile(path.join(__dirname, 'splash.html'), { query: { version: app.getVersion() } }).catch(error => {
         console.warn('[Main] Splash screen failed to load:', error.message);
         if (!nextSplashWindow.isDestroyed()) nextSplashWindow.close();
     });
     return nextSplashWindow;
 }
+
+ipcMain.on('startup:ready', event => {
+    if (!isCurrentMainWindowSender(event) || event.senderFrame !== event.sender.mainFrame) return;
+    splashStartup?.ready();
+});
 
 const ORB_WINDOW_SIZE = 80;
 const ORB_VISUAL_SIZE = 54;
@@ -1910,21 +1923,17 @@ ipcMain.handle('file:selectMedia', async () => {
         filters: [
             {
                 name: '支持的素材',
-                extensions: [
-                    'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'svg', 'ico',
-                    'mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm', 'm4v',
-                    'mp3', 'wav', 'aac', 'flac', 'ogg', 'wma', 'm4a',
-                    'pdf', 'doc', 'docx', 'txt', 'md', 'ppt', 'pptx', 'xls', 'xlsx'
-                ]
-            },
-            { name: '所有文件', extensions: ['*'] }
+                extensions: Object.values(BOARD_MEDIA_EXTENSIONS).flat()
+            }
         ]
     });
     if (result.canceled || result.filePaths.length === 0) {
         return { success: false, canceled: true, filePaths: [] };
     }
-    await Promise.all(result.filePaths.map(file => mediaAccess.grant(file)));
-    return { success: true, filePaths: result.filePaths };
+    const filePaths = result.filePaths.filter(file => isBoardMediaFile(file) && watcher.isReadyFile(file));
+    if (!filePaths.length) return { success: false, error: '请选择有效的图片、视频或音频素材', filePaths: [] };
+    await Promise.all(filePaths.map(file => mediaAccess.grant(file)));
+    return { success: true, filePaths };
 });
 
 ipcMain.handle('file:selectReplacement', async (_, options = {}) => {
@@ -2250,11 +2259,27 @@ ipcMain.handle('creative-web:open', async (event, platform) => {
     return creativeWebApps.open(platform);
 });
 
-ipcMain.handle('relay-browser:open', async (event, options = {}) => {
-    requireMainFrame(event);
+function getRelayBrowser() {
     relayBrowser ||= new RelayBrowser({ BrowserWindow, BrowserView, session, shell,
         directory: path.join(app.getPath('userData'), 'data'),
+        onAccount: account => relayAccountDelivery.send(mainWindow?.webContents, account),
+        onState: state => {
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('relay-browser:accounts', state);
+        },
+        getLinkedAccount: (site, userId) => {
+            const loaded = apiConfigStore.load();
+            if (!loaded.success) throw new Error('API config unavailable');
+            return loaded.config?.providers?.find(provider => provider.relayAccount?.site === site
+                && provider.relayAccount?.userId === userId)?.relayAccount;
+        },
         importer: createRelayImporter({ bridge: flowCanvasBridge, store, board: agentServices.board, getSaveDir }) });
+    return relayBrowser;
+}
+ipcMain.handle('relay-browser:status', event => { requireMainFrame(event); return getRelayBrowser().snapshot(); });
+ipcMain.handle('relay-browser:skip-onboarding', event => { requireMainFrame(event); return getRelayBrowser().skipOnboarding(); });
+ipcMain.handle('relay-browser:open', async (event, options = {}) => {
+    requireMainFrame(event);
+    const browser = getRelayBrowser();
     const record = flowCanvasBridge.recoveryStore.get(options.clientTaskId);
     let site = record ? relaySite(record.endpoint) : options.site;
     let taskId = record?.taskId || options.taskId;
@@ -2267,9 +2292,13 @@ ipcMain.handle('relay-browser:open', async (event, options = {}) => {
         taskId ||= node?.generation?.taskId;
     }
     if (taskId && !site) throw new Error('该任务未关联个人站或企业站，请从中转站入口查询');
-    return relayBrowser.open({ site, taskId, clientTaskId: record?.clientTaskId });
+    return browser.open({ site, taskId, clientTaskId: record?.clientTaskId, login: options.login === true });
 });
 ipcMain.handle('relay-browser:command', (event, action, value) => relayBrowser?.command(event, action, value));
+ipcMain.on('relay-account:complete', (event, id, result) => {
+    if (!isCurrentMainWindowSender(event) || event.senderFrame !== event.sender.mainFrame) return;
+    relayAccountDelivery.complete(event.sender, id, result);
+});
 
 const RAVENHASH_URLS = Object.freeze({
     ai: 'https://ai.ravenhash.org/',

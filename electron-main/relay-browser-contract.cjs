@@ -1,7 +1,4 @@
-const SITES = Object.freeze({
-    art: { name: '个人站', origin: 'https://art.ravenhash.org' },
-    cart: { name: '企业站', origin: 'https://cart.ravenhash.org' }
-});
+const { SITES } = require('../shared/relay-sites.cjs');
 
 function relaySite(value) {
     try {

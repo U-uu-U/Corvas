@@ -4,7 +4,7 @@ import { dirname, resolve } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const srcRoot = resolve(__dirname, 'src');
-const sharedClientModules = new Set(['public-api-error', 'error-redaction', 'public-error-detail', 'customer-error-message', 'model-parameter-rules', 'sd2-fast-validation', 'error-report-contract']
+const sharedClientModules = new Set(['public-api-error', 'error-redaction', 'public-error-detail', 'customer-error-message', 'model-parameter-rules', 'sd2-fast-validation', 'error-report-contract', 'relay-sites', 'board-media-policy']
     .map(name => normalizePath(resolve(__dirname, `shared/${name}.cjs`))));
 
 export default defineConfig({
@@ -26,7 +26,7 @@ export default defineConfig({
         }
     }],
     build: {
-        commonjsOptions: { include: [/node_modules/, /shared[\\/](?:public-api-error|error-redaction|public-error-detail|customer-error-message|model-parameter-rules|sd2-fast-validation|error-report-contract)\.cjs$/] },
+        commonjsOptions: { include: [/node_modules/, /shared[\\/](?:public-api-error|error-redaction|public-error-detail|customer-error-message|model-parameter-rules|sd2-fast-validation|error-report-contract|relay-sites|board-media-policy)\.cjs$/] },
         outDir: resolve(__dirname, 'dist'),
         emptyOutDir: true,
         rollupOptions: {
