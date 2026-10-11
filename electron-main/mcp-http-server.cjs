@@ -1,3 +1,5 @@
+// Electron 28 does not expose Web Crypto globally; the SDK HTTP transport expects it.
+if (!globalThis.crypto) globalThis.crypto = require('node:crypto').webcrypto;
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { ListToolsRequestSchema, CallToolRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
@@ -11,9 +13,9 @@ function mcpHttpUrl(host, port) {
 
 // Stateless: every request gets its own server/transport pair, so no session state
 // survives between calls and concurrent agents cannot interfere with each other.
-async function handleMcpHttpRequest(req, res, { host, port }) {
+async function handleMcpHttpRequest(req, res, { host, port, authorizeTool }) {
     const { createCorvasMcp } = await import('../mcp/flow-canvas-tools.mjs');
-    const { tools, callTool } = createCorvasMcp({ baseUrl: `http://${host}:${port}` });
+    const { tools, callTool } = createCorvasMcp({ baseUrl: `http://${host}:${port}`, authorizeTool });
     const server = new Server({ name: 'flow-canvas-mcp', version }, { capabilities: { tools: {} } });
     server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
     server.setRequestHandler(CallToolRequestSchema, request => callTool(request.params.name, request.params.arguments));

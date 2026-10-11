@@ -192,7 +192,7 @@ export const tools = [
     },
     {
         name: 'flow_canvas.image.generate',
-        description: 'Generate an image and add it to the Corvas board. Uses OpenAI if OPENAI_API_KEY is set, otherwise local built-in generation.',
+        description: 'Generate an image through the configured provider and add it to the Corvas board. Set provider=builtin explicitly for a local prompt preview; provider errors are never replaced by local output.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -342,7 +342,7 @@ export const tools = [
     ...boardTools
 ];
 
-export function createCorvasMcp({ baseUrl = DEFAULT_BRIDGE_URL } = {}) {
+export function createCorvasMcp({ baseUrl = DEFAULT_BRIDGE_URL, authorizeTool } = {}) {
     const base = String(baseUrl || DEFAULT_BRIDGE_URL).replace(/\/+$/, '');
     const api = (method, pathname, body) => bridgeApi(base, method, pathname, body);
     const toolHandlers = {
@@ -388,6 +388,9 @@ export function createCorvasMcp({ baseUrl = DEFAULT_BRIDGE_URL } = {}) {
     async function callTool(name, args = {}) {
         const handler = toolHandlers[name];
         if (!handler) throw new McpError(-32602, `Unknown tool: ${name}`);
+        if (authorizeTool && !await authorizeTool(name)) {
+            throw new McpError(-32000, `MCP tool is not allowed: ${name}`, { status: 403 });
+        }
         const result = await handler(args || {});
         if (name === 'flow_canvas.handoff.call' && Array.isArray(result?.result?.content)) {
             const { result: externalResult, ...receipt } = result;
@@ -431,13 +434,14 @@ async function generateImageWithSources(body = {}, api) {
     if (!prompt) throw new McpError(-32602, 'Missing required argument: prompt');
 
     if (body.provider !== 'builtin') {
-        try {
-            return await api('POST', '/images/generate', body);
-        } catch (error) {
-            if (process.env.OPENAI_API_KEY) throw error;
-        }
+        return api('POST', '/images/generate', body);
     }
 
+    // Builtin output writes files outside bridge routes, so stdio must check the live allowlist too.
+    const permissions = await api('GET', '/config');
+    if (!permissions.runtime?.allowedTools?.includes('flow_canvas.image.generate')) {
+        throw new McpError(-32000, 'MCP tool is not allowed: flow_canvas.image.generate', { status: 403 });
+    }
     const context = await api('GET', '/context');
     const plansResult = await api('GET', '/plans');
     const plan = body.planId

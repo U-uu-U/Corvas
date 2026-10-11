@@ -200,7 +200,11 @@ Corvas 启动后，本地桥接直接提供 `http://127.0.0.1:18765/mcp`，客�
 }
 ```
 
-在“设置 → API → MCP Server”中可以启动、关闭服务，并一键复制上面的连接配置；开关状态保存在 `data/mcp-server.json`，重启后保持。关闭后外部 Agent 和 stdio 入口都无法连接，Corvas 内置 Agent 不受影响。
+画布主界面显示后会弹出 20 秒的 HTTP MCP 连接提示，可复制地址或 JSON 配置到本机 harness。首次登录对话框打开时暂缓计时，可随时关闭提示。
+
+在“设置 → 创作 → HTTP MCP”中可以启用、关闭服务，并随时复制连接地址和配置；开关状态保存在 `data/mcp-server.json`，重启后保持。关闭后外部 Agent 和 stdio 入口都无法连接，Corvas 内置 Agent 不受影响。提示中的状态来自实际监听结果，端口冲突时会显示启动失败。
+
+图片生成失败会保留原始错误，不会自动退回本地预览图；显式 `provider: "builtin"` 同样受图片生成工具权限控制。
 
 Claude Code 可用 `claude mcp add --transport http corvas http://127.0.0.1:18765/mcp`。该端点为无状态模式，只监听本机，并校验 `Host`/`Origin` 头以防 DNS 重绑定；没有额外认证，本机任何进程都可调用，与原有桥接接口一致。
 

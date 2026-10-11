@@ -446,11 +446,11 @@ class FlowCanvasBridge {
             ...config
         };
         if (!merged.enabled) return false;
+        if (this.server) return true;
 
         this.host = sanitizeHost(merged.host);
         this.port = sanitizePort(merged.port);
         this.allowedTools = new Set(sanitizeAllowedTools(merged.allowedTools));
-        if (this.server) return true;
 
         this.lastListenError = null;
         const server = this.server = http.createServer((req, res) => {
@@ -608,7 +608,8 @@ class FlowCanvasBridge {
 
         const url = new URL(req.url, `http://${this.host}:${this.port}`);
         if (url.pathname === MCP_HTTP_PATH) {
-            await handleMcpHttpRequest(req, res, { host: this.host, port: this.port });
+            await handleMcpHttpRequest(req, res, { host: this.host, port: this.port,
+                authorizeTool: name => this._isToolAllowed(name) });
             return;
         }
         const body = await readJsonBody(req);

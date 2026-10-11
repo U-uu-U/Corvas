@@ -66,6 +66,34 @@ test('Streamable HTTP MCP endpoint rejects unknown tools as MCP errors', async t
     await assert.rejects(client.callTool({ name: 'flow_canvas.missing', arguments: {} }), /Unknown tool/);
 });
 
+test('HTTP image permission denial cannot fall back or write builtin output', async t => {
+    const { bridge, url } = await startBridge(t, {
+        allowedTools: DEFAULT_MCP_CONFIG.allowedTools.filter(name => name !== 'flow_canvas.image.generate')
+    });
+    let generationCalls = 0;
+    let contextReads = 0;
+    bridge._generateImage = () => { generationCalls++; throw new Error('must not generate'); };
+    bridge._context = () => { contextReads++; throw new Error('must not read source files'); };
+    const client = await connect(t, url);
+    for (const provider of ['auto', 'builtin']) {
+        await assert.rejects(client.callTool({ name: 'flow_canvas.image.generate',
+            arguments: { provider, prompt: 'Permission test', addToCanvas: false } }), /not allowed/);
+    }
+    assert.equal(generationCalls, 0);
+    assert.equal(contextReads, 0);
+});
+
+test('HTTP image failures retain the provider error without a second attempt or local output', async t => {
+    const { bridge, url } = await startBridge(t);
+    let calls = 0;
+    bridge._generateImage = () => { calls++; throw new Error('Provider submission timed out'); };
+    bridge._context = () => { throw new Error('Unexpected fallback'); };
+    const client = await connect(t, url);
+    await assert.rejects(client.callTool({ name: 'flow_canvas.image.generate', arguments: { prompt: 'Failure test' } }),
+        /Provider submission timed out/);
+    assert.equal(calls, 1);
+});
+
 test('closeServer stops listening, keeps renderer readiness, and start restarts it', async t => {
     const { bridge, port, url } = await startBridge(t);
     bridge.setBoardToolsReady(true);
