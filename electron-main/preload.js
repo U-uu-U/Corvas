@@ -71,6 +71,19 @@ contextBridge.exposeInMainWorld('flowCanvas', {
         test: request => ipcRenderer.invoke('mcp-client:test', request),
     },
 
+    mcpServer: {
+        status: () => ipcRenderer.invoke('mcp-server:status'),
+        start: () => ipcRenderer.invoke('mcp-server:start'),
+        stop: () => ipcRenderer.invoke('mcp-server:stop'),
+        copy: () => ipcRenderer.invoke('mcp-server:copy'),
+        copyUrl: () => ipcRenderer.invoke('mcp-server:copy-url'),
+        onShown: callback => {
+            const listener = () => callback();
+            ipcRenderer.on('mcp-server:shown', listener);
+            return () => ipcRenderer.removeListener('mcp-server:shown', listener);
+        },
+    },
+
     handoff: {
         create: request => ipcRenderer.invoke('handoff:create', request),
         list: request => ipcRenderer.invoke('handoff:list', request),
