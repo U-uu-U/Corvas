@@ -2,7 +2,10 @@ const { app, ipcMain, session, shell } = require('electron');
 
 const configUrl = process.env.FLOW_API_CATALOG_SMOKE_URL;
 if (!configUrl || new URL(configUrl).hostname !== '127.0.0.1') throw new Error('Local CONFIG fixture required');
-globalThis.apiCatalogSmoke = { fetchModelsCalls: 0, blockedRequests: [], openedSites: [], openedUrls: [] };
+globalThis.apiCatalogSmoke = { fetchModelsCalls: 0, blockedRequests: [], openedSites: [], openedUrls: [], rendererErrors: [] };
+app.on('web-contents-created', (_event, web) => web.on('console-message', (_event, level, message) => {
+    if (level >= 2) globalThis.apiCatalogSmoke.rendererErrors.push(message);
+}));
 shell.openExternal = async url => { globalThis.apiCatalogSmoke.openedUrls.push(url); };
 
 const handle = ipcMain.handle.bind(ipcMain);
@@ -22,7 +25,9 @@ ipcMain.on = (channel, listener) => on(channel, channel === 'model-config:runtim
 
 app.whenReady().then(() => {
     session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
-        const allowed = new URL(details.url).origin === new URL(configUrl).origin;
+        const origin = new URL(details.url).origin;
+        const allowed = origin === new URL(configUrl).origin
+            || (process.env.FLOW_SOURCE_SMOKE === '1' && origin === 'http://127.0.0.1:15321');
         if (!allowed) globalThis.apiCatalogSmoke.blockedRequests.push(details.url);
         callback({ cancel: !allowed });
     });

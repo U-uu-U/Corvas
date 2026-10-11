@@ -5,25 +5,9 @@
 const chokidar = require('chokidar');
 const path = require('path');
 const fs = require('fs');
+const { isBoardMediaFile, isTemporaryBoardFile } = require('../shared/board-media-policy.cjs');
 
 const WATCH_DEPTH = 5;
-
-const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.ico', '.tiff', '.tif']);
-const VIDEO_EXT = new Set(['.mp4', '.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm', '.m4v']);
-const AUDIO_EXT = new Set(['.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a']);
-const DOCUMENT_EXT = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']);
-const DESIGN_EXT = new Set([
-    '.psd', '.ai', '.eps', '.raw', '.cr2', '.nef', '.arw',
-    '.obj', '.fbx', '.gltf', '.glb', '.blend', '.sketch', '.fig'
-]);
-
-const SUPPORTED_EXT = new Set([
-    ...IMAGE_EXT,
-    ...VIDEO_EXT,
-    ...AUDIO_EXT,
-    ...DOCUMENT_EXT,
-    ...DESIGN_EXT,
-]);
 
 class Watcher {
     constructor(store, onChange) {
@@ -34,9 +18,7 @@ class Watcher {
     }
 
     isSupportedFile(filePath) {
-        if (this.isTemporaryFile(filePath)) return false;
-        const ext = path.extname(filePath).toLowerCase();
-        return SUPPORTED_EXT.has(ext);
+        return isBoardMediaFile(filePath);
     }
 
     isReadyFile(filePath) {
@@ -51,15 +33,7 @@ class Watcher {
     }
 
     isTemporaryFile(filePath) {
-        const base = path.basename(String(filePath || ''));
-        if (!base) return true;
-
-        const lower = base.toLowerCase();
-        if (base.startsWith('.') || base.startsWith('~') || base.endsWith('~')) return true;
-        if (lower === 'thumbs.db' || lower === 'desktop.ini') return true;
-        if (/\.(tmp|temp|part|partial|crdownload|download|swp|swo)$/i.test(lower)) return true;
-        if (/\.(jpg|jpeg|png|gif|webp|bmp|tif|tiff)\.(tmp|temp|part|partial|download)$/i.test(lower)) return true;
-        return false;
+        return isTemporaryBoardFile(filePath);
     }
 
     add(folderPath) {
@@ -161,7 +135,7 @@ class Watcher {
             const fullPath = path.join(dir, entry.name);
             if (entry.isDirectory()) {
                 this._walkDir(fullPath, result, depth + 1, maxDepth);
-            } else if (this.isSupportedFile(fullPath)) {
+            } else if (this.isReadyFile(fullPath)) {
                 result.push(fullPath);
             }
         }

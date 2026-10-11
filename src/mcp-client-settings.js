@@ -4,7 +4,7 @@ import { formatClientStatusMessage } from './generation-progress.js';
 const icon = name => `<svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-${name}"></use></svg>`;
 
 export function mountMcpSettings() {
-    const host = document.getElementById('agentApiSettingsPane');
+    const host = document.getElementById('agentCreationSettingsPane');
     if (!host || document.getElementById('mcpClientSettings')) return;
     const root = document.createElement('section');
     root.id = 'mcpClientSettings';
@@ -27,7 +27,7 @@ export function mountMcpSettings() {
             <label class="mcp-enabled"><input name="enabled" type="checkbox" checked>启用</label>
             <div class="mcp-client-actions"><button type="submit">保存并连接</button><button type="button" data-action="cancel">取消</button></div>
         </form>`;
-    host.insertBefore(root, document.getElementById('agentApiDiagnostics'));
+    host.insertBefore(root, host.querySelector(':scope > #agentApiDiagnostics'));
     const api = window.flowCanvas?.mcpClient;
     const status = root.querySelector('[role=status]');
     const list = root.querySelector('.mcp-client-list');

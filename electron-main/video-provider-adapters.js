@@ -179,6 +179,11 @@ function getVideoResultUrl(payload) {
     const statusUrls = new Set([
         payload?.status_url, data?.status_url, result?.status_url, output?.status_url
     ].filter(value => typeof value === 'string' && value.trim()).map(value => value.trim()));
+    const explicitMediaUrls = new Set([
+        payload, data, result, output, video, content, firstContent, ...dataItems
+    ].flatMap(item => item && typeof item === 'object'
+        ? [item.video_url, item.result_url, item.output_url, item.download_url] : [])
+        .filter(value => typeof value === 'string' && value.trim()).map(value => value.trim()));
     const arrayDataCandidates = dataItems.flatMap(item => {
         if (typeof item === 'string') return [item];
         if (!item || typeof item !== 'object') return [];
@@ -207,6 +212,8 @@ function getVideoResultUrl(payload) {
         if (typeof value !== 'string' || !value.trim()) return false;
         const normalized = value.trim();
         if (statusUrls.has(normalized) || taskIdFromVideoQueryUrl(normalized)) return false;
+        // Explicit media fields can contain extensionless signed paths ending in the task ID.
+        if (explicitMediaUrls.has(normalized)) return true;
         if (!taskId) return true;
         try {
             const pathname = new URL(normalized).pathname.replace(/\/+$/, '');
@@ -488,6 +495,11 @@ function buildUnifiedVideoEndpoint(endpoint) {
 }
 
 function buildVideoGenerationEndpoint(endpoint, model) {
+    if (String(model || '').trim() === 'b_seedance_v2.0') {
+        try {
+            if (new URL(String(endpoint || '').trim()).origin === 'https://ai.ravenhash.org') return buildUnifiedVideoEndpoint(endpoint);
+        } catch { /* Invalid URLs retain the normal validation path. */ }
+    }
     if (isStarFrameModel(model)) return starFrameEndpoint(endpoint);
     if (isGlobalAiOpcModel(model)) return globalAiOpcEndpoint(endpoint);
     if (isYueqiFastModel(model, endpoint)) {

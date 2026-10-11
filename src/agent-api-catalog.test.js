@@ -52,6 +52,22 @@ function harness(t, config = catalog(entry('first'), entry('second'))) {
     return { sidebar, state };
 }
 
+test('relay connection is not acknowledged when encrypted API persistence fails', async t => {
+    const { sidebar } = harness(t);
+    const original = { id: 'existing', capability: 'video', endpoint: 'https://art.ravenhash.org/v1', apiKey: 'keep' };
+    sidebar.providers = [original];
+    sidebar.globalConfig = { videoProviderId: 'existing' };
+    sidebar.apiConfigReady = Promise.resolve();
+    sidebar.apiConfigRevision = 4;
+    sidebar.apiConfigUpdatedAt = '2026-10-09T00:00:00Z';
+    globalThis.window.flowCanvas.apiConfig = { save: async () => ({ success: false }) };
+    await assert.rejects(sidebar._connectRelayAccount({ site: 'art', userId: 'user1', username: 'Fixture',
+        tokenId: '10', apiKey: 'sk-fixtureOnly123' }), /could not be saved/);
+    assert.deepEqual(sidebar.providers, [original]);
+    assert.deepEqual(sidebar.globalConfig, { videoProviderId: 'existing' });
+    assert.equal(sidebar.apiConfigRevision, 4);
+});
+
 test('remote video default applies to new nodes while explicit node and personal selections stay fixed', t => {
     const { sidebar, state } = harness(t, { ...catalog(entry('first'), entry('second')), defaultModels: { video: 'second' } });
     sidebar.providers = [{ id: 'video', endpoint: 'https://art.ravenhash.org/v1', capability: 'video',

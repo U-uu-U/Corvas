@@ -97,3 +97,30 @@ test('a stationary right click still opens the menu and a silent stop cannot sav
     assert.equal(h.frames.size, 0);
     assert.equal(h.manager.emit.mock.callCount(), 0);
 });
+
+test('fractional pointer coordinates and click jitter do not suppress the node menu or move the viewport', t => {
+    const h = fixture(t);
+    for (const [x, y] of [[100.8, 120], [100, 120.8], [101, 121], [99, 119]]) {
+        h.manager._startCanvasPanFromClientPoint(h.event('mousedown'));
+        h.dispatch('pointermove', x, y);
+        h.dispatch('pointerup', x, y);
+        assert.equal(h.manager._suppressStageMenu, false);
+        assert.deepEqual(h.stage.position(), { x: 20, y: -10 });
+        assert.equal(h.frames.size, 0);
+        assert.equal(h.manager.emit.mock.callCount(), 0);
+    }
+});
+
+test('pan starts after the threshold and retains the full movement from the press position', t => {
+    const h = fixture(t);
+    h.manager._startCanvasPanFromClientPoint(h.event('mousedown'));
+    h.dispatch('pointermove', 101, 121);
+    assert.equal(h.frames.size, 0);
+    h.dispatch('pointermove', 104, 120);
+    h.tick();
+    assert.deepEqual(h.stage.position(), { x: 24, y: -10 });
+    h.dispatch('pointerup', 110, 130);
+    assert.deepEqual(h.stage.position(), { x: 30, y: 0 });
+    assert.equal(h.manager._suppressStageMenu, true);
+    assert.equal(h.manager.emit.mock.callCount(), 1);
+});
