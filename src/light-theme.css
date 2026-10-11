@@ -414,6 +414,12 @@
     color: var(--accent-strong);
 }
 
+:root[data-theme='light'] .insert-node-menu .insert-node-item:hover,
+:root[data-theme='light'] .insert-node-menu .insert-node-item:focus-visible {
+    background: color-mix(in srgb, var(--text-primary) 7%, var(--panel-bg));
+    color: var(--text-primary);
+}
+
 :root[data-theme='light'] .context-menu-divider,
 :root[data-theme='light'] .plan-context-menu-divider,
 :root[data-theme='light'] .op-node-quick-menu-divider {

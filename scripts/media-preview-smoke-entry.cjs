@@ -1,9 +1,12 @@
 const { app, safeStorage } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
 const { ApiConfigStore } = require('../electron-main/api-config-store');
 const profile = process.env.FLOW_MEDIA_SMOKE_PROFILE;
 if (!profile) throw new Error('Isolated media smoke profile required');
 app.setPath('userData', profile);
+fs.mkdirSync(path.join(profile, 'data'), { recursive: true });
+fs.writeFileSync(path.join(profile, 'data/relay-browser.json'), JSON.stringify({ onboardingSkipped: true }));
 Object.defineProperty(app, 'isPackaged', { value: true });
 app.whenReady().then(() => {
     new ApiConfigStore(profile, { protect: value => safeStorage.encryptString(value), unprotect: value => safeStorage.decryptString(value) })

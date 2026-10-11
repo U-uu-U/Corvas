@@ -32,6 +32,8 @@ import {
     parseAgentImageCompilationResponse
 } from './agent-image-generation.js';
 import { reconcileApiConfig } from './api-config-recovery.js';
+import { mergeRelayAccount } from './relay-account-config.js';
+import { createSiteLogin } from './site-login.js';
 import { CANCELED_IMAGE_REFERENCES } from './node-types.js';
 import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from './generation-request-params.js';
 import { requestRecoveryTaskId } from './generation-recovery-dialog.js';
@@ -79,9 +81,7 @@ const DEFAULT_TEMPLATES = {
     'ravenhash-text': { name: 'RavenHash Text', capability: 'text', type: 'openai', endpoint: 'https://ai.ravenhash.org/v1', model: '' },
     ravenhash: { name: 'RavenHash Image', capability: 'image', type: 'openai', endpoint: 'https://ai.ravenhash.org/v1', model: 'gpt-image-2' },
     'ravenhash-video': { name: 'RavenHash Video', capability: 'video', type: 'openai', endpoint: 'https://art.ravenhash.org/v1', model: 'doubao-seedance-2-0' },
-    'ravenhash-video-cart': { name: 'RavenHash 新站', capability: 'video', type: 'openai', endpoint: 'https://cart.ravenhash.org/v1', model: '' },
-    shanhai: { name: 'Shanhai Video', capability: 'video', type: 'openai', endpoint: 'https://shanhai.vnshu.cn/api/v1', model: 'oc-model-qbdmeb',
-        models: ['oc-model-qbdmeb', 'oc-model-1iq31f', 'oc-model-bkb50q', 'oc-model-c6ws7e'] }
+    'ravenhash-video-cart': { name: 'RavenHash 新站', capability: 'video', type: 'openai', endpoint: 'https://cart.ravenhash.org/v1', model: '' }
 };
 
 function normalizeRavenHashEndpoint(endpoint) {
@@ -390,6 +390,7 @@ export class AgentSidebar {
         } });
         this._bindAgentSidebarResize();
         this._syncHudState();
+        this.siteLogin = createSiteLogin({ getProviders: () => this.providers });
 
         // 渲染 UI
         this._renderProviderList();
@@ -402,6 +403,12 @@ export class AgentSidebar {
         this._setSettingsTab(this.activeSettingsTab);
         this._renderGenerationTasks();
         this.apiConfigReady = this._restoreDurableApiConfig();
+        void this.apiConfigReady.then(() => this.siteLogin?.start());
+        this.relayAccountSync = Promise.resolve();
+        window.flowCanvas?.apiConfig?.onRelayAccount?.(account => {
+            this.relayAccountSync = this.relayAccountSync.catch(() => {}).then(() => this._connectRelayAccount(account));
+            return this.relayAccountSync;
+        });
         this._restoreAgentConversation(this.activeProjectCacheKey);
         this._restorePendingAgentAttachments();
         this._connectAgentRuntime();
@@ -1777,7 +1784,7 @@ export class AgentSidebar {
         if (this.runtimeStarting.has(cacheKey) || running) return { ok: false, reason: '当前对话已有运行中的任务' };
         const provider = this._getTextProvider();
         if (!provider?.endpoint || !provider?.apiKey || !provider?.model) {
-            const reason = '请先配置并选择文字 API。';
+            const reason = '请先在登录认证中连接可用的文字模型账户。';
             this._appendAgentError(reason);
             return { ok: false, reason };
         }
@@ -1890,7 +1897,7 @@ export class AgentSidebar {
 
         const provider = this._getTextProvider();
         if (!provider?.endpoint || !provider?.apiKey || !provider?.model) {
-            const reason = '请先通过设置配置并选择文字 API。';
+            const reason = '请先在登录认证中连接可用的文字模型账户。';
             this._appendAgentError(reason);
             return { ok: false, reason };
         }
@@ -2032,7 +2039,7 @@ export class AgentSidebar {
         const pendingSource = this._normalizePendingAgentSource(this.pendingAgentSource);
         const provider = this._getTextProvider();
         if (!provider?.endpoint || !provider?.apiKey || !provider?.model) {
-            this._appendAgentError('请先通过右上角设置配置并选择文字 API。');
+            this._appendAgentError('请先在设置的登录认证中连接可用的文字模型账户。');
             return;
         }
         if (!window.flowCanvas?.ai?.generateText) {
@@ -4104,6 +4111,40 @@ export class AgentSidebar {
         }
     }
 
+    async _connectRelayAccount(account) {
+        await this.apiConfigReady;
+        const bridge = window.flowCanvas?.apiConfig;
+        if (!bridge?.save) throw new Error('API config storage unavailable');
+        if (!catalogProviderKinds(modelConfigStore.getConfig(), `https://${account.site}.ravenhash.org/v1`).length) {
+            await modelConfigStore.refresh({ force: true, reason: 'relay-account' });
+        }
+        const previous = this._apiConfigSnapshot();
+        const next = mergeRelayAccount(previous, modelConfigStore.getConfig(), account);
+        clearTimeout(this.apiConfigSaveTimer);
+        this.providers = next.providers;
+        this.globalConfig = next.globalConfig;
+        this.apiConfigRevision = Math.max(1, Number(this.apiConfigRevision) + 1 || 1);
+        this.apiConfigUpdatedAt = new Date().toISOString();
+        const revision = this.apiConfigRevision;
+        try {
+            const saved = await bridge.save(this._apiConfigSnapshot());
+            if (!saved?.success) throw new Error('API config save failed');
+        } catch {
+            if (this.apiConfigRevision === revision) {
+                this.providers = previous.providers;
+                this.globalConfig = previous.globalConfig;
+                this.apiConfigRevision = previous.revision;
+                this.apiConfigUpdatedAt = previous.updatedAt;
+            }
+            throw new Error('Relay account could not be saved');
+        }
+        this._clearMigratedLocalApiConfig();
+        this._writeLocalApiConfig();
+        this._renderProviderList();
+        this._renderAgentComposerModels();
+        return { success: true };
+    }
+
     _queueDurableApiConfigSave() {
         if (!this.apiConfigHydrated) {
             this.pendingDurableApiConfigSave = true;
@@ -4393,12 +4434,12 @@ export class AgentSidebar {
                     </div>
                     <div class="agent-provider-guide-copy">
                         <h2 id="agentProviderGuideTitle">Agent 模式需要文字模型</h2>
-                        <p>请先配置“文本与视觉理解”API，规划器才能分析参考图并整理生成请求。</p>
+                        <p>尚未连接可用的文字模型账户。</p>
                     </div>
                     <div class="agent-provider-guide-actions">
                         <button type="button" data-guide-cancel>取消</button>
-                        <button type="button" data-guide-settings>打开 API 设置</button>
-                        <button class="primary" type="button" data-guide-ravenhash>前往 RavenHash</button>
+                        <button type="button" data-guide-settings>登录认证</button>
+                        <button class="primary" type="button" data-guide-ravenhash>打开生图站</button>
                     </div>
                 </section>
             `;
@@ -4414,15 +4455,10 @@ export class AgentSidebar {
             overlay.querySelector('[data-guide-settings]')?.addEventListener('click', () => {
                 finish();
                 this.setMode('settings', 'api');
-                this._showForm();
-                this._applyTemplate('ravenhash-text');
-                document.querySelectorAll('.agent-template-chip').forEach(chip => {
-                    chip.classList.toggle('active', chip.dataset.template === 'ravenhash-text');
-                });
             });
             overlay.querySelector('[data-guide-ravenhash]')?.addEventListener('click', async () => {
                 try {
-                    await window.flowCanvas?.shell?.openRavenHash?.('ai');
+                    await window.flowCanvas?.relay?.open?.({ site: 'ai', login: true });
                 } catch (error) {
                     console.error('[AgentSidebar] Failed to open RavenHash:', error);
                 } finally {
@@ -4934,6 +4970,7 @@ export class AgentSidebar {
     }
 
     _renderProviderList() {
+        this.siteLogin?.render();
         if (!this.providerListEl) return;
         this.providerListEl.innerHTML = '';
 

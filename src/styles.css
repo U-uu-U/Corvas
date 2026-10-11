@@ -5219,29 +5219,75 @@ body.settings-mode .agent-header-left::after {
     background: #e53e3e;
 }
 
-.insert-node-heading {
-    padding: 4px 14px 6px;
-    color: var(--text-secondary);
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+.plan-context-menu.insert-node-menu {
+    width: 244px;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    padding: 6px;
+    overflow-y: auto;
+    background: var(--panel-bg);
+    border-color: var(--border-color);
+    box-shadow: 0 12px 32px var(--canvas-control-shadow);
+    backdrop-filter: none;
 }
 
-.insert-node-item {
+.insert-node-menu .insert-node-heading {
+    padding: 7px 10px 9px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 18px;
+    letter-spacing: 0;
+}
+
+.insert-node-menu .insert-node-item {
     display: flex;
     align-items: center;
-    gap: 9px;
+    gap: 11px;
+    min-height: 44px;
+    padding: 7px 10px;
+    border-radius: 5px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0;
+    transition: background-color 100ms ease;
 }
 
-/* 描边图标靠 currentColor 继承文字色，hover 反白时自动跟着变 */
-.insert-node-icon {
-    display: inline-flex;
-    flex-shrink: 0;
-    color: var(--text-secondary);
+.insert-node-menu .insert-node-item:hover,
+.insert-node-menu .insert-node-item:focus-visible {
+    background: color-mix(in srgb, var(--text-primary) 9%, var(--panel-bg));
+    color: var(--text-primary);
 }
 
-.insert-node-item:hover .insert-node-icon {
-    color: #fff;
+.insert-node-menu .insert-node-item:focus-visible {
+    outline: 1px solid var(--text-secondary);
+    outline-offset: -1px;
+}
+
+.insert-node-menu .insert-node-icon {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    border-radius: 6px;
+    color: color-mix(in srgb, var(--insert-node-color, var(--text-secondary)) 78%, var(--text-primary));
+    background: color-mix(in srgb, var(--insert-node-color, var(--text-secondary)) 12%, transparent);
+}
+
+.insert-node-menu .insert-node-label {
+    flex: 1;
+    min-width: 0;
+    line-height: 20px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.insert-node-divider {
+    height: 1px;
+    margin: 5px 10px;
+    background: var(--border-color);
 }
 
 .connection-node-menu {

@@ -50,7 +50,7 @@ const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio
         await page.locator('#agentToggleBtn').hover();
         await page.waitForSelector('#agentSettingsBtn');
         await page.locator('#agentSettingsBtn').click();
-        await page.locator('#agentApiSettingsTab').click();
+        await page.locator('#agentCreationSettingsTab').click();
         const root = page.locator('#mcpClientSettings');
         await root.locator('[data-action=add]').click();
         await root.locator('[name=name]').fill('Blender / Rhino 测试连接');
@@ -120,7 +120,7 @@ const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio
         await client.close(); client = null;
         await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
-        await page.locator('#agentApiSettingsTab').click();
+        await page.locator('#agentCreationSettingsTab').click();
         await root.locator('[data-action=edit]').click();
         assert.equal(await root.locator('[name=env]').inputValue(), '');
         await root.locator('[name=name]').fill('Blender / Rhino');

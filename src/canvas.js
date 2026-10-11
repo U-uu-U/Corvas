@@ -3,13 +3,14 @@
 // ============================================================
 
 import Konva from 'konva';
+import mediaPolicy from '../shared/board-media-policy.cjs';
 import { installMediaViewportCulling } from './canvas-media-culling.js';
 import { createAudioPlayer } from './canvas-audio-player.js';
 import { GraphView } from './graph-view.js';
 import { collectUpstreamMediaAttachments, collectUpstreamPromptContext } from './agent-attachments.js';
 import { NODE_TYPES } from './node-types.js';
 import { formatClientGenerationError, formatClientStatusMessage, generationFailureError } from './generation-progress.js';
-import { nodeIconSvg } from './node-icons.js';
+import { iconSvg, nodeIconSvg } from './node-icons.js';
 import { GraphRunner, STATUS } from './graph-runner.js';
 import { generationNodeSignature } from '../shared/generation-node-state.mjs';
 import { applyGeneratorStackResult } from '../shared/generation-result-state.mjs';
@@ -3953,6 +3954,10 @@ export class CanvasManager {
     }
 
     _addCapturedFile(filePath, dropEvent, options = {}) {
+        if (!mediaPolicy.isBoardMediaFile(filePath)) {
+            this._showCanvasStatus('画布仅支持图片、视频和音频素材', 3000);
+            return;
+        }
         if (dropEvent || options.manualRestore) {
             this.emit('manualFileImport', filePath);
         }
@@ -4331,6 +4336,7 @@ export class CanvasManager {
     }
 
     renderInitialItems() {
+        this._initialRenderPending = true;
         const items = this.storeData.items || [];
         this._migrateCompletedImageGeneratorItems(items);
         console.log('[Canvas] renderInitialItems: storeData.items 数量 =', items.length);
@@ -4358,17 +4364,46 @@ export class CanvasManager {
             this._refreshCanvasBoundary();
 
             if (index < items.length) {
+                if (index === batchSize) this._loadAllContent();
                 requestAnimationFrame(renderBatch);
             } else {
+                this._initialRenderPending = false;
                 console.log('[Canvas] renderInitialItems 完成: this.items.size =', this.items.size);
                 this.graphView?.sync();
                 this.emit('initialRenderComplete', { itemCount: this.items.size });
-                requestAnimationFrame(() => this._loadAllContent());
+                this._loadAllContent();
             }
         };
 
         renderBatch();
         this.renderPlans();
+    }
+
+    async prepareStartupContent({ limit = 8, timeoutMs = 6500 } = {}) {
+        const started = performance.now();
+        let targets = null;
+        while (performance.now() - started < timeoutMs) {
+            if (!this._initialRenderPending && !targets) {
+                const images = [...this.items.values()].filter(item => item.data?.kind !== 'op'
+                    && item.data?.filePath && this._getItemMediaType(item.data) === 'image');
+                const visible = item => {
+                    const box = item.group.getClientRect();
+                    return box.x + box.width >= 0 && box.y + box.height >= 0
+                        && box.x <= this.stage.width() && box.y <= this.stage.height();
+                };
+                targets = [...images.filter(visible), ...images.filter(item => !visible(item))].slice(0, limit);
+                const priority = new Set(targets);
+                this._contentLoadQueue = [...this._contentLoadQueue.filter(item => priority.has(item)),
+                    ...this._contentLoadQueue.filter(item => !priority.has(item))];
+                this._drainContentLoadQueue();
+            }
+            if (targets && targets.every(item => item.loaded || item.loadError || !item.group.getLayer())) {
+                await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                return { ready: true, count: targets.length };
+            }
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        return { ready: false, count: targets?.length || 0 };
     }
 
     _migrateCompletedImageGeneratorItems(items = []) {
@@ -5012,6 +5047,7 @@ export class CanvasManager {
     }
 
     async _createCard(data) {
+        if (!mediaPolicy.isBoardMediaFile(data?.filePath)) return null;
         const fileType = this._getItemMediaType(data);
         const placeholderSize = this._mediaPlaceholderSize(fileType, data);
         data.mediaType = fileType;
@@ -5262,7 +5298,7 @@ export class CanvasManager {
         emptyImageButton.type = 'button';
         emptyImageButton.className = 'plan-context-item insert-node-item';
         emptyImageButton.innerHTML =
-            `<span class="insert-node-icon">${nodeIconSvg('image')}</span>` +
+            `<span class="insert-node-icon">${iconSvg('image', 20)}</span>` +
             '<span class="insert-node-label">空图片</span>';
         emptyImageButton.title = '创建可上传或替换素材的空图片节点';
         emptyImageButton.addEventListener('click', () => {
@@ -5271,14 +5307,25 @@ export class CanvasManager {
         });
         menu.appendChild(emptyImageButton);
 
+        const separator = () => {
+            const divider = document.createElement('div');
+            divider.className = 'insert-node-divider';
+            divider.setAttribute('role', 'separator');
+            menu.appendChild(divider);
+        };
+        separator();
+        const labels = { image: '图像生成', video: '视频生成', batch: '批量处理' };
+
         Object.entries(NODE_TYPES).forEach(([nodeType, def]) => {
+            if (nodeType === 'batch') separator();
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'plan-context-item insert-node-item';
+            button.style.setProperty('--insert-node-color', def.color || 'var(--text-secondary)');
             button.innerHTML =
-                `<span class="insert-node-icon">${nodeIconSvg(nodeType)}</span>` +
+                `<span class="insert-node-icon">${nodeIconSvg(nodeType, 20)}</span>` +
                 `<span class="insert-node-label"></span>`;
-            button.querySelector('.insert-node-label').textContent = def.title || nodeType;
+            button.querySelector('.insert-node-label').textContent = labels[nodeType] || def.title || nodeType;
             button.addEventListener('click', () => {
                 this._removePlanContextMenu();
                 this.addOpNode(nodeType, at);
@@ -13255,6 +13302,7 @@ export class CanvasManager {
         let lastX = startX;
         let lastY = startY;
         let moved = false;
+        const dragThreshold = 3;
         let panFrame = 0;
         let pendingPosition = null;
         const passthroughElement = options.passthroughElement || null;
@@ -13296,6 +13344,8 @@ export class CanvasManager {
             moveEvent.stopPropagation();
             if (!Number.isFinite(moveEvent.clientX) || !Number.isFinite(moveEvent.clientY)) return;
             if (lastX === moveEvent.clientX && lastY === moveEvent.clientY) return;
+            // Pointer/mouse coordinates can differ by a fractional CSS pixel under display scaling.
+            if (!moved && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < dragThreshold) return;
             lastX = moveEvent.clientX;
             lastY = moveEvent.clientY;
             moved = true;
@@ -15820,6 +15870,7 @@ export class CanvasManager {
     }
 
     addFile(filePath) {
+        if (!mediaPolicy.isBoardMediaFile(filePath)) return null;
         if (this._isInternalProcessFile(filePath)) return null;
         if (this._hasFilePath(filePath)) return null;
 

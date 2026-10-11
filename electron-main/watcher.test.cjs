@@ -73,6 +73,23 @@ test('shutdown waits for watchers removed by an earlier group switch', async () 
     assert.equal(h.watcher.pendingCloses.size, 0);
 });
 
+test('folder scans include only nonempty media and exclude document, design and lock files', async () => {
+    const fs = require('node:fs/promises');
+    const path = require('node:path');
+    const os = require('node:os');
+    const Watcher = require('./watcher');
+    const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'corvas-media-filter-'));
+    try {
+        for (const name of ['image.png', '_w1.png', 'video.mp4', 'audio.mp3', 'deck.pptx', 'page.html', 'model.obj', '~$deck.pptx', '.hidden.png']) {
+            await fs.writeFile(path.join(folder, name), 'fixture');
+        }
+        await fs.writeFile(path.join(folder, 'empty.png'), '');
+        const result = new Watcher({}, () => {}).scanFolder(folder);
+        assert.equal(result.success, true);
+        assert.deepEqual(result.files.map(file => path.basename(file)).sort(), ['_w1.png', 'audio.mp3', 'image.png', 'video.mp4']);
+    } finally { await fs.rm(folder, { recursive: true, force: true }); }
+});
+
 test('real watcher delivers a stable new file and finishes closing before folder cleanup', { timeout: 10000 }, async () => {
     const fs = require('node:fs/promises');
     const path = require('node:path');

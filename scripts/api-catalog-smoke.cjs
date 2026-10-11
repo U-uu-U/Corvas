@@ -24,6 +24,7 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
 (async () => {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-api-catalog-smoke-'));
     const requests = [];
+    const errors = [];
     let app;
     let page;
     const server = http.createServer(async (request, response) => {
@@ -44,17 +45,18 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
             connections: [], folderGroups: [{ id: 'catalog-smoke', name: 'API catalog smoke', savedItems: items,
                 connections: [], folders: [], boardRevision: 0 }], mcp: { enabled: false }, viewport: { x: 0, y: 0, scale: 1 } }));
         const env = { ...process.env, FLOW_MCP_SMOKE_PROFILE: profile,
+            FLOW_API_CATALOG_SMOKE_ONBOARDING: '1',
             FLOW_API_CATALOG_SMOKE_URL: `http://127.0.0.1:${server.address().port}/config` };
         delete env.ELECTRON_RUN_AS_NODE;
         app = await electron.launch({ executablePath: require('electron'), args: ['--disable-gpu',
             path.join(__dirname, 'api-catalog-smoke-entry.cjs')], env });
         for (let attempt = 0; attempt < 100; attempt++) {
-            page = app.windows().find(window => /dist[\\/]index\.html/.test(window.url()));
+            page = app.windows().find(window => /dist[\\/]index\.html/.test(window.url())
+                || (process.env.FLOW_SOURCE_SMOKE === '1' && window.url().startsWith('http://127.0.0.1:15321/')));
             if (page) break;
             await new Promise(resolve => setTimeout(resolve, 100));
         }
         assert.ok(page, 'The main window must open');
-        const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         page.on('dialog', dialog => { errors.push(`Unexpected dialog: ${dialog.message()}`); void dialog.dismiss(); });
         await page.waitForFunction(() => window.__flowCanvasGetModelConfigSnapshot?.().status.origin === 'remote');
@@ -71,10 +73,49 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
             await page.evaluate(() => window.__flowCanvasRefreshModelConfig());
             await page.waitForFunction(revision => window.__flowCanvasGetModelConfigSnapshot?.().status.revision === revision, config.revision);
         };
+        let creationSettingsChecked = false;
         const openSettings = async () => {
+            const onboarding = page.locator('#siteLoginDialog[open]');
+            if (await onboarding.count()) {
+                assert.equal(await onboarding.locator('[data-login-site]').count(), 3);
+                const bounds = await onboarding.evaluate(element => {
+                    const rect = element.getBoundingClientRect();
+                    return { centerX: rect.x + rect.width / 2, centerY: rect.y + rect.height / 2,
+                        width: globalThis.innerWidth, height: globalThis.innerHeight };
+                });
+                assert.ok(Math.abs(bounds.centerX - bounds.width / 2) < 2 && Math.abs(bounds.centerY - bounds.height / 2) < 2);
+                await page.screenshot({ path: path.join(artifactDir, 'site-login-first-launch.png') });
+                await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+                    .find(window => /index\.html|^http:\/\/127\.0\.0\.1:15321\//.test(window.webContents.getURL())).setSize(900, 760));
+                assert.equal(await onboarding.evaluate(element => element.scrollWidth > element.clientWidth), false);
+                await page.screenshot({ path: path.join(artifactDir, 'site-login-first-launch-compact.png') });
+                await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+                    .find(window => /index\.html|^http:\/\/127\.0\.0\.1:15321\//.test(window.webContents.getURL())).setSize(1400, 900));
+                await onboarding.locator('[data-login-skip]').click();
+            }
             await page.locator('#agentToggleBtn').hover();
             await page.locator('#agentSettingsBtn').click();
             await page.locator('#agentApiSettingsTab').click();
+            assert.equal(await page.locator('#agentStationAccounts [data-station]').count(), 3);
+            assert.equal(await page.locator('#agentLegacyApiConfiguration').isVisible(), true);
+            assert.equal(await page.locator('#agentCreationSettingsPane #mcpClientSettings').count(), 1);
+            assert.equal(await page.locator('#agentCreationSettingsPane #agentApiDiagnostics').count(), 1);
+            assert.equal(await page.locator('#agentApiSettingsPane #mcpClientSettings, #agentApiSettingsPane #agentApiDiagnostics').count(), 0);
+            if (!creationSettingsChecked) {
+                await page.locator('#agentCreationSettingsTab').click();
+                const mcp = page.locator('#mcpClientSettings');
+                await mcp.locator('[data-action=add]').click();
+                assert.equal(await mcp.locator('[name=name]').isVisible(), true);
+                await mcp.locator('[data-action=cancel]').click();
+                await page.locator('#diagnosticsSettings summary').click();
+                assert.equal(await page.locator('#diagnosticsSettings [data-debug=copy]').isVisible(), true);
+                await page.locator('#diagnosticsSettings summary').click();
+                await mcp.scrollIntoViewIfNeeded();
+                await page.screenshot({ path: path.join(artifactDir, 'creation-mcp-settings.png') });
+                await page.locator('#agentApiSettingsTab').click();
+                creationSettingsChecked = true;
+            }
+            await page.screenshot({ path: path.join(artifactDir, 'site-login-settings.png') });
         };
         const fill = async (name, endpoint) => {
             await page.locator('#agentAddApiBtn').click();
@@ -105,7 +146,7 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
         };
         const snapshot = async (label, width) => {
             await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()
-                .find(window => window.webContents.getURL().includes('index.html')).setSize(width, 1000), width);
+                .find(window => /index\.html|^http:\/\/127\.0\.0\.1:15321\//.test(window.webContents.getURL())).setSize(width, 1000), width);
             await page.locator('#agentFormSaveBtn').scrollIntoViewIfNeeded();
             const issues = await form.evaluate(root => {
                 const controls = [...root.querySelectorAll('input, select, button')].filter(element => {
@@ -279,13 +320,42 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
         assert.deepEqual(custom.models, ['custom-text-v1']);
         assert.equal(custom.model, 'custom-text-v1');
         assert.ok((await expandedModels('text')).some(label => label.includes('custom-text-v1')));
+        config.models = [videoC];
+        await refresh();
+        const importAccount = async site => {
+            await app.evaluate(({ BrowserWindow, ipcMain }, site) => new Promise((resolve, reject) => {
+                const web = BrowserWindow.getAllWindows().find(window => /index\.html|^http:\/\/127\.0\.0\.1:15321\//.test(window.webContents.getURL())).webContents;
+                const id = `smoke-account-${site}`;
+                const timer = setTimeout(() => { ipcMain.removeListener('relay-account:complete', complete); reject(new Error('Account acknowledgement timeout')); }, 15000);
+                const complete = (event, received, result) => {
+                    if (event.sender !== web || received !== id) return;
+                    clearTimeout(timer); ipcMain.removeListener('relay-account:complete', complete);
+                    if (result.success) resolve(); else reject(new Error('Account import failed'));
+                };
+                ipcMain.on('relay-account:complete', complete);
+                web.send('relay-account:connect', { id, account: { site, userId: 'smoke-user', username: 'Linked user',
+                    tokenId: '42', apiKey: `sk-${site}LinkedFixture123` } });
+            }), site);
+        };
+        await importAccount('art');
+        await importAccount('art');
+        await importAccount('cart');
+        const linked = (await saved()).providers.filter(provider => provider.relayAccount);
+        assert.equal(linked.length, 2);
+        assert.equal(linked[0].endpoint, 'https://art.ravenhash.org/v1');
+        assert.equal(linked[1].endpoint, 'https://cart.ravenhash.org/v1');
+        assert.equal(linked[0].modelCatalog, 'remote');
+        assert.ok((await saved()).providers.some(provider => provider.id === custom.id), 'Existing custom API is preserved');
+        assert.equal(JSON.stringify(requests).includes('LinkedFixture123'), false);
         assert.equal(await app.evaluate(() => globalThis.apiCatalogSmoke.fetchModelsCalls), 0);
         assert.ok(requests.length >= 5, 'Real localhost CONFIG requests must be observed');
         assert.equal(JSON.stringify(requests).includes(fixtureKey), false, 'CONFIG server must never receive API keys');
         assert.ok(requests.every(request => !request.headers.authorization && !request.headers['x-api-key']));
         assert.deepEqual(errors, []);
-        console.log('PASS API catalog desktop smoke: art/cart exact URL save; Cart template preservation and Get API route; Art-to-Cart edit/reload; remote image outside scope; live rename/add/disable/clear; custom text; no model-list calls or CONFIG key leakage; desktop and compact layout.');
+        console.log(`PASS API catalog ${process.env.FLOW_SOURCE_SMOKE === '1' ? 'source' : 'packaged'} desktop smoke: art/cart exact URL save; Cart template preservation and Get API route; Art-to-Cart edit/reload; remote image outside scope; live rename/add/disable/clear; custom text; no model-list calls or CONFIG key leakage; desktop and compact layout.`);
     } catch (error) {
+        console.error('Renderer errors:', errors);
+        if (app) console.error('Early renderer errors:', await app.evaluate(() => globalThis.apiCatalogSmoke.rendererErrors));
         if (page && !page.isClosed()) {
             console.error('CONFIG status:', await page.evaluate(() => window.__flowCanvasGetModelConfigSnapshot?.().status));
             console.error('Fixture requests:', requests.length);
