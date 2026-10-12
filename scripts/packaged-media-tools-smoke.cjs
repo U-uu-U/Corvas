@@ -12,7 +12,7 @@ const { MediaProcessor, mediaToolPaths } = require('../electron-main/media-proce
     const tools = mediaToolPaths({ packaged: true, resourcesPath });
     for (const file of Object.values(tools)) {
         assert.ok(fs.statSync(file).isFile());
-        if (process.platform === 'darwin') execFileSync('lipo', ['-verify_arch', 'x86_64', 'arm64', file]);
+        if (process.platform === 'darwin') execFileSync('lipo', [file, '-verify_arch', 'x86_64', 'arm64']);
         execFileSync(file, ['-version'], { windowsHide: true, stdio: 'ignore' });
     }
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'corvas-packaged-tools-'));
