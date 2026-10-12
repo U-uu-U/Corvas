@@ -3,7 +3,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { SITES, identifier, publicTask } = require('./relay-browser-contract.cjs');
-const { resolveRelayAccount } = require('./relay-account-link.cjs');
+const { listRelayAccounts, resolveRelayAccounts } = require('./relay-account-link.cjs');
+const { RelaySessionStore, sessionStorageScript, restoreSessionCookies, restoreSessionStorage } = require('./relay-session-store.cjs');
 
 const fail = message => Object.assign(new Error(message), { publicMessage: message });
 const MAX_BYTES = 512 * 1024 * 1024;
@@ -18,8 +19,14 @@ async function bounded(work, milliseconds = 10000) {
 }
 
 class RelayBrowser {
-    constructor({ BrowserWindow, BrowserView, session, shell, directory, importer, sites = SITES, onAccount, getLinkedAccount, onState }) {
-        Object.assign(this, { BrowserWindow, BrowserView, session, shell, directory, importer, sites, onAccount, getLinkedAccount, onState });
+    constructor({ BrowserWindow, BrowserView, session, shell, directory, importer, sites = SITES, onAccount, onSelectAccounts, getLinkedAccounts, onState, safeStorage }) {
+        Object.assign(this, { BrowserWindow, BrowserView, session, shell, directory, importer, sites, onAccount, onSelectAccounts, getLinkedAccounts, onState });
+        this.sessionStore = new RelaySessionStore({ directory, safeStorage });
+        this.restoringSites = new Set();
+        this.loggedOutSites = new Set();
+        this.logoutAuth = new Map();
+        this.sessionErrors = new Map();
+        this.sessionSaves = new Map();
         this.window = null;
         this.views = new Map();
         this.sessions = new Map();
@@ -31,6 +38,7 @@ class RelayBrowser {
         this.accountStates = new Map();
         this.accountAuth = new Map();
         this.accountChecks = new Set();
+        this.accountManualPending = new Set();
         this.capturedAuth = new Map();
         this.preferences = {};
         this.preferenceFile = path.join(directory, 'relay-browser.json');
@@ -47,7 +55,7 @@ class RelayBrowser {
         if (!this.window || this.window.isDestroyed()) return;
         this.window.webContents.send('relay-browser:state', { site: this.site,
             siteName: this.sites[this.site]?.name || '', taskId: this.focus?.site === this.site ? this.focus.taskId : '',
-            status: this.status, account: this.accountStates.get(this.site) || { state: 'signed-out' } });
+            status: this.status || this.sessionErrors.get(this.site) || '', account: this.accountStates.get(this.site) || { state: 'signed-out' } });
     }
 
     snapshot() {
@@ -66,6 +74,7 @@ class RelayBrowser {
     skipOnboarding() { this.savePreferences({ onboardingSkipped: true }); return this.snapshot(); }
 
     async open({ site, taskId, clientTaskId, login = false } = {}) {
+        if (this.windowClosing) await this.windowClosing;
         if (!this.window || this.window.isDestroyed()) {
             this.window = new this.BrowserWindow({ width: 1280, height: 880, minWidth: 620, minHeight: 500,
                 title: '站点后台 · Corvas', backgroundColor: '#191b1e', autoHideMenuBar: true,
@@ -75,6 +84,17 @@ class RelayBrowser {
             this.window.webContents.on('will-navigate', event => event.preventDefault());
             this.window.webContents.on('will-attach-webview', event => event.preventDefault());
             this.window.on('resize', () => this.layout());
+            const window = this.window;
+            let readyToClose = false;
+            window.on('close', event => {
+                if (readyToClose) return;
+                event.preventDefault();
+                this.windowClosing ||= this.flushSessions().finally(() => {
+                    readyToClose = true;
+                    if (!window.isDestroyed()) window.close();
+                    this.windowClosing = null;
+                });
+            });
             this.window.on('closed', () => {
                 clearInterval(this.accountTimer);
                 this.accountAuth.clear(); this.accountStates.clear();
@@ -83,12 +103,14 @@ class RelayBrowser {
                 this.views.clear(); this.window = null;
             });
             await this.window.loadFile(path.join(__dirname, 'relay-browser.html'));
-            if (this.onAccount) this.accountTimer = setInterval(() => { void this.checkAccount(); }, 2000);
+            this.accountTimer = setInterval(() => {
+                for (const site of this.views.keys()) void this.saveSession(site);
+                if (this.onAccount) void this.checkAccount();
+            }, 2000);
         }
         if (this.window.isMinimized()) this.window.restore();
         this.window.show(); this.window.focus();
-        if (site || this.site) await this.selectSite(site || this.site);
-        if (login && this.site) void this.navigate(this.sites[this.site].loginPath || '/login');
+        if (site || this.site) await this.selectSite(site || this.site, { selectKeys: login });
         if (taskId) {
             this.focus = { site: this.site, taskId: identifier(taskId), clientTaskId: clientTaskId || null };
             void this.navigate('/task-logs');
@@ -111,13 +133,14 @@ class RelayBrowser {
         try { return new URL(value).origin === this.sites[site].origin; } catch { return false; }
     }
 
-    async selectSite(site) {
+    async selectSite(site, { selectKeys = false } = {}) {
         if (!Object.hasOwn(this.sites, site)) throw fail('请选择生图站、视频站或企业站');
         if (site !== this.site) this.focus = null;
         this.site = site;
         this.savePreferences({ site });
         if (!this.views.has(site)) {
             const browserSession = this.session.fromPartition(`persist:corvas-relay-${site}`);
+            this.restoringSites.add(site);
             const view = new this.BrowserView({ webPreferences: { session: browserSession,
                 sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true } });
             this.views.set(site, view);
@@ -149,10 +172,22 @@ class RelayBrowser {
             });
             this.watchSession(site, browserSession);
             this.layout();
-            void this.navigate(this.sites[site].loginPath || '/login');
+            let saved;
+            try {
+                saved = this.sessionStore.get(site, this.sites[site].origin);
+                await restoreSessionCookies(browserSession, saved, this.sites[site].origin);
+            } catch { this.sessionErrors.set(site, '登录状态未能恢复，请检查系统凭据服务'); }
+            try {
+                await web.loadURL(this.sites[site].origin + (this.sites[site].homePath || '/dashboard'));
+                if (this.views.get(site) === view && this.sameOrigin(site, web.getURL())
+                    && await restoreSessionStorage(web, saved, this.sites[site].origin)) {
+                    await web.loadURL(this.sites[site].origin + (this.sites[site].homePath || '/dashboard'));
+                }
+            } catch (error) { if (error.code !== 'ERR_ABORTED') this.send('网页打开失败，请刷新重试'); }
+            finally { this.restoringSites.delete(site); }
         }
         this.layout(); this.send();
-        void this.checkAccount();
+        void this.checkAccount(selectKeys);
     }
 
     async readAccountAuth(site, web) {
@@ -165,13 +200,18 @@ class RelayBrowser {
 
     async checkAccount(manual = false) {
         const site = this.site, web = this.views.get(site)?.webContents;
-        if (!this.onAccount || !site || !web || this.accountChecks.has(site)) return;
+        if (!this.onAccount || !site || !web || this.restoringSites.has(site)) return;
+        if (this.accountChecks.has(site)) {
+            if (manual && this.accountStates.get(site)?.state !== 'selecting') this.accountManualPending.add(site);
+            return;
+        }
         this.accountChecks.add(site);
         try {
             const auth = await this.readAccountAuth(site, web);
             if (!auth) {
+                if (this.accountAuth.has(site)) this.forgetSession(site);
                 this.accountAuth.delete(site);
-                this.accountStates.set(site, { state: 'signed-out', message: '登录后自动连接画布' });
+                this.accountStates.set(site, { state: 'signed-out', message: '请先登录站点' });
                 if (site === this.site) this.send();
                 if (manual) void this.navigate(this.sites[site].loginPath || '/login');
                 return;
@@ -179,20 +219,83 @@ class RelayBrowser {
             const fingerprint = crypto.createHash('sha256').update(auth).digest('hex');
             if (!manual && this.accountAuth.get(site) === fingerprint) return;
             this.accountAuth.set(site, fingerprint);
-            this.accountStates.set(site, { state: 'connecting', message: '正在连接画布' });
+            this.loggedOutSites.delete(site);
+            this.accountStates.set(site, { state: 'connecting', message: '正在读取 API Key' });
             if (site === this.site) this.send();
-            const stillCurrent = async () => this.views.get(site)?.webContents === web
+            const stillCurrent = async () => this.site === site && this.views.get(site)?.webContents === web
                 && !web.isDestroyed() && await this.readAccountAuth(site, web) === auth;
-            const account = await resolveRelayAccount({ site, origin: this.sites[site].origin,
-                session: web.session, auth, getPrevious: this.getLinkedAccount, stillCurrent, manual });
-            await this.onAccount(account);
-            this.accountStates.set(site, { state: 'connected', username: account.username, message: '已连接画布' });
+            const options = { site, origin: this.sites[site].origin, session: web.session, auth, stillCurrent };
+            const catalog = await listRelayAccounts(options);
+            const previous = this.getLinkedAccounts?.(site, catalog.userId) || [];
+            const linked = new Set(previous.map(account => account.tokenId));
+            const alreadySeen = this.preferences.keyPickerSeen?.[site] === catalog.userId;
+            if (manual || (!alreadySeen && !linked.size)) {
+                if (!this.onSelectAccounts) throw fail('请重启画布后选择 API Key');
+                this.savePreferences({ keyPickerSeen: { ...this.preferences.keyPickerSeen, [site]: catalog.userId } });
+                this.accountStates.set(site, { state: 'selecting', username: catalog.username, message: '等待选择 API Key' });
+                this.accountManualPending.delete(site);
+                this.send();
+                const tokenIds = await this.onSelectAccounts({ ...catalog, tokens: catalog.tokens.map(token => ({ ...token, imported: linked.has(token.id) })) });
+                if (!await stillCurrent()) return;
+                if (tokenIds?.length) {
+                    const accounts = await resolveRelayAccounts(options, { userId: catalog.userId, tokenIds });
+                    if (!await stillCurrent()) return;
+                    await this.onAccount(accounts);
+                    accounts.forEach(account => linked.add(account.tokenId));
+                }
+            }
+            this.accountStates.set(site, { state: linked.size ? 'connected' : 'signed-in', username: catalog.username,
+                message: linked.size ? `已导入 ${linked.size} 个 API Key` : '已登录，尚未导入 API Key' });
+            await this.saveSession(site);
         } catch (error) {
+            if (error.code === 'RELAY_AUTH_EXPIRED') this.forgetSession(site);
             this.accountStates.set(site, { state: 'error', message: error.publicMessage || '连接未完成，请点击连接画布重试' });
         } finally {
             this.accountChecks.delete(site);
             if (site === this.site) this.send();
+            if (this.accountManualPending.delete(site) && site === this.site && this.views.get(site)?.webContents === web && !web.isDestroyed()) {
+                void this.checkAccount(true);
+            }
         }
+    }
+
+    forgetSession(site) {
+        this.loggedOutSites.add(site);
+        const auth = this.capturedAuth.get(site);
+        if (auth) this.logoutAuth.set(site, crypto.createHash('sha256').update(auth).digest('hex'));
+        try { this.sessionStore.clear(site); }
+        catch { this.sessionErrors.set(site, '登录状态未能清除，请检查系统凭据服务'); }
+    }
+
+    async saveSession(site) {
+        if (this.restoringSites.has(site) || this.loggedOutSites.has(site)) return;
+        if (this.sessionSaves.has(site)) return this.sessionSaves.get(site);
+        const web = this.views.get(site)?.webContents;
+        if (!web || web.isDestroyed() || !this.sameOrigin(site, web.getURL()) || web.isLoadingMainFrame()) return;
+        const work = (async () => {
+            const storage = await bounded(web.executeJavaScript(sessionStorageScript(this.sites[site].origin)));
+            if (!storage || web.isDestroyed() || !this.sameOrigin(site, web.getURL()) || this.loggedOutSites.has(site)) return;
+            if (site !== 'ai' && !await this.readAccountAuth(site, web)) { this.forgetSession(site); return; }
+            const cookies = await web.session.cookies.get({ url: this.sites[site].origin });
+            if (this.loggedOutSites.has(site)) return;
+            this.sessionStore.save(site, this.sites[site].origin, { storage, cookies });
+            web.session.flushStorageData();
+            await web.session.cookies.flushStore();
+            this.sessionErrors.delete(site);
+        })().catch(() => { this.sessionErrors.set(site, '登录状态未能加密保存，请检查系统凭据服务'); })
+            .finally(() => this.sessionSaves.delete(site));
+        this.sessionSaves.set(site, work);
+        return work;
+    }
+
+    async flushSessions() {
+        // A close must capture the final storage state, not reuse a pre-logout snapshot.
+        await Promise.allSettled([...this.sessionSaves.values()]);
+        await Promise.allSettled([...this.views.keys()].map(site => this.saveSession(site)));
+        await Promise.allSettled([...this.sessions.values()].map(async ({ browserSession }) => {
+            browserSession.flushStorageData();
+            await browserSession.cookies.flushStore();
+        }));
     }
 
     async navigate(route) {
@@ -204,23 +307,28 @@ class RelayBrowser {
 
     watchSession(site, browserSession) {
         if (this.sessions.has(site)) return;
-        if (site === 'ai') {
-            browserSession.webRequest.onBeforeSendHeaders({ urls: [`${this.sites[site].origin}/api/*`] }, (details, callback) => {
+        browserSession.webRequest.onBeforeSendHeaders({ urls: [`${this.sites[site].origin}/api/*`] }, (details, callback) => {
                 const web = this.views.get(site)?.webContents;
                 const frame = details.frame;
                 if (web && !web.isDestroyed() && details.webContentsId === web.id && frame
                     && frame.processId === web.mainFrame.processId && frame.routingId === web.mainFrame.routingId
                     && this.sameOrigin(site, frame.url) && this.sameOrigin(site, web.getURL())) {
-                    if (new URL(details.url).pathname === '/api/user/auth/logout') {
+                    if (['/api/user/auth/logout', '/api/v1/auth/logout'].includes(new URL(details.url).pathname)) {
+                        this.forgetSession(site);
                         this.capturedAuth.delete(site); this.accountAuth.delete(site);
-                    } else {
+                    } else if (site === 'ai') {
                         const value = Object.entries(details.requestHeaders).find(([key]) => key.toLowerCase() === 'authorization')?.[1];
-                        if (typeof value === 'string' && /^Bearer [^\s]{1,16384}$/.test(value)) this.capturedAuth.set(site, value.slice(7));
+                        if (typeof value === 'string' && /^Bearer [^\s]{1,16384}$/.test(value)) {
+                            const auth = value.slice(7);
+                            if (!this.loggedOutSites.has(site) || crypto.createHash('sha256').update(auth).digest('hex') !== this.logoutAuth.get(site)) {
+                                this.capturedAuth.set(site, auth);
+                                this.loggedOutSites.delete(site);
+                            }
+                        }
                     }
                 }
                 callback({ requestHeaders: details.requestHeaders });
-            });
-        }
+        });
         // Keep the station's own task UI. Only a canvas deep link adds an exact task
         // filter to its existing request; the toolbar makes that filter removable.
         browserSession.webRequest.onBeforeRequest({ urls: [`${this.sites[site].origin}/api/v1/task_logs*`] }, (details, callback) => {
@@ -332,9 +440,10 @@ class RelayBrowser {
         } catch (error) { return { ok: false, error: error.publicMessage || '操作未完成，请重试' }; }
     }
 
-    close() {
+    async close() {
         clearInterval(this.accountTimer);
         for (const job of this.jobs.values()) if (job.status === 'downloading') job.item.cancel();
+        await this.flushSessions();
         for (const { browserSession, listener } of this.sessions.values()) {
             browserSession.flushStorageData?.();
             browserSession.removeListener('will-download', listener);
@@ -343,6 +452,7 @@ class RelayBrowser {
         }
         this.sessions.clear();
         if (this.window && !this.window.isDestroyed()) this.window.close();
+        if (this.windowClosing) await this.windowClosing;
     }
 }
 

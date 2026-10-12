@@ -1,8 +1,8 @@
-import { applyCatalogFields } from './admin-catalog-model.mjs';
+import { applyCatalogFields, catalogModelSummary } from './admin-catalog-model.mjs';
 
 export const DISPLAY_FIELDS = [
     { key: 'label', label: '显示名称', max: 100 },
-    { key: 'description', label: '模型简介', max: 500, multiline: true },
+    { key: 'description', label: '模型简介 / 参数说明', max: 500, multiline: true },
     { key: 'routeLabel', label: '线路名称', max: 80 },
     { key: 'routeGroup', label: '线路分组 ID', max: 100 },
     { key: 'routeGroupLabel', label: '分组卡片标题', max: 100 },
@@ -126,7 +126,8 @@ export function readEditorValues(entry) {
         catalogModel: entry.catalog?.model || '',
         catalogHosts: Array.isArray(entry.catalog?.hosts) ? entry.catalog.hosts.join('\n') : '',
         catalogEnabled: String(entry.catalog?.enabled !== false),
-        ...Object.fromEntries(DISPLAY_FIELDS.map(({ key }) => [key, display[key] ?? ''])),
+        ...Object.fromEntries(DISPLAY_FIELDS.map(({ key }) => [key,
+            display[key] ?? (key === 'description' ? catalogModelSummary(entry) : '')])),
         ...Object.fromEntries(DISPLAY_ORDER_FIELDS.map(({ key }) => [key, display[key] === undefined ? '' : String(display[key])])),
         ...Object.fromEntries(DISPLAY_BOOLEAN_FIELDS.map(({ key }) => [key,
             typeof display[key] === 'boolean' ? String(display[key]) : 'inherit'])),
@@ -296,6 +297,13 @@ export function applyEditorValues(entry, values, touched, now = new Date().toISO
             display[key] = order;
         }
         displayChanged = true;
+    }
+    // Existing clients use routeLabel for grouped cards, so a rename must update both names.
+    if (touched.has('label') && !touched.has('routeLabel') && display.label
+        && (display.routeGroup || Object.hasOwn(display, 'routeLabel'))) {
+        const max = DISPLAY_FIELDS.find(field => field.key === 'routeLabel').max;
+        if (display.label.length > max) throw new Error(`线路模型的显示名称最多 ${max} 个字符`);
+        display.routeLabel = display.label;
     }
     for (const { key, label } of DISPLAY_BOOLEAN_FIELDS) {
         if (!touched.has(key)) continue;

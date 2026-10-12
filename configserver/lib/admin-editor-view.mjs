@@ -32,6 +32,7 @@ button:disabled { cursor: default; opacity: .5; }
 .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; }
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: #bfc6d1; font-size: 12px; }
 .field.full { grid-column: 1 / -1; }
+.field-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .field input, .field select, .field textarea { width: 100%; min-width: 0; border-radius: 6px; font: 13px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; }
 .field textarea { min-height: 82px; resize: vertical; }
 .field-label { color: #aeb7c6; }
@@ -64,7 +65,16 @@ ${CATALOG_STYLE}
 `;
 
 export function modelEditorMarkup() {
-    const field = ({ key, label, max, multiline }) => `<label class="field${multiline ? ' full' : ''}">
+    const field = ({ key, label, max, multiline }) => key === 'description'
+        ? `<div class="field full">
+            <div class="field-heading"><label for="modelDescription">${label}</label>
+              <button type="button" id="restoreDescriptionBtn" class="icon-command" title="恢复自动参数说明" aria-label="恢复自动参数说明" disabled>
+                <svg class="catalog-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/admin/assets/flow-icons.svg#icon-history"></use></svg>
+              </button>
+            </div>
+            <textarea id="modelDescription" data-field="description" maxlength="${max}" rows="3" spellcheck="false" placeholder="未设置"></textarea>
+          </div>`
+        : `<label class="field${multiline ? ' full' : ''}">
         <span>${label}</span>${multiline
         ? `<textarea data-field="${key}" maxlength="${max}" rows="3" spellcheck="false" placeholder="未设置"></textarea>`
         : `<input type="text" data-field="${key}" maxlength="${max}" autocomplete="off" placeholder="${key === 'label' ? '沿用默认' : '未设置'}">`}</label>`;

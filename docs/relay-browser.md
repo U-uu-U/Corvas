@@ -4,7 +4,7 @@
 
 右下角“站点后台”打开上次选择的站点；登录、充值、任务列表、预览和下载均沿用网站页面。不另建账户后台。
 
-选站结果保存在用户资料 `data/relay-browser.json`；工具栏支持前进、后退、刷新、任务日志和切站。三站使用独立的 Electron 持久化 session，保存网站自身 Cookie/Local Storage；普通登录的有效会话在重开时复用，过期后由原站要求重新登录。远程页面无 preload、Node 和本地 IPC 权限。
+选站结果保存在用户资料 `data/relay-browser.json`；工具栏支持前进、后退、刷新、任务日志和切站。三站使用独立的 Electron 持久化 session，保存网站自身 Cookie/Local Storage。额外使用系统凭据服务加密保存同源 Cookie 及 Session Storage 中的 `token`、`user`，存放于 `data/relay-sessions.v1.json`。关闭窗口和退出应用时等待会话写盘，重开时恢复会话并进入后台首页，不强制跳登录页。恢复不延长网站的有效期、不覆盖较新的登录，退出登录会清除对应加密记录。远程页面仍无 preload、Node 和本地 IPC 权限。
 
 ## 任务与下载
 
@@ -18,13 +18,13 @@
 
 ## 登录连接画布
 
-在内置浏览器登录个人站或企业站后，主进程通过原站 `/api/v1/user/profile` 核对用户，再读取该用户 `/api/v1/tokens`。优先复用已连接的 Key 或名为 `Corvas Canvas` 的专用 Key；首次连接且不存在时调用原站创建接口。创建失败不自动重试，工具栏“连接画布”可手动重试，重试先查列表防止重复创建。已停用、过期或仅限网页使用的专用 Key 不自动恢复；曾连接的 Key 被删除后需手动重新连接。
+登录后，主进程核对用户身份并分页读取该用户已有的 API Key。画布弹出勾选列表，显示名称、掩码和可用状态。只有确认勾选的 Key 才读取完整值并导入；取消或空列表不修改 API 配置，也不自动创建 Key。停用、过期、仅限网页使用的 Key 不允许选择。确认时重新核对当前账户和 Key 状态，避免把已经撤销或其他账户的凭据导入。工具栏和设置中的“选择 API Key”可重新打开列表。
 
-生图站使用 New API 的 `/api/user/self`、`/api/token/` 和 `/api/token/{id}/key`。其网页访问令牌由主进程观察该站 BrowserView 自身的同源 API 请求获得；不从其他窗口或请求接收凭据，不主动刷新登录令牌，不读取用户密码。退出登录请求清除内存令牌。仅在确认本用户专用 Key 后获取完整值，禁用或过期 Key 不重新创建。
+生图站使用 New API 的 `/api/user/self`、`/api/token/` 和 `/api/token/{id}/key`。其网页访问令牌由主进程观察该站 BrowserView 自身的同源 API 请求获得；不从其他窗口或请求接收凭据，不主动刷新登录令牌，不读取用户密码。退出登录请求清除内存令牌和加密会话。仅为用户勾选的 Key 调用完整值读取接口。视频站和企业站使用 `/api/v1/user/profile` 与 `/api/v1/tokens`，不会调用创建 Key 接口。
 
-API 端点由固定站点确定，模型目录来自 CONFIG，不调用 `/v1/models`。按站点、用户和模型用途保存独立 API 配置，保留其他配置及已有节点的账户绑定。同一用户重复登录更新原配置，不新增重复 API。连接账户成为该用途新任务的默认账户，同一账户的手动模型选择保留。
+API 端点由固定站点确定，模型目录来自 CONFIG，不调用 `/v1/models`。按站点、用户、Key ID 和模型用途保存独立 API 配置，多个 Key 不互相覆盖，重选同一个 Key 保留原配置 ID 和节点绑定。一次确认的多 Key 导入作为一次配置保存提交，失败时不部分落库。未勾选的既有画布 API 不会被删除，其他手动配置保持不变。
 
-网页登录令牌只在主进程内存中短暂使用，不写入画布 API 配置，也不传给本地工具栏。API Key 只通过受信任画布 IPC 交付，沿用系统凭据加密存储；画布确认保存后，工具栏才显示“已连接画布”。远程站点页面仍无 preload、Node 或本地 IPC 权限。此功能需要更新客户端，不能由 CONFIG 单独下发。
+网页登录会话仅通过系统凭据服务加密存储，不写入画布 API 配置，也不传给本地工具栏。选择弹窗仅接收 Key 元数据，不接收完整 Key。确认后，所选 API Key 通过受信任画布 IPC 交付并沿用系统凭据加密存储；画布确认保存后，工具栏才显示导入完成。此功能需要更新客户端，不能由 CONFIG 单独下发。
 
 这期没有服务器视频缓存，也不保证原产物地址不可达时浏览器能下载成功。新增 Electron 窗口与下载衔接需要更新客户端；不能仅靠 CONFIG 下发。
 
@@ -34,6 +34,6 @@ API 端点由固定站点确定，模型目录来自 CONFIG，不调用 `/v1/mod
 
 `node scripts/relay-browser-smoke.cjs` 使用隔离资料与本地站点，验证原站页面、登录隔离、原生浏览器下载、任务定位、回填和重复导入，不发生真实生成费用。
 
-登录连接回归：`node --test electron-main/relay-account-link.test.cjs src/relay-account-config.test.js src/agent-api-catalog.test.js`。浏览器冒烟覆盖两站首次创建、重复连接复用及加密存储；`node scripts/api-catalog-smoke.cjs` 另外通过真实画布 preload 和渲染器验证凭据接收、保存回执、重复导入及 CONFIG 不接收 Key。
+登录连接回归：`node --test electron-main/relay-account-link.test.cjs electron-main/relay-session-store.test.cjs src/relay-account-config.test.js src/agent-api-catalog.test.js`。浏览器冒烟覆盖三站现有 Key 选择、加密保存、Session Storage 与会话 Cookie 的窗口关闭和应用重启恢复，以及退出后不恢复。`node scripts/api-catalog-smoke.cjs` 通过真实画布 preload 验证弹窗勾选、取消、禁用项、窄窗口、多 Key 原子保存、重复导入与 CONFIG 不接收 Key。
 
 源码启动回归需先运行 Vite（15321），再设置 `FLOW_SOURCE_SMOKE=1` 执行 `node scripts/api-catalog-smoke.cjs`，使用独立用户资料和本地 CONFIG。源码模式与构建模式都需要检查；共享 CJS 文件增加浏览器引用时，需同步加入 `vite.config.js` 的开发转换清单与构建转换规则。

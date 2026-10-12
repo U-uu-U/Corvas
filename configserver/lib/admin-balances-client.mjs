@@ -48,10 +48,11 @@ export function initAdminBalances(document) {
                 const currency = document.createElement('small'); currency.textContent = account.currency; threshold.append(currency);
             } else threshold.textContent = '--';
             const status = cell(row, account.status === 'ok' ? account.low ? '余额偏低' : '正常'
-                : account.status === 'stale' ? '查询失败，显示上次余额' : account.status === 'error' ? '查询失败' : '待接入');
+                : account.status === 'stale' ? '查询失败，显示上次余额' : account.status === 'error' ? '查询失败'
+                    : account.status === 'link' ? '站点入口' : '待接入');
             status.className = 'balance-status';
             if (account.detail) { const detail = document.createElement('small'); detail.textContent = account.detail; status.append(detail); }
-            cell(row, time(account.updatedAt));
+            cell(row, account.status === 'link' ? '--' : time(account.updatedAt));
             const linkCell = cell(row);
             if (account.url) {
                 const link = document.createElement('a'); link.href = account.url; link.target = '_blank'; link.rel = 'noopener noreferrer';
@@ -66,7 +67,7 @@ export function initAdminBalances(document) {
         try {
             const data = await request(force ? '/admin/balances/refresh' : '/admin/balances', force ? {} : undefined);
             render(data.accounts);
-            state.textContent = `已接入 ${data.accounts.filter(account => account.status !== 'unavailable').length} / ${data.accounts.length}`;
+            state.textContent = `${data.accounts.length} 个上游站点`;
         } catch (error) { state.textContent = error.message; }
         finally { busy = false; button.disabled = false; }
     }

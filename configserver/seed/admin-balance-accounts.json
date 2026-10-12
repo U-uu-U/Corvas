@@ -1,12 +1,17 @@
 {
     "accounts": [
         { "id": "zhubo-art", "provider": "zhubo", "name": "主播视频", "account": "老站绑定账号", "url": "https://video.zhubo.asia", "currency": "CNY", "threshold": 50 },
-        { "id": "starframe-art", "name": "StarFrame", "account": "老站绑定账号", "url": "https://api.xzapi.vip", "reason": "生成 Key 为无限额度，需账号余额查询授权" },
-        { "id": "yueqi-art", "name": "Yueqi", "account": "老站绑定账号", "url": "https://yueqi.icu", "reason": "生成 Key 为无限额度，需账号余额查询授权" },
-        { "id": "artsmcp-art", "name": "ArtsMCP", "account": "老站绑定账号", "url": "https://ai.artsmcp.com", "reason": "待核实钱包查询接口" },
-        { "id": "minimax-art", "name": "MiniMax H3 上游", "account": "老站绑定账号", "url": "http://122.228.216.60:3000", "reason": "待接入账号余额查询" },
-        { "id": "968-art", "name": "968API", "account": "老站绑定账号", "url": "https://ap.968968968.xyz", "reason": "待核实余额查询接口" },
-        { "id": "shanhai-art", "name": "山海", "account": "老站绑定账号", "url": "https://shanhai.vnshu.cn", "reason": "待核实余额查询接口" },
-        { "id": "globalaiopc-direct", "name": "GlobalAiOpc", "account": "直连账号", "url": "https://docs.globalaiopc.com", "reason": "待接入账号余额查询" }
+        { "id": "starframe-art", "name": "StarFrame", "account": "老站绑定账号", "url": "https://api.xzapi.vip", "linkOnly": true },
+        { "id": "yueqi-art", "name": "Yueqi", "account": "老站绑定账号", "url": "https://yueqi.icu", "linkOnly": true },
+        { "id": "artsmcp-art", "name": "ArtsMCP", "account": "老站绑定账号", "url": "https://ai.artsmcp.com", "linkOnly": true },
+        { "id": "minimax-art", "name": "MiniMax H3 上游", "account": "老站绑定账号", "url": "http://122.228.216.60:3000", "linkOnly": true },
+        { "id": "968-art", "name": "968API", "account": "老站绑定账号", "url": "https://ap.968968968.xyz", "linkOnly": true },
+        { "id": "shanhai-art", "name": "山海", "account": "老站绑定账号", "url": "https://shanhai.vnshu.cn", "linkOnly": true },
+        { "id": "globalaiopc-direct", "name": "GlobalAiOpc", "account": "直连账号", "url": "https://www.globalaiopc.com/zh/default/useroverview", "linkOnly": true },
+        { "id": "yihong-art", "name": "Yihong", "account": "Seedance 2.5 Super", "url": "https://yihongapi.com", "linkOnly": true },
+        { "id": "seedance-direct-art", "name": "Seedance 2.0 15秒上游", "account": "15秒备用渠道", "url": "http://38.76.169.86:8080", "linkOnly": true },
+        { "id": "feituo-art", "name": "飞拓视频", "account": "30图特惠 / 全参30秒 / 933", "url": "https://feituokuajing.com", "linkOnly": true },
+        { "id": "dola-art", "name": "Dola 2.5 特价上游", "account": "Dola 2.5 特价渠道", "url": "http://160.202.238.97:3000", "linkOnly": true },
+        { "id": "jijiu-art", "name": "极九", "account": "Seedance 2.5 满参线路三", "url": "https://newapi.jijiucanvas.com", "linkOnly": true }
     ]
 }

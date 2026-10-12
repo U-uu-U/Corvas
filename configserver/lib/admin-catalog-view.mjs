@@ -375,8 +375,8 @@ export function renderCatalog(document, config, selectedId, onSelect, sources, p
         || namedGroups.find(group => group.entries.some(entry => entry.id === selectedId)) || namedGroups[0];
     const renderEntry = entry => {
         const card = tile(document, entry, { label: modelName(entry),
-        detail: [entry.catalog?.model, catalogModelSummary(entry)].filter(Boolean).join(' · ')
-            || entry.presentation?.description || entry.catalog?.model || entry.id,
+        detail: [entry.catalog?.model, entry.presentation?.description ?? catalogModelSummary(entry)]
+            .filter(Boolean).join(' · ') || entry.id,
         hidden: !!entry.presentation?.routeGroup && entry.presentation?.visible === false, disabled: entry.catalog?.enabled === false, selected: selectedId === entry.id,
         status: entry.catalog?.enabled === false ? '已停用' : !entry.presentation?.routeGroup ? '未加入画布' : entry.presentation?.visible === false ? '已隐藏'
             : !entry.catalog ? '待补全模型 ID 与 API 主机' : selectedId === entry.id ? '当前' : '',

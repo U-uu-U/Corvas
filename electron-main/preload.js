@@ -177,6 +177,15 @@ contextBridge.exposeInMainWorld('flowCanvas', {
     apiConfig: {
         load: () => ipcRenderer.invoke('api-config:load'),
         save: (config) => ipcRenderer.invoke('api-config:save', config),
+        onRelayAccountSelection: callback => {
+            const listener = (_, { id, catalog }) => {
+                Promise.resolve().then(() => callback(catalog)).then(tokenIds => {
+                    ipcRenderer.send('relay-account:complete', id, Array.isArray(tokenIds) ? { tokenIds } : { canceled: true });
+                }).catch(() => ipcRenderer.send('relay-account:complete', id, { canceled: true }));
+            };
+            ipcRenderer.on('relay-account:select', listener);
+            return () => ipcRenderer.removeListener('relay-account:select', listener);
+        },
         onRelayAccount: callback => {
             const listener = (_, { id, account }) => {
                 Promise.resolve().then(() => callback(account)).then(result => {
@@ -225,6 +234,18 @@ contextBridge.exposeInMainWorld('flowCanvas', {
         selectReplacement: (options) => ipcRenderer.invoke('file:selectReplacement', options),
         saveCopy: (filePath) => ipcRenderer.invoke('file:saveCopy', filePath),
         inspect: (filePath) => ipcRenderer.invoke('file:inspect', filePath),
+    },
+
+    mediaProcess: {
+        choose: () => ipcRenderer.invoke('media-process:choose'),
+        inspect: filePath => ipcRenderer.invoke('media-process:inspect', filePath),
+        convert: request => ipcRenderer.invoke('media-process:convert', request),
+        cancel: jobId => ipcRenderer.invoke('media-process:cancel', jobId),
+        onProgress: callback => {
+            const listener = (_, progress) => callback(progress);
+            ipcRenderer.on('media-process:progress', listener);
+            return () => ipcRenderer.removeListener('media-process:progress', listener);
+        }
     },
 
     // 窗口控制

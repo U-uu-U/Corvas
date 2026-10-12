@@ -1,6 +1,5 @@
 const crypto = require('node:crypto');
 
-const TOKEN_NAME = 'Corvas Canvas';
 const failure = message => Object.assign(new Error(message), { publicMessage: message });
 const validKey = value => typeof value === 'string' && /^sk-[A-Za-z0-9_-]{8,500}$/.test(value);
 
@@ -15,10 +14,10 @@ async function requestAccountJson(session, origin, auth, route, body) {
     } catch { throw failure('站点连接超时，请点击连接画布重试'); }
     if (!response.ok) {
         await response.body?.cancel().catch(() => {});
-        if (response.status === 401) throw failure('登录已过期，请在站点重新登录');
+        if (response.status === 401) throw Object.assign(failure('登录已过期，请在站点重新登录'), { code: 'RELAY_AUTH_EXPIRED' });
         if (response.status === 403) throw failure('当前账户没有连接权限，请检查站点账户状态');
         if (response.status === 429) throw failure('站点请求过于频繁，请稍后重试');
-        throw failure(body ? '站点未能创建画布专用 Key，请检查账户绑定要求和密钥数量限制' : '读取站点账户失败，请稍后重试');
+        throw failure('读取站点账户失败，请稍后重试');
     }
     const chunks = []; let size = 0;
     try {
@@ -33,116 +32,132 @@ async function requestAccountJson(session, origin, auth, route, body) {
     } catch { throw failure('站点账户响应不完整，请点击连接画布重试'); }
 }
 
-async function resolveRelayAccount({ site, origin, session, auth, getPrevious, stillCurrent, manual = false }) {
-    if (site === 'ai') return resolveNewApiAccount({ site, origin, session, auth, getPrevious, stillCurrent, manual });
-    const request = (route, body) => requestAccountJson(session, origin, auth, route, body);
-    const profile = await request('/api/v1/user/profile');
-    const userId = typeof profile.id === 'string' || Number.isSafeInteger(profile.id) ? String(profile.id) : '';
-    if (!/^[A-Za-z0-9_-]{1,160}$/.test(userId) || Number(profile.is_active) !== 1) {
-        throw failure('当前站点账户不可用，请重新登录');
-    }
-    const previous = getPrevious?.(site, userId);
-    const result = await request('/api/v1/tokens');
-    if (!Array.isArray(result.data)) throw failure('站点未返回有效的 API Key 列表');
-    const own = result.data.filter(token => String(token.user_id) === userId);
-    let token = previous?.tokenId ? own.find(token => String(token.id) === String(previous.tokenId)) : null;
-    token ||= own.filter(token => token.name === TOKEN_NAME).sort((a, b) => Number(a.id) - Number(b.id))[0];
-    if (!token) {
-        if (previous && !manual) throw failure('画布专用 Key 已被删除，点击连接画布可重新连接');
-        if (!await stillCurrent()) throw failure('登录账户已变化，请重新连接');
-        // A failed POST is never retried here. A manual retry lists tokens first.
-        token = await request('/api/v1/tokens', { name: TOKEN_NAME });
-    }
-    if (String(token.user_id) !== userId || !Number.isSafeInteger(token.id) || token.id < 1) {
-        throw failure('站点返回的 Key 与当前账户不一致');
-    }
-    if (Number(token.is_active) !== 1 || Number(token.only_playground) === 1 || Number(token.only_playground_2026) === 1) {
-        throw failure('画布专用 Key 已停用或仅限网页使用，请在站点密钥管理中调整');
-    }
-    if (token.expires_at) {
-        const expires = Date.parse(/(?:Z|[+-]\d\d:\d\d)$/.test(token.expires_at)
-            ? token.expires_at : token.expires_at.replace(' ', 'T') + 'Z');
-        if (!Number.isFinite(expires) || expires <= Date.now()) throw failure('画布专用 Key 已过期，请在站点密钥管理中调整');
-    }
-    if (!validKey(token.token_key)) throw failure('站点未返回可用的 API Key，请在站点密钥管理中检查');
-    if (!await stillCurrent()) throw failure('登录账户已变化，请重新连接');
-    return { site, userId, username: String(profile.username || '').slice(0, 80),
-        tokenId: String(token.id), apiKey: token.token_key };
-}
-
-async function resolveNewApiAccount({ site, origin, session, auth, getPrevious, stillCurrent, manual }) {
+function accountRequest({ site, origin, session, auth }) {
     const request = async (route, body) => {
         const result = await requestAccountJson(session, origin, auth, route, body);
+        if (site !== 'ai') return result;
         if (result.success !== true) throw failure('生图站认证未完成，请在站点完成登录后重试');
         return result.data;
     };
-    const profile = await request('/api/user/self');
-    if (!Number.isSafeInteger(profile?.id) || profile.id < 1 || Number(profile.status) !== 1) {
-        throw failure('生图站账户不可用，请重新登录');
+    return request;
+}
+
+function tokenState(site, token) {
+    if (Number(site === 'ai' ? token.status : token.is_active) !== 1) return '已停用';
+    if (site !== 'ai' && (Number(token.only_playground) === 1 || Number(token.only_playground_2026) === 1)) return '仅限网页';
+    if (site === 'ai' && Number(token.expired_time) > 0 && token.expired_time * 1000 <= Date.now()) return '已过期';
+    if (site !== 'ai' && token.expires_at) {
+        const expires = Date.parse(/(?:Z|[+-]\d\d:\d\d)$/.test(token.expires_at)
+            ? token.expires_at : token.expires_at.replace(' ', 'T') + 'Z');
+        if (!Number.isFinite(expires) || expires <= Date.now()) return '已过期';
     }
-    const userId = String(profile.id), previous = getPrevious?.(site, userId);
-    const list = async () => {
-        const tokens = [];
-        for (let page = 1; page <= 10; page++) {
-            const data = await request(`/api/token/?p=${page}&size=100`);
-            const items = Array.isArray(data) ? data : data?.items;
-            if (!Array.isArray(items)) throw failure('生图站未返回有效的 Key 列表');
-            tokens.push(...items.filter(token => token.user_id === undefined || String(token.user_id) === userId));
-            if (items.length < 100 || Number(data?.total) <= page * 100) return tokens;
+    if (site !== 'ai' && !validKey(token.token_key)) return 'Key 不可读取';
+    return '';
+}
+
+async function readRelayTokens(options) {
+    const { site, stillCurrent } = options;
+    const request = accountRequest(options);
+    const profile = await request(site === 'ai' ? '/api/user/self' : '/api/v1/user/profile');
+    const userId = typeof profile?.id === 'string' || Number.isSafeInteger(profile?.id) ? String(profile.id) : '';
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(userId) || Number(site === 'ai' ? profile.status : profile.is_active) !== 1) {
+        throw failure('当前站点账户不可用，请重新登录');
+    }
+    const tokens = new Map();
+    for (let page = 1; page <= 10; page++) {
+        const data = await request(site === 'ai' ? `/api/token/?p=${page}&size=100` : `/api/v1/tokens?page=${page}&per_page=100`);
+        const items = site === 'ai' ? (Array.isArray(data) ? data : data?.items) : data?.data;
+        if (!Array.isArray(items)) throw failure('站点未返回有效的 API Key 列表');
+        for (const token of items) {
+            if (!Number.isSafeInteger(token?.id) || token.id < 1) continue;
+            if (String(token.user_id) !== userId && !(site === 'ai' && token.user_id === undefined)) continue;
+            tokens.set(String(token.id), token);
         }
-        throw failure('生图站密钥数量过多，请在站点整理后重试');
-    };
-    const choose = tokens => (previous?.tokenId ? tokens.find(token => String(token.id) === previous.tokenId) : null)
-        || tokens.filter(token => token.name === TOKEN_NAME).sort((a, b) => a.id - b.id)[0];
-    let token = choose(await list());
-    if (!token) {
-        if (previous && !manual) throw failure('画布专用 Key 已被删除，点击连接画布可重新连接');
-        if (!await stillCurrent()) throw failure('登录账户已变化，请重新连接');
-        await request('/api/token/', { name: TOKEN_NAME, remain_quota: 0, unlimited_quota: true,
-            expired_time: -1, model_limits_enabled: false, model_limits: '', allow_ips: '', group: '',
-            auto_groups: [], cross_group_retry: false });
-        token = choose(await list());
+        const total = Number(data?.total ?? data?.pagination?.total);
+        if (items.length < 100 || (Number.isFinite(total) && total <= page * 100)) {
+            if (!await stillCurrent()) throw failure('登录账户已变化，请重新连接');
+            return { request, tokens, userId, username: String(profile.username || '').slice(0, 80) };
+        }
     }
-    if (!token || !Number.isSafeInteger(token.id) || token.id < 1) throw failure('生图站未返回画布专用 Key，请重新连接');
-    if (Number(token.status) !== 1 || (Number(token.expired_time) > 0 && token.expired_time * 1000 <= Date.now())) {
-        throw failure('画布专用 Key 已停用或过期，请在生图站密钥管理中调整');
+    throw failure('API Key 数量过多，请在站点整理后重试');
+}
+
+async function listRelayAccounts(options) {
+    const { tokens, userId, username } = await readRelayTokens(options);
+    return { site: options.site, userId, username, tokens: [...tokens.values()].map(token => {
+        const secret = String(options.site === 'ai' ? token.key || '' : token.token_key || '');
+        const reason = tokenState(options.site, token);
+        return { id: String(token.id), name: String(token.name || `Key ${token.id}`).slice(0, 120),
+            maskedKey: secret ? `sk-...${secret.slice(-4)}` : '', enabled: !reason, reason };
+    }) };
+}
+
+async function resolveRelayAccounts(options, selection) {
+    const ids = selection?.tokenIds;
+    if (!Array.isArray(ids) || !ids.length || ids.length > 100 || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length) {
+        throw failure('请选择需要导入的 API Key');
     }
+    const { request, tokens, userId, username } = await readRelayTokens(options);
+    if (userId !== selection.userId) throw failure('登录账户已变化，请重新选择 API Key');
+    const accounts = [];
+    for (const id of ids) {
+        const token = tokens.get(id);
+        if (!token || tokenState(options.site, token)) throw failure('所选 Key 已失效或不可用，请重新读取列表');
+        if (!await options.stillCurrent()) throw failure('登录账户已变化，请重新连接');
+        let apiKey = token.token_key;
+        if (options.site === 'ai') {
+            const secret = await request(`/api/token/${token.id}/key`, {});
+            apiKey = typeof secret?.key === 'string' ? (secret.key.startsWith('sk-') ? secret.key : `sk-${secret.key}`) : '';
+        }
+        if (!validKey(apiKey)) throw failure('站点未返回所选 API Key 的完整值');
+        accounts.push({ site: options.site, userId, username, tokenId: id, tokenName: String(token.name || '').slice(0, 120), apiKey });
+    }
+    const { stillCurrent } = options;
     if (!await stillCurrent()) throw failure('登录账户已变化，请重新连接');
-    const secret = await request(`/api/token/${token.id}/key`, {});
-    const apiKey = typeof secret?.key === 'string' ? (secret.key.startsWith('sk-') ? secret.key : `sk-${secret.key}`) : '';
-    if (!validKey(apiKey)) throw failure('生图站未返回可用的 API Key');
-    if (!await stillCurrent()) throw failure('登录账户已变化，请重新连接');
-    return { site, userId, username: String(profile.username || '').slice(0, 80), tokenId: String(token.id), apiKey };
+    return accounts;
 }
 
 class RelayAccountDelivery {
     constructor({ timeout = 45000 } = {}) { this.pending = new Map(); this.timeout = timeout; }
 
     send(web, account) {
+        return this.request(web, 'relay-account:connect', { account }, this.timeout);
+    }
+
+    select(web, catalog) {
+        return this.request(web, 'relay-account:select', { catalog }, 0, true);
+    }
+
+    request(web, channel, payload, timeout, selection = false) {
         if (!web || web.isDestroyed()) return Promise.reject(failure('画布尚未就绪，请打开画布后重试'));
         const id = crypto.randomUUID();
         return new Promise((resolve, reject) => {
-            const finish = error => {
+            const finish = (error, result) => {
                 const pending = this.pending.get(id);
                 if (!pending) return;
                 clearTimeout(pending.timer); web.removeListener('destroyed', pending.closed);
                 this.pending.delete(id);
-                if (error) reject(error); else resolve();
+                if (error) reject(error); else resolve(result);
             };
             const closed = () => finish(failure('画布已关闭，请重新连接'));
-            const timer = setTimeout(() => finish(failure('画布未确认保存，请点击连接画布重试')), this.timeout);
-            this.pending.set(id, { web, timer, closed, finish });
+            const timer = timeout ? setTimeout(() => finish(failure('画布未确认保存，请点击连接画布重试')), timeout) : null;
+            this.pending.set(id, { web, timer, closed, finish, selection });
             web.once('destroyed', closed);
-            web.send('relay-account:connect', { id, account });
+            web.send(channel, { id, ...payload });
         });
     }
 
     complete(web, id, result) {
         const pending = this.pending.get(id);
         if (!pending || pending.web !== web) return false;
-        pending.finish(result?.success === true ? null : failure('API 配置未能保存，请检查画布配置和系统凭据服务后重试'));
+        if (pending.selection) {
+            if (result?.canceled === true) pending.finish(null, null);
+            else if (Array.isArray(result?.tokenIds) && result.tokenIds.length <= 100 && result.tokenIds.every(id => typeof id === 'string')) {
+                pending.finish(null, result.tokenIds);
+            } else pending.finish(failure('API Key 选择无效，请重试'));
+        } else pending.finish(result?.success === true ? null : failure('API 配置未能保存，请检查画布配置和系统凭据服务后重试'));
         return true;
     }
 }
 
-module.exports = { TOKEN_NAME, requestAccountJson, resolveRelayAccount, RelayAccountDelivery };
+module.exports = { requestAccountJson, listRelayAccounts, resolveRelayAccounts, RelayAccountDelivery };

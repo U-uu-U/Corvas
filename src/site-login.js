@@ -45,7 +45,7 @@ export function createSiteLogin({ getProviders }) {
             card.querySelector('[data-station-user]').textContent = state?.state === 'error' ? state.message
                 : linked?.relayAccount.username || state?.username || '';
             const button = card.querySelector('[data-login-site]');
-            button.textContent = connected ? '登录认证' : '登录';
+            button.textContent = connected ? '选择 API Key' : '登录';
             button.disabled = Boolean(opening) || !api?.open;
             card.querySelector('[data-open-site]').disabled = Boolean(opening) || !api?.open;
         }
