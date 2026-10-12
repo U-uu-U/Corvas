@@ -14,7 +14,7 @@ async function downloadProbe(release, arch, destination) {
     try {
         await pipeline(Readable.fromWeb(response.body), createGunzip(), fs.createWriteStream(temporary));
         fs.chmodSync(temporary, 0o755);
-        execFileSync('lipo', ['-verify_arch', arch === 'x64' ? 'x86_64' : 'arm64', temporary]);
+        execFileSync('lipo', [temporary, '-verify_arch', arch === 'x64' ? 'x86_64' : 'arm64']);
         fs.renameSync(temporary, destination);
     } finally {
         fs.rmSync(temporary, { force: true });
@@ -55,7 +55,7 @@ module.exports = async function prepareMediaTools(context = {}) {
         execFileSync('lipo', ['-create', ...ffprobes, '-output', path.join(output, 'ffprobe')]);
         for (const name of ['ffmpeg', 'ffprobe']) {
             fs.chmodSync(path.join(output, name), 0o755);
-            execFileSync('lipo', ['-verify_arch', 'x86_64', 'arm64', path.join(output, name)]);
+            execFileSync('lipo', [path.join(output, name), '-verify_arch', 'x86_64', 'arm64']);
         }
     } else {
         const suffix = platform === 'win32' ? '.exe' : '';
