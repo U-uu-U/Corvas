@@ -17,7 +17,7 @@
 
 图片按实际格式读取，避免 JPEG 内容误标为 PNG。输出先写独立临时文件，成功校验后再完成；原素材不改写。音视频子进程不经 shell，隐藏控制台，限制线程，支持取消与超时；处理不调用生成 API，也不触发模型计费。
 
-开发依赖固定 `ffmpeg-static@5.3.0`、`ffprobe-static@3.1.0`。打包前 `scripts/prepare-media-tools.cjs` 将当前平台的两个工具和许可文件放入 Resources/media-tools，不把其他系统的全部二进制放入安装包。macOS 打包路径准备 x64/arm64 两份 FFmpeg 并通过 lipo 合并，FFprobe 同样合并并验证两种架构。beta.20 发布流水线在两平台打包后使用 `scripts/packaged-media-tools-smoke.cjs` 执行安装包内的组件，验证实际 MP4/MP3 转码；macOS 额外检查两个组件均包含 x86_64 和 arm64。
+开发依赖固定 `ffmpeg-static@5.3.0`、`ffprobe-static@3.1.0`。打包前 `scripts/prepare-media-tools.cjs` 将当前平台的两个工具和许可文件放入 Resources/media-tools，不把其他系统的全部二进制放入安装包。macOS 打包路径准备 x64/arm64 两份 FFmpeg 并通过 lipo 合并。由于 ffprobe-static@3.1.0 的 darwin/arm64 文件实际是 Intel 二进制，macOS 的 FFprobe 从同一个固定 FFmpeg release 下载并逐个验证真实架构，再合并。发布流水线在两平台打包后使用 `scripts/packaged-media-tools-smoke.cjs` 执行安装包内的组件，验证实际 MP4/MP3 转码；macOS 额外检查两个组件均包含 x86_64 和 arm64。
 
 ## 验证
 
