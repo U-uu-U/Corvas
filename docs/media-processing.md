@@ -21,6 +21,8 @@
 
 ## 验证
 
+两个转换组件在打包前已合并为通用二进制，`mac.x64ArchFiles` 仅对这两个路径允许双架构应用内的文件完全相同，避免 electron-builder 再次合并。最终产物仍强制通过 `lipo -verify_arch x86_64 arm64` 及实际转码验证。
+
 - `node --test electron-main/media-processor.test.cjs`：实际图片、MP3/WAV、MP4 转换及截取；源文件保留、参数拒绝、取消与临时文件清理。
 - `node scripts/media-processing-smoke.cjs`：隔离 Electron 用户目录，真实工具栏/右键入口、替换连线保留、MP3 截取、MP4 播放、跨项目防误回填，以及深色/浅色/窄窗口截图。
 - `npm run build`、相关文件 ESLint、Windows 转换组件准备验证通过。

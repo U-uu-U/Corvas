@@ -95,6 +95,7 @@
             ]
         },
         "mac": {
+            "x64ArchFiles": "Contents/Resources/media-tools/{ffmpeg,ffprobe}",
             "extraResources": [
                 {
                     "from": "build/media-tools/darwin",
