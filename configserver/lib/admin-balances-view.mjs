@@ -16,7 +16,7 @@ export const BALANCE_STYLE = `
 
 export function balancesMarkup() {
     return `<section id="balanceSection" aria-labelledby="balanceTitle">
-      <div class="balance-toolbar"><h2 id="balanceTitle">上游余额</h2>
+      <div class="balance-toolbar"><h2 id="balanceTitle">上游站点</h2>
         <span id="balanceState" class="muted" role="status">读取中</span>
         <button id="refreshBalancesBtn" type="button" aria-label="刷新余额" title="刷新余额"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="/admin/assets/flow-icons.svg#icon-history"></use></svg></button>
       </div>

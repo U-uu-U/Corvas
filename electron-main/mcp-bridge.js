@@ -2660,13 +2660,8 @@ async function collectVideoReferenceImages(sourceReferences = [], compressLargeI
     );
     return Promise.all(references.map(async (reference, index) => {
         const filePath = String(reference?.filePath || '');
-        const extension = path.extname(filePath).toLowerCase();
-        let mimeType = extension === '.png'
-            ? 'image/png'
-            : extension === '.webp'
-                ? 'image/webp'
-                : 'image/jpeg';
         let buffer = await fs.promises.readFile(filePath);
+        let mimeType;
         if (compressLargeImages && buffer.length > targetBytes) {
             const originalBytes = buffer.length;
             const compressed = await compressVideoReferenceImage(filePath, targetBytes);
@@ -2677,6 +2672,13 @@ async function collectVideoReferenceImages(sourceReferences = [], compressLargeI
                 originalBytes,
                 compressedBytes: buffer.length
             });
+        } else {
+            const metadata = await sharp(buffer).metadata();
+            mimeType = { jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' }[metadata.format];
+            if (!mimeType) {
+                buffer = await sharp(buffer).png().toBuffer();
+                mimeType = 'image/png';
+            }
         }
         const role = references.length === 1
             ? 'first_frame'
@@ -2743,6 +2745,7 @@ function extensionForReferenceMimeType(mimeType) {
         'image/png': 'png',
         'image/jpeg': 'jpg',
         'image/webp': 'webp',
+        'image/gif': 'gif',
         'video/mp4': 'mp4',
         'video/webm': 'webm',
         'video/quicktime': 'mov',
@@ -2949,7 +2952,7 @@ async function uploadTemporaryReference(dataUri, label, providers, failureSubjec
     const { mimeType, buffer } = decodeReferenceDataUri(dataUri);
     if (buffer.length === 0) throw new Error(`${label}内容为空`);
     const contentHash = crypto.createHash('sha256').update(buffer).digest('hex');
-    const cacheKey = `${temporaryUploadProviderFingerprint(providers)}:${contentHash}`;
+    const cacheKey = `${temporaryUploadProviderFingerprint(providers)}:${mimeType}:${contentHash}`;
     const cached = temporaryReferenceUrlCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.url;
     const persisted = await getReferenceCache().getUpload(cacheKey);

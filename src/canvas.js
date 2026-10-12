@@ -2194,10 +2194,12 @@ export class CanvasManager {
         const defaults = this._createDefaultOpConfig(nodeType);
         const historicalConfig = getGenerationReuseConfig(source, defaults);
         const config = mergeImageNodePromptConfig(historicalConfig, source);
-        const useSourceAsReference = !record;
-        const referenceConnections = record
+        const excludedReferenceIds = new Set(source.generationPromptDraft?.excludedReferenceSourceIds || []);
+        const useSourceAsReference = !record && !excludedReferenceIds.has(itemId);
+        const referenceConnections = (record
             ? this._getHistoricalGenerationReferenceConnections(itemId, nodeType, record)
-            : this._getMediaGenerationReferenceConnections(itemId);
+            : this._getMediaGenerationReferenceConnections(itemId))
+            .filter(connection => !excludedReferenceIds.has(connection.nodeId));
         const size = getGeneratorPlaceholderSize(nodeType, config, source);
         const draftId = `media-composer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const draft = {
@@ -2222,6 +2224,7 @@ export class CanvasManager {
             composerDraft: true,
             composerSourceItemId: itemId,
             composerUseSourceAsReference: useSourceAsReference,
+            composerExcludedSourceIds: [...excludedReferenceIds],
             composerReferenceConnections: referenceConnections,
             composerReferenceItemIds: referenceConnections.map(connection => connection.nodeId)
         };
@@ -2245,7 +2248,10 @@ export class CanvasManager {
         if (!data?.composerDraft || !data.composerSourceItemId) return false;
         const source = this.items.get(data.composerSourceItemId)?.data;
         if (!source || source.kind === 'op') return false;
-        source.generationPromptDraft = createImageNodePromptDraft(data.config);
+        source.generationPromptDraft = {
+            ...createImageNodePromptDraft(data.config),
+            excludedReferenceSourceIds: [...(data.composerExcludedSourceIds || [])]
+        };
         return true;
     }
 
@@ -2256,6 +2262,7 @@ export class CanvasManager {
         const citationOccurrences = this._generationComposerCitationState(data).occurrences.map(entry => ({ ...entry }));
         const sourceId = data.composerSourceItemId;
         const useSourceAsReference = data.composerUseSourceAsReference !== false;
+        const excludedSourceIds = data.composerExcludedSourceIds || [];
         const referenceConnections = Array.isArray(data.composerReferenceConnections)
             ? data.composerReferenceConnections
                 .filter(connection => connection?.nodeId && connection.nodeId !== sourceId)
@@ -2282,6 +2289,7 @@ export class CanvasManager {
         delete data.composerDraft;
         delete data.composerSourceItemId;
         delete data.composerUseSourceAsReference;
+        delete data.composerExcludedSourceIds;
         delete data.composerReferenceConnections;
         delete data.composerReferenceItemIds;
 
@@ -2311,6 +2319,7 @@ export class CanvasManager {
             data.composerDraft = true;
             data.composerSourceItemId = sourceId;
             data.composerUseSourceAsReference = useSourceAsReference;
+            data.composerExcludedSourceIds = excludedSourceIds;
             const draftGroup = new Konva.Group({
                 x: sourceX,
                 y: sourceY,
@@ -9138,16 +9147,20 @@ export class CanvasManager {
             tile.appendChild(caption);
             const remove = document.createElement('button');
             remove.type = 'button';
+            remove.className = 'generation-composer-reference-remove';
             remove.title = '移除参考素材';
-            remove.setAttribute('aria-label', '移除参考素材');
+            remove.setAttribute('aria-label', `移除${referenceLabel}`);
             remove.textContent = '×';
-            if (!connection.transient) {
-                remove.addEventListener('click', event => {
-                    event.stopPropagation();
-                    this.graphView?.disconnect(connection.id);
-                });
-                tile.appendChild(remove);
-            }
+            remove.addEventListener('pointerdown', event => {
+                event.preventDefault();
+                event.stopPropagation();
+            });
+            remove.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                this._removeGenerationComposerReference(nodeId, connection.id);
+            });
+            tile.appendChild(remove);
             host.appendChild(tile);
         });
 
@@ -9180,6 +9193,32 @@ export class CanvasManager {
         this._syncGenerationComposerPromptMergeButton(nodeId);
         this._syncGenerationComposerSalePrice(nodeId);
         this._positionGenerationComposer();
+    }
+
+    _removeGenerationComposerReference(nodeId, connectionId) {
+        const active = this._generationComposer;
+        const data = this.items.get(nodeId)?.data;
+        if (active?.nodeId !== nodeId || !data) return false;
+        const reference = this._opReferenceEntries(data).find(entry => entry.connection.id === connectionId);
+        if (!reference) return false;
+        const state = this._generationComposerCitationState(data);
+        data.config.referenceCitationOccurrences = state.occurrences.filter(entry =>
+            entry.connectionId !== connectionId && entry.sourceNodeId !== reference.source.id);
+        data.config.referenceCitationIds = state.orderedIds.filter(id => id !== connectionId);
+        if (reference.connection.transient) {
+            const sourceId = reference.source.id;
+            if (data.composerSourceItemId === sourceId) data.composerUseSourceAsReference = false;
+            data.composerReferenceItemIds = (data.composerReferenceItemIds || []).filter(id => id !== sourceId);
+            data.composerReferenceConnections = (data.composerReferenceConnections || []).filter(entry => entry.nodeId !== sourceId);
+            data.composerExcludedSourceIds = [...new Set([...(data.composerExcludedSourceIds || []), sourceId])];
+        } else {
+            this.graphView?.disconnect(connectionId);
+        }
+        active.changed = true;
+        this._renderGenerationComposerReferences(nodeId);
+        this._cacheMediaGenerationPromptDraft(data);
+        this.emit('change');
+        return true;
     }
 
     _generationReferenceLabel(mediaType, index) {

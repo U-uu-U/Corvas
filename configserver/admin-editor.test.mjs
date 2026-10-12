@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { parseEditorConfig, readEditorValues, applyEditorValues } from './lib/admin-editor-model.mjs';
 import { createValidator } from './lib/validate.mjs';
 import { adminPage } from './lib/pages.mjs';
+import { modelName } from './lib/admin-catalog-model.mjs';
+import { getModelPresentation } from '../shared/model-presentation.mjs';
 
 const source = fs.readFileSync(new URL('./seed/model-config.default.json', import.meta.url), 'utf8');
 const models = parseEditorConfig(source).models;
@@ -19,7 +21,7 @@ test('opening or editing display fields preserves all other fields and price pro
     const before = structuredClone(base);
     assert.deepEqual(patch(base, {}), base);
     const changed = patch(base, { label: 'Remote name', description: 'Remote description' });
-    assert.deepEqual(changed, { ...before, presentation: { ...before.presentation, label: 'Remote name', description: 'Remote description' } });
+    assert.deepEqual(changed, { ...before, presentation: { ...before.presentation, label: 'Remote name', routeLabel: 'Remote name', description: 'Remote description' } });
     assert.deepEqual(base, before);
 });
 
@@ -57,6 +59,29 @@ test('explicit clears do not create overrides for untouched inherited fields', (
     assert.equal(patch(entry, { routeGroup: '' }).presentation.routeGroup, '');
     assert.equal(patch(entry, { recommended: 'inherit' }).presentation.recommended, undefined);
     assert.equal(patch(entry, { recommended: 'false' }).presentation.recommended, false);
+});
+
+test('a display rename reaches operation cards and existing canvas route labels', () => {
+    const changed = patch(entry, { label: 'Renamed route' });
+    assert.equal(modelName(changed), 'Renamed route');
+    assert.equal(getModelPresentation(changed).routeLabel, 'Renamed route');
+    assert.deepEqual(changed.catalog, entry.catalog);
+    assert.deepEqual(changed.match, entry.match);
+    assert.deepEqual(changed.options, entry.options);
+    assert.deepEqual(changed.pricing, entry.pricing);
+    assert.equal(patch(changed, { label: 'Renamed again' }).presentation.routeLabel, 'Renamed again');
+    const grouped = { ...entry, presentation: { label: 'Old', routeGroup: 'group' } };
+    assert.equal(patch(grouped, { label: 'New' }).presentation.routeLabel, 'New');
+});
+
+test('explicit route aliases and display resets retain their separate semantics', () => {
+    const renamed = patch(entry, { label: 'Model name', routeLabel: 'Explicit route alias' });
+    assert.equal(renamed.presentation.label, 'Model name');
+    assert.equal(renamed.presentation.routeLabel, 'Explicit route alias');
+    assert.equal(patch(entry, { label: '' }).presentation.routeLabel, entry.presentation.routeLabel);
+    assert.equal(patch(entry, { description: 'Updated' }).presentation.routeLabel, entry.presentation.routeLabel);
+    assert.throws(() => patch(entry, { label: 'x'.repeat(81) }), /80/);
+    assert.equal(patch(entry, { label: 'x'.repeat(80) }).presentation.routeLabel.length, 80);
 });
 
 test('grouping controls preserve explicit zero, false and per-provider grouping when serialized', () => {

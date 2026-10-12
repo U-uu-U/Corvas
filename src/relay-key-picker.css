@@ -1,0 +1,24 @@
+.relay-key-picker { position:fixed; inset:0; margin:auto; width:min(560px,calc(100vw - 32px)); max-height:calc(100vh - 48px); padding:20px; border:1px solid var(--border-color); border-radius:8px; background:var(--panel-bg); color:var(--text-primary); overflow:auto; letter-spacing:0; }
+.relay-key-picker::backdrop { background:rgba(0,0,0,.55); }
+.relay-key-picker header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.relay-key-picker h2 { margin:0; font-size:18px; line-height:1.4; }
+.relay-key-picker [data-account] { margin-top:6px; font-size:12px; color:var(--text-secondary); overflow-wrap:anywhere; }
+.relay-key-picker button { min-height:32px; padding:6px 12px; border:1px solid var(--border-color); border-radius:5px; color:inherit; background:var(--hover-bg); font:inherit; font-size:12px; cursor:pointer; }
+.relay-key-picker [data-close] { width:30px; min-height:30px; padding:5px; display:grid; place-items:center; }
+.relay-key-picker input { accent-color:#67a98d; width:16px; height:16px; flex:0 0 16px; }
+.relay-key-toolbar { display:flex; justify-content:space-between; gap:12px; margin-top:20px; padding:10px 0; font-size:12px; color:var(--text-secondary); }
+.relay-key-toolbar label { display:flex; align-items:center; gap:8px; }
+.relay-key-list { max-height:360px; overflow:auto; border-top:1px solid var(--border-color); }
+.relay-key-row { display:flex; align-items:center; gap:12px; min-height:68px; padding:12px 0; border-bottom:1px solid var(--border-color); cursor:pointer; }
+.relay-key-copy { flex:1; min-width:0; display:grid; gap:6px; }
+.relay-key-copy strong { font-size:13px; overflow-wrap:anywhere; }
+.relay-key-copy code { font-size:12px; color:var(--text-secondary); overflow-wrap:anywhere; }
+.relay-key-row small { font-size:11px; color:#8bbb9f; flex-shrink:0; }
+.relay-key-row[data-disabled=true] { opacity:.6; cursor:default; }
+.relay-key-row[data-disabled=true] small { color:#d1a46a; }
+.relay-key-picker footer { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+.relay-key-picker [data-confirm] { background:#35664f; color:#f3f8f5; border-color:#538168; }
+.relay-key-picker button:disabled { opacity:.45; cursor:default; }
+.relay-key-picker button:focus-visible,.relay-key-picker input:focus-visible { outline:2px solid #77b69b; outline-offset:2px; }
+.relay-key-picker [data-empty] { padding:24px 0; color:var(--text-secondary); text-align:center; font-size:13px; }
+.relay-key-picker [hidden] { display:none; }

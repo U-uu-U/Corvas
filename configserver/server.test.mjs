@@ -566,7 +566,7 @@ test('balance endpoints require admin and CSRF while credentials remain private'
         assert.equal((await fetch(`${server.base}/admin/balances`, { headers: { accept: 'application/json' } })).status, 401);
         const { cookie } = await login(server.base);
         const { html, csrf } = await openAdmin(server.base, cookie);
-        assert.ok(html.includes('上游余额'));
+        assert.ok(html.includes('上游站点'));
         const response = await fetch(`${server.base}/admin/balances`, { headers: { cookie } });
         assert.equal(response.status, 200);
         assert.equal(response.headers.get('cache-control'), 'no-store');

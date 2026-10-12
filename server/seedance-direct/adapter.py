@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 UPSTREAM = os.environ['UPSTREAM'].rstrip('/')
 MODEL = 'b_seedance_v2.0'
+UPSTREAM_MODEL = os.environ.get('UPSTREAM_MODEL', MODEL).strip() or MODEL
 MAX_JSON = 1024 * 1024
 TASK_ID = re.compile(r'^[1-9][0-9]{0,18}$')
 
@@ -81,7 +82,7 @@ def task_id(payload):
 
 
 def submit(body, auth):
-    payload = request_json('/v1/videos/generations', auth, build_request(body))
+    payload = request_json('/v1/videos/generations', auth, {**build_request(body), 'model': UPSTREAM_MODEL})
     task = task_id(payload)
     return {'id': task, 'task_id': task, 'object': 'video', 'status': 'queued'}
 

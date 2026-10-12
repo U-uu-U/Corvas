@@ -24,8 +24,11 @@ try {
     await page.goto(`${server.url}/admin`);
     await page.getByPlaceholder('管理密码').fill('balance-ui-local');
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await page.waitForFunction(() => globalThis.document.getElementById('balanceState').textContent.includes('1 / 8'));
-    assert.equal(await page.locator('#balanceRows tr').count(), 8);
+    const seededAccounts = JSON.parse(await fs.readFile(new URL('./seed/admin-balance-accounts.json', import.meta.url), 'utf8')).accounts;
+    await page.waitForFunction(count => globalThis.document.getElementById('balanceState').textContent.includes(`${count} 个上游站点`), seededAccounts.length);
+    assert.equal(await page.locator('#balanceRows tr').count(), seededAccounts.length);
+    assert.equal(await page.getByRole('link', { name: '打开上游', exact: true }).count(), seededAccounts.length);
+    assert.equal(await page.getByRole('cell', { name: '站点入口', exact: true }).count(), seededAccounts.filter(account => account.linkOnly).length);
     assert.equal(await page.locator('#balanceRows tr[data-low=true]').count(), 1);
     assert.ok((await page.locator('#balanceRows').innerText()).includes('44.35'));
     const threshold = page.getByLabel('主播视频低余额预警线', { exact: true });

@@ -322,8 +322,49 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
         assert.ok((await expandedModels('text')).some(label => label.includes('custom-text-v1')));
         config.models = [videoC];
         await refresh();
-        const importAccount = async site => {
-            await app.evaluate(({ BrowserWindow, ipcMain }, site) => new Promise((resolve, reject) => {
+        const beforeSelection = await saved();
+        const offerKeys = async () => app.evaluate(({ BrowserWindow, ipcMain }) => {
+            const web = BrowserWindow.getAllWindows().find(window => /index\.html|^http:\/\/127\.0\.0\.1:15321\//.test(window.webContents.getURL())).webContents;
+            const id = `smoke-selection-${Date.now()}`;
+            globalThis.keySelectionReply = new Promise(resolve => {
+                const complete = (event, received, result) => {
+                    if (event.sender !== web || received !== id) return;
+                    ipcMain.removeListener('relay-account:complete', complete); resolve(result);
+                };
+                ipcMain.on('relay-account:complete', complete);
+            });
+            web.send('relay-account:select', { id, catalog: { site: 'art', userId: 'smoke-user', username: 'Fixture user', tokens: [
+                { id: '42', name: 'Production Key', maskedKey: 'sk-...1234', enabled: true },
+                { id: '43', name: 'A longer named API Key for a separate creative team', maskedKey: 'sk-...5678', enabled: true },
+                { id: '44', name: 'Disabled Key', maskedKey: 'sk-...9012', enabled: false, reason: '已停用' },
+                { id: '45', name: '<img src=x onerror=alert(1)>', maskedKey: 'sk-...3456', enabled: true }
+            ] } });
+        });
+        await offerKeys();
+        const picker = page.locator('#relayKeyPicker');
+        await picker.waitFor({ state: 'visible' });
+        assert.equal(await picker.locator('[data-confirm]').isDisabled(), true);
+        assert.equal(await picker.locator('input[value="44"]').isDisabled(), true);
+        assert.equal(await picker.locator('img').count(), 0);
+        await picker.locator('input[value="42"]').check();
+        await picker.locator('[data-cancel]').click();
+        assert.deepEqual(await app.evaluate(() => globalThis.keySelectionReply), { canceled: true });
+        assert.deepEqual(await saved(), beforeSelection, 'Canceling the picker cannot alter API config');
+        await offerKeys();
+        await picker.waitFor({ state: 'visible' });
+        await picker.locator('[data-all]').check();
+        await picker.locator('input[value="45"]').uncheck();
+        assert.match(await picker.locator('[data-count]').textContent(), /2 \/ 4/);
+        await picker.screenshot({ path: path.join(artifactDir, 'relay-key-selection.png') });
+        await (await app.browserWindow(page)).evaluate(window => window.setSize(820, 700));
+        await page.waitForTimeout(200);
+        assert.equal(await picker.evaluate(element => element.scrollWidth > element.clientWidth), false);
+        await page.screenshot({ path: path.join(artifactDir, 'relay-key-selection-compact.png') });
+        await picker.locator('[data-confirm]').click();
+        assert.deepEqual(await app.evaluate(() => globalThis.keySelectionReply), { tokenIds: ['42', '43'] });
+        assert.deepEqual(await saved(), beforeSelection, 'The selection response contains IDs only; saving is a separate acknowledged step');
+        const importAccount = async (site, tokenIds = ['42']) => {
+            await app.evaluate(({ BrowserWindow, ipcMain }, { site, tokenIds }) => new Promise((resolve, reject) => {
                 const web = BrowserWindow.getAllWindows().find(window => /index\.html|^http:\/\/127\.0\.0\.1:15321\//.test(window.webContents.getURL())).webContents;
                 const id = `smoke-account-${site}`;
                 const timer = setTimeout(() => { ipcMain.removeListener('relay-account:complete', complete); reject(new Error('Account acknowledgement timeout')); }, 15000);
@@ -333,20 +374,22 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
                     if (result.success) resolve(); else reject(new Error('Account import failed'));
                 };
                 ipcMain.on('relay-account:complete', complete);
-                web.send('relay-account:connect', { id, account: { site, userId: 'smoke-user', username: 'Linked user',
-                    tokenId: '42', apiKey: `sk-${site}LinkedFixture123` } });
-            }), site);
+                web.send('relay-account:connect', { id, account: tokenIds.map(tokenId => ({ site, userId: 'smoke-user', username: 'Linked user',
+                    tokenId, tokenName: `Selected ${tokenId}`, apiKey: `sk-${site}LinkedFixture${tokenId}` })) });
+            }), { site, tokenIds });
         };
-        await importAccount('art');
-        await importAccount('art');
+        await importAccount('art', ['42', '43']);
+        await importAccount('art', ['42', '43']);
         await importAccount('cart');
         const linked = (await saved()).providers.filter(provider => provider.relayAccount);
-        assert.equal(linked.length, 2);
+        assert.equal(linked.length, 3);
         assert.equal(linked[0].endpoint, 'https://art.ravenhash.org/v1');
-        assert.equal(linked[1].endpoint, 'https://cart.ravenhash.org/v1');
+        assert.equal(linked[1].endpoint, 'https://art.ravenhash.org/v1');
+        assert.equal(linked[2].endpoint, 'https://cart.ravenhash.org/v1');
+        assert.deepEqual(linked.map(provider => provider.relayAccount.tokenId), ['42', '43', '42']);
         assert.equal(linked[0].modelCatalog, 'remote');
         assert.ok((await saved()).providers.some(provider => provider.id === custom.id), 'Existing custom API is preserved');
-        assert.equal(JSON.stringify(requests).includes('LinkedFixture123'), false);
+        assert.equal(JSON.stringify(requests).includes('LinkedFixture'), false);
         assert.equal(await app.evaluate(() => globalThis.apiCatalogSmoke.fetchModelsCalls), 0);
         assert.ok(requests.length >= 5, 'Real localhost CONFIG requests must be observed');
         assert.equal(JSON.stringify(requests).includes(fixtureKey), false, 'CONFIG server must never receive API keys');

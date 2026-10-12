@@ -14,6 +14,7 @@ export function initAdminEditor(document) {
     const list = document.getElementById('modelList');
     const search = document.getElementById('modelSearch');
     const kind = document.getElementById('modelKind');
+    const restoreDescription = document.getElementById('restoreDescriptionBtn');
     const originalText = text.value;
     const controls = Object.fromEntries([...fieldset.querySelectorAll('[data-field]')].map(input => [input.dataset.field, input]));
     let config = null;
@@ -54,6 +55,12 @@ export function initAdminEditor(document) {
         document.getElementById('redoCatalogBtn').disabled = !history?.canRedo;
     };
     const values = () => Object.fromEntries(Object.entries(controls).map(([key, input]) => [key, input.value]));
+    const updateDescriptionField = () => {
+        const entry = selected();
+        const custom = typeof entry?.presentation?.description === 'string';
+        if (restoreDescription) restoreDescription.disabled = !entry || !custom || mode !== 'form';
+        if (entry && !custom) controls.description.value = readEditorValues(entry).description;
+    };
     const updatePriceFields = () => {
         const status = controls.priceMode.value;
         document.getElementById('priceScope').hidden = status === 'inherit';
@@ -144,8 +151,22 @@ export function initAdminEditor(document) {
         if (config) renderCatalog(document, config, selectedId, selectModel, catalogSources, catalogPrices, catalogCosts, toggleModelCall,
             { groupKey: selectedGroupKey, onSelectGroup: selectGroup, onMove: moveModel, onGroupMove: moveGroup, onCreateGroup: groupModel,
                 onDefaultChange: id => operate(() => setCatalogDefaultModel(config, 'video', id)),
-                onEdit: id => { selectModel(id); if (selectedId === id) setMode('form'); } });
+                onEdit: openModelEditor });
     };
+    function openModelEditor(id) {
+        if (!config?.models.some(entry => entry.id === id) || !flushSelected()) return;
+        search.value = '';
+        kind.value = '';
+        selectModel(id);
+        setMode('form');
+        window.requestAnimationFrame(() => {
+            if (mode !== 'form' || selectedId !== id) return;
+            [...list.children].find(button => button.dataset.modelId === id)
+                ?.scrollIntoView({ block: 'center', inline: 'nearest' });
+            fieldset.closest('.model-details')?.scrollIntoView({ block: 'start', inline: 'nearest' });
+            controls.label.focus({ preventScroll: true });
+        });
+    }
     function selectModel(id) {
         if (!flushSelected()) return;
         const focused = document.activeElement;
@@ -204,6 +225,7 @@ export function initAdminEditor(document) {
         fieldset.disabled = !entry || mode !== 'form';
         document.getElementById('selectedModelId').textContent = entry?.id || '未选择模型';
         document.getElementById('restoreModelBtn').disabled = !original?.models.some(model => model.id === entry?.id);
+        updateDescriptionField();
         if (!entry) {
             touched.clear();
             for (const input of Object.values(controls)) input.value = '';
@@ -212,6 +234,8 @@ export function initAdminEditor(document) {
         touched.clear();
         const current = readEditorValues(entry);
         for (const [key, input] of Object.entries(controls)) input.value = current[key] ?? '';
+        controls.label.maxLength = entry.presentation?.routeGroup || Object.hasOwn(entry.presentation || {}, 'routeLabel')
+            ? controls.routeLabel.maxLength : 100;
         document.getElementById('selectedModelId').textContent = entry.id;
         document.getElementById('restoreModelBtn').disabled = !original?.models.some(model => model.id === entry.id);
         document.getElementById('priceUpdatedAt').textContent = current.updatedAt || '未设置';
@@ -223,9 +247,11 @@ export function initAdminEditor(document) {
         try {
             const next = applyEditorValues(selected(), values(), touched);
             config.models[config.models.findIndex(entry => entry.id === selectedId)] = next;
+            if (touched.has('label')) controls.routeLabel.value = next.presentation?.routeLabel || '';
             writeConfig();
             touched.clear();
             document.getElementById('priceUpdatedAt').textContent = next.pricing?.updatedAt || '未设置';
+            updateDescriptionField();
             setState(dirty() ? '有未保存修改' : '无修改');
             showErrors([]);
             return true;
@@ -471,6 +497,15 @@ export function initAdminEditor(document) {
     });
     const updateSaveLabel = () => { document.getElementById('saveBtn').textContent = form.elements.draft.checked ? '保存草稿' : '发布配置'; };
     form.elements.draft.addEventListener('change', updateSaveLabel);
+    restoreDescription?.addEventListener('click', () => {
+        operate(() => {
+            const next = structuredClone(config);
+            const entry = next.models.find(entry => entry.id === selectedId);
+            if (entry?.presentation) delete entry.presentation.description;
+            return next;
+        });
+        controls.description.focus({ preventScroll: true });
+    });
     document.getElementById('restoreModelBtn').addEventListener('click', () => {
         const prior = original?.models.find(entry => entry.id === selectedId);
         if (!prior) return;

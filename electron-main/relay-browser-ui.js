@@ -13,11 +13,11 @@ relayBrowser.onState(state => {
     $('clear-task').hidden = !state.taskId;
     $('task-label').textContent = state.taskId || '';
     const account = state.account || {};
-    $('connect').disabled = !state.site || account.state === 'connecting';
+    $('connect').disabled = !state.site || ['connecting', 'selecting'].includes(account.state);
     $('connect').dataset.state = account.state || 'signed-out';
-    $('connect').querySelector('span').textContent = account.state === 'connected' ? '已连接画布'
-        : account.state === 'connecting' ? '连接中…' : '连接画布';
-    $('connect').title = [account.username, account.message].filter(Boolean).join(' · ') || '登录后自动连接画布';
+    $('connect').querySelector('span').textContent = ['connected', 'signed-in'].includes(account.state) ? '选择 API Key'
+        : account.state === 'connecting' ? '读取中…' : account.state === 'selecting' ? '等待选择' : '连接画布';
+    $('connect').title = [account.username, account.message].filter(Boolean).join(' · ') || '登录后选择 API Key';
     if (account.state === 'error' && !state.status) {
         $('web-status').textContent = account.message;
         $('web-status').title = account.message;

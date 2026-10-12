@@ -8,6 +8,7 @@ import './app-update-settings.js';
 import './generation-recovery.css';
 import './light-theme.css';
 import './site-login.css';
+import './relay-key-picker.css';
 import './hunyuan-accounts.css';
 import './rhino-workbench.css';
 import './blender-workbench.css';
@@ -19,6 +20,7 @@ import { getGeneratorResultEntries } from './generator-result-stack.js';
 import { initModelConfigUi } from './model-config-ui.js';
 import { SidebarManager } from './sidebar.js';
 import { ContextMenu } from './context-menu.js';
+import { MediaProcessingPanel } from './media-processing.js';
 import { AgentSidebar } from './agent-sidebar.js';
 import { PlanService } from './plan-service.js';
 import { snapshotState, UndoStack } from './undo-stack.js';
@@ -33,6 +35,7 @@ let storeData = null;
 let canvasManager = null;
 let sidebarManager = null;
 let contextMenu = null;
+let mediaProcessingPanel = null;
 let agentSidebar = null;
 let planService = null;
 let unsubscribeBoardToolRequests = null;
@@ -169,6 +172,14 @@ async function bootstrap() {
             if (['refresh', 'cache', 'reset'].includes(reason)) canvasManager?.refreshGenerationModelPresentation();
         });
 
+        mediaProcessingPanel = initOptionalModule('media-processing', () => new MediaProcessingPanel({
+            getSelection: () => (canvasManager?.getSelectedCanvasEntries() || []).filter(entry => entry.filePath).map(entry => ({
+                itemId: entry.id, filePath: entry.filePath, generatorResult: entry.kind === 'op', projectId: storeData.activeGroupId
+            })),
+            getProjectId: () => storeData?.activeGroupId || null,
+            applyResult: applyProcessedMedia
+        }));
+
         // 3. 关联事件
         sidebarManager.on('filter', (types) => {
             canvasManager.setFilter(types);
@@ -233,6 +244,14 @@ async function bootstrap() {
 
         document.addEventListener('context-relink-material', (e) => {
             repairDisconnectedMaterials(e.detail || {}, { manual: true });
+        });
+        document.addEventListener('context-process-media', event => {
+            const detail = event.detail || {};
+            const targets = detail.fileTargets?.length ? detail.fileTargets : [{ itemId: detail.nodeId, filePath: detail.filePath }];
+            void mediaProcessingPanel?.open(targets.filter(target => target.filePath).map(target => ({
+                ...target, generatorResult: target.generatorResult === true || storeData.items.find(item => item.id === target.itemId)?.kind === 'op',
+                projectId: storeData.activeGroupId
+            })));
         });
 
         sidebarManager.on('moveToFolder', async ({ itemIds = [], filePaths = [], fileTargets = [], targetFolder }) => {
@@ -1242,6 +1261,36 @@ async function relinkMaterialManually(target) {
     }
     showHistoryStatus('已重接素材');
     return 1;
+}
+
+async function applyProcessedMedia(result, source, mode) {
+    if ((storeData.activeGroupId || null) !== (source.projectId || null)) {
+        return { applied: false, reason: '处理完成，原画布已切换' };
+    }
+    if (mode === 'replace') {
+        const item = storeData.items.find(entry => entry.id === source.itemId);
+        if (!item) return { applied: false, reason: '处理完成，原节点已移除' };
+        const previousPath = source.targetPath || source.filePath;
+        const currentPaths = source.generatorResult ? getGeneratorResultEntries(item).map(entry => entry.filePath) : [item.filePath];
+        if (!currentPaths.some(file => normalizeFsPath(file) === normalizeFsPath(previousPath))) {
+            return { applied: false, reason: '处理完成，原节点的素材已更换' };
+        }
+        if (getBoardMediaType(source.filePath) !== result.kind) throw new Error('处理结果类型与原素材不一致');
+        if (!applyMaterialRelink({ item, filePath: previousPath, generatorResult: source.generatorResult }, result.filePath)) {
+            throw new Error('处理结果未能替换到画布');
+        }
+        if (!storeData.items.some(entry => normalizeFsPath(entry.filePath) === normalizeFsPath(previousPath))) {
+            markRemovedFromBoard([previousPath]);
+        }
+    } else {
+        restoreRemovedFromBoard(result.filePath);
+        const item = canvasManager.addFile(result.filePath);
+        if (item) storeData.items.push(item);
+    }
+    saveStoreNow();
+    sidebarManager?.updateStats?.(storeData.items?.length || 0);
+    commitHistory('process-media');
+    return { applied: true };
 }
 
 async function repairMaterialsAutomatically(targets) {

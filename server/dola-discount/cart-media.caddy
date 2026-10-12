@@ -1,0 +1,6 @@
+@dola_cached_media path_regexp dola_cached ^/fc-media/files/dola25-[a-f0-9]{64}\.mp4$
+handle @dola_cached_media {
+    uri strip_prefix /fc-media/files
+    root * /var/lib/corvas-channel-media
+    file_server
+}

@@ -10,7 +10,7 @@ app.whenReady().then(async () => {
     const FlowCanvasBridge = require('../electron-main/mcp-bridge.js');
     const { AgentBoardService } = await import('../electron-main/agent-board-service.mjs');
     const { installGenerationRecoveryBoard } = await import('../electron-main/generation-recovery-board.mjs');
-    const { mergeRelayAccount } = await import('../src/relay-account-config.js');
+    const { mergeRelayAccounts } = await import('../src/relay-account-config.js');
     const { ApiConfigStore } = require('../electron-main/api-config-store.js');
     const accounts = new ApiConfigStore(profile, { protect: text => safeStorage.encryptString(text),
         unprotect: bytes => safeStorage.decryptString(bytes) });
@@ -26,12 +26,17 @@ app.whenReady().then(async () => {
         projectId: 'original', nodeId: 'node1', prompt: 'original', model: 'fixture' });
     installGenerationRecoveryBoard(bridge, board);
     global.relayRevealed = [];
-    global.relaySmoke = new RelayBrowser({ BrowserWindow, BrowserView, session,
+    global.relaySelections = [];
+    global.relaySmoke = new RelayBrowser({ BrowserWindow, BrowserView, session, safeStorage,
         shell: { ...shell, showItemInFolder: file => global.relayRevealed.push(file) }, directory: profile,
-        getLinkedAccount: (site, userId) => accounts.load().config?.providers.find(provider =>
-            provider.relayAccount?.site === site && provider.relayAccount?.userId === userId)?.relayAccount,
-        onAccount: async account => {
-            const config = mergeRelayAccount(accounts.load().config || {}, catalog, account);
+        getLinkedAccounts: (site, userId) => (accounts.load().config?.providers || []).filter(provider =>
+            provider.relayAccount?.site === site && provider.relayAccount?.userId === userId).map(provider => provider.relayAccount),
+        onSelectAccounts: async catalog => {
+            global.relaySelections.push(catalog);
+            return catalog.tokens.filter(token => token.enabled && ['1', '2'].includes(token.id)).map(token => token.id);
+        },
+        onAccount: async selected => {
+            const config = mergeRelayAccounts(accounts.load().config || {}, catalog, selected);
             const saved = accounts.save(config);
             if (!saved.success) throw new Error('Fixture account save failed');
         },
@@ -43,4 +48,9 @@ app.whenReady().then(async () => {
     await global.relaySmoke.open();
 });
 app.on('window-all-closed', () => {});
-app.on('before-quit', () => global.relaySmoke?.close());
+let closed = false;
+app.on('before-quit', event => {
+    if (closed || !global.relaySmoke) return;
+    event.preventDefault();
+    void global.relaySmoke.close().finally(() => { closed = true; app.quit(); });
+});

@@ -61,11 +61,12 @@ export function createAdminBalances({ dataDir, seedPath, fetchImpl = fetch, now 
         const thresholds = read(settingsPath, {});
         const rows = await Promise.all(accounts().map(async account => {
             const threshold = Object.hasOwn(thresholds, account.id) ? thresholds[account.id] : account.threshold ?? null;
-            const supported = account.provider === 'zhubo';
+            const linkOnly = account.linkOnly === true;
+            const supported = !linkOnly && account.provider === 'zhubo';
             const row = { id: account.id, name: account.name, account: account.account, url: safeUrl(account.url),
                 currency: account.currency || null, threshold, editable: supported,
                 amount: null, updatedAt: null, low: false, scope: supported ? '账户 / Token 可用余额' : '',
-                status: 'unavailable', detail: account.reason || '待配置查询授权' };
+                status: linkOnly ? 'link' : 'unavailable', detail: linkOnly ? '' : account.reason || '待配置查询授权' };
             const credential = credentials[account.id];
             if (!supported || typeof credential?.key !== 'string' || !credential.key.trim()) return row;
             const identity = crypto.createHash('sha256').update(credential.key).digest('hex');
@@ -78,7 +79,7 @@ export function createAdminBalances({ dataDir, seedPath, fetchImpl = fetch, now 
         return { accounts: rows, refreshIntervalMs: CACHE_MS };
     }
     function setThreshold(id, value) {
-        if (!accounts().some(account => account.id === id && account.provider === 'zhubo')) throw new Error('账户不支持余额阈值');
+        if (!accounts().some(account => account.id === id && account.provider === 'zhubo' && account.linkOnly !== true)) throw new Error('账户不支持余额阈值');
         if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1000000)) {
             throw new Error('预警线需要 0 到 1000000 的金额，或留空关闭');
         }
