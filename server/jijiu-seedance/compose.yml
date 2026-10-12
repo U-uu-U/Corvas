@@ -1,0 +1,26 @@
+services:
+  jijiu-video-adapter:
+    image: docker.1ms.run/library/python:3.12-alpine
+    container_name: jijiu-video-adapter
+    working_dir: /app
+    command: [python, -B, adapter.py]
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    mem_limit: 128m
+    pids_limit: 96
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ./adapter.py:/app/adapter.py:ro
+      - ./model.json:/app/model.json:ro
+    networks: [relay-network]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3014/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+networks:
+  relay-network:
+    name: ${NETWORK_NAME}
+    external: true

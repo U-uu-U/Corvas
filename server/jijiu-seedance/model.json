@@ -1,0 +1,17 @@
+{
+  "model": "jijiu-video-301010-route3",
+  "upstreamModel": "SD2.5特价30-10-10-线路三",
+  "id": "ravenhash-video.seedance25-full-route3",
+  "label": "Seedance 2.5 满参（线路三）",
+  "origin": "https://newapi.jijiucanvas.com",
+  "group": "zhubo-video",
+  "saleCny": 11,
+  "referenceCostCny": 5.5,
+  "resolution": "720p",
+  "minSeconds": 4,
+  "maxSeconds": 30,
+  "ratios": ["16:9", "9:16", "1:1"],
+  "images": 30,
+  "videos": 10,
+  "audios": 10
+}

@@ -14,6 +14,7 @@ const FlowCanvasBridge = require('./mcp-bridge');
 const BrowserSyncService = require('./browser-sync');
 const { handleLocalResourceRequest } = require('./local-resource');
 const { MediaAccessPolicy, collectBoardMediaScope } = require('./media-access.cjs');
+const { MediaProcessor, mediaToolPaths } = require('./media-processor.cjs');
 const { fetchPublicMedia } = require('./public-media-download.cjs');
 const { saveGenerationTrace } = require('./generation-trace-store');
 const { ApiConfigStore } = require('./api-config-store');
@@ -73,6 +74,7 @@ let creativeWebApps = null;
 let relayBrowser = null;
 let mediaPreviewWasFullScreen = null;
 let mediaAccess = null;
+let mediaProcessor = null;
 const appUpdates = require('./app-updates.cjs').createAppUpdates({
     currentVersion: app.getVersion(), platform: process.platform, packaged: app.isPackaged,
     portable: Boolean(process.env.PORTABLE_EXECUTABLE_FILE), directory: path.join(app.getPath('userData'), 'updates'),
@@ -613,13 +615,19 @@ function restoreMainWindowFromOrb() {
 // ── 初始化服务 ──────────────────────────────────────────
 async function initServices() {
     store = new Store();
-    const managedMediaRoots = ['captured', 'asset-library', 'reference-cache'].map(name => path.join(app.getPath('userData'), 'data', name));
+    const managedMediaRoots = ['captured', 'asset-library', 'reference-cache', 'processed-media'].map(name => path.join(app.getPath('userData'), 'data', name));
     managedMediaRoots.forEach(directory => fs.mkdirSync(directory, { recursive: true }));
     mediaAccess = new MediaAccessPolicy({
         userData: app.getPath('userData'),
         managedRoots: managedMediaRoots,
         registryFile: path.join(app.getPath('userData'), 'data', 'media-access.v1.json'),
         legacyScope: collectBoardMediaScope(store.load())
+    });
+    mediaProcessor = new MediaProcessor({
+        outputDir: path.join(app.getPath('userData'), 'data', 'processed-media'),
+        tools: mediaToolPaths({ packaged: app.isPackaged }),
+        resolveFile: file => mediaAccess.resolve(file, { purpose: 'asset' }),
+        grantFile: file => mediaAccess.grant(file)
     });
     apiConfigStore = new ApiConfigStore(app.getPath('userData'), {
         protect: value => safeStorage.isEncryptionAvailable()
@@ -1964,6 +1972,35 @@ ipcMain.handle('file:selectReplacement', async (_, options = {}) => {
     return { success: true, filePath: result.filePaths[0] };
 });
 
+ipcMain.handle('media-process:choose', async event => {
+    requireMainFrame(event);
+    const selected = await dialog.showOpenDialog(mainWindow, {
+        title: '选择要处理的素材', properties: ['openFile'],
+        filters: [{ name: '图片、视频和音频', extensions: Object.values(BOARD_MEDIA_EXTENSIONS).flat() }]
+    });
+    if (selected.canceled || !selected.filePaths.length) return { canceled: true };
+    await mediaAccess.grant(selected.filePaths[0]);
+    return { filePath: selected.filePaths[0] };
+});
+ipcMain.handle('media-process:inspect', async (event, filePath) => {
+    requireMainFrame(event);
+    try { return { success: true, ...await mediaProcessor.inspect(filePath) }; }
+    catch (error) { return { success: false, error: error.message }; }
+});
+ipcMain.handle('media-process:convert', async (event, request) => {
+    requireMainFrame(event);
+    try {
+        const result = await mediaProcessor.convert(request, progress => {
+            if (!event.sender.isDestroyed()) event.sender.send('media-process:progress', progress);
+        }, event.sender.id);
+        return { success: true, ...result };
+    } catch (error) { return { success: false, error: error.message, canceled: error.code === 'MEDIA_PROCESS_CANCELED' }; }
+});
+ipcMain.handle('media-process:cancel', (event, jobId) => {
+    requireMainFrame(event);
+    return { canceled: mediaProcessor?.cancel(jobId, event.sender.id) || false };
+});
+
 ipcMain.handle('file:saveCopy', async (_, filePath) => {
     try {
         const sourcePath = String(filePath || '');
@@ -2260,17 +2297,21 @@ ipcMain.handle('creative-web:open', async (event, platform) => {
 });
 
 function getRelayBrowser() {
-    relayBrowser ||= new RelayBrowser({ BrowserWindow, BrowserView, session, shell,
+    relayBrowser ||= new RelayBrowser({ BrowserWindow, BrowserView, session, shell, safeStorage,
         directory: path.join(app.getPath('userData'), 'data'),
         onAccount: account => relayAccountDelivery.send(mainWindow?.webContents, account),
+        onSelectAccounts: catalog => {
+            if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); }
+            return relayAccountDelivery.select(mainWindow?.webContents, catalog);
+        },
         onState: state => {
             if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('relay-browser:accounts', state);
         },
-        getLinkedAccount: (site, userId) => {
+        getLinkedAccounts: (site, userId) => {
             const loaded = apiConfigStore.load();
             if (!loaded.success) throw new Error('API config unavailable');
-            return loaded.config?.providers?.find(provider => provider.relayAccount?.site === site
-                && provider.relayAccount?.userId === userId)?.relayAccount;
+            return (loaded.config?.providers || []).filter(provider => provider.relayAccount?.site === site
+                && provider.relayAccount?.userId === userId).map(provider => provider.relayAccount);
         },
         importer: createRelayImporter({ bridge: flowCanvasBridge, store, board: agentServices.board, getSaveDir }) });
     return relayBrowser;
@@ -3670,14 +3711,13 @@ let agentShutdownComplete = false;
 app.on('before-quit', event => {
     isQuitting = true;
     creativeWebApps?.close();
-    relayBrowser?.close();
     hunyuanRhinoWorkflow?.close();
     rhinoWorkbench?.close();
     blenderWorkbench?.close();
-    if ((agentServices || hunyuanAccounts || watcher) && !agentShutdownComplete) {
+    if ((agentServices || hunyuanAccounts || watcher || relayBrowser || mediaProcessor) && !agentShutdownComplete) {
         event.preventDefault();
         agentShutdownPromise ||= Promise.allSettled([
-            agentServices?.close(), hunyuanAccounts?.closeAll(), watcher?.closeAll()
+            agentServices?.close(), hunyuanAccounts?.closeAll(), watcher?.closeAll(), relayBrowser?.close(), mediaProcessor?.close()
         ]).finally(() => {
             agentShutdownComplete = true;
             app.quit();

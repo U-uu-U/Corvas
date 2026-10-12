@@ -27,7 +27,7 @@ test('balances cache and deduplicate queries, preserve stale values, and never e
         assert.equal(first.accounts[0].amount, 44.35);
         assert.equal(first.accounts[0].low, true);
         assert.equal(first.accounts[1].amount, null);
-        assert.equal(first.accounts[1].status, 'unavailable');
+        assert.equal(first.accounts[1].status, 'link');
         assert.ok(!JSON.stringify(first).includes('test-secret'));
         balances.setThreshold('zhubo-art', null);
         assert.equal((await balances.list()).accounts[0].threshold, null);

@@ -11,7 +11,10 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
     let app;
     const servers = [], queries = [];
     let downloadCount = 0, mutations = 0;
-    const accountKeys = { ai: [], art: [], cart: [] };
+    const accountKeys = Object.fromEntries(['ai', 'art', 'cart'].map(site => [site, [1, 2, 3].map(id => ({
+        id, user_id: site === 'ai' ? 1 : 'user1', name: `Existing ${site} ${id}`, status: id === 3 ? 2 : 1,
+        expired_time: -1, is_active: id === 3 ? 0 : 1, token_key: `sk-${site}FixtureOnly${id}123`
+    }))]));
     try {
         const fixture = path.join(profile, 'fixture.mp4');
         const encoded = spawnSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=10',
@@ -26,10 +29,11 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
                     res.setHeader('content-type', 'application/json');
                     if (req.headers.authorization !== 'Bearer ai-fixture') { res.statusCode = 401; res.end('{}'); return; }
                     if (url.pathname === '/api/user/self') { res.end(JSON.stringify({ success: true, data: { id: 1, username: 'Image User', status: 1 } })); return; }
-                    if (url.pathname === '/api/token/1/key') { res.end(JSON.stringify({ success: true, data: { key: 'aiFixtureOnly123' } })); return; }
+                    if (/^\/api\/token\/[12]\/key$/.test(url.pathname)) {
+                        res.end(JSON.stringify({ success: true, data: { key: `aiFixtureOnly${url.pathname.split('/')[3]}123` } })); return;
+                    }
                     if (req.method === 'POST' && url.pathname === '/api/token/') {
-                        accountKeys.ai.push({ id: 1, name: 'Corvas Canvas', status: 1, expired_time: -1 });
-                        res.end(JSON.stringify({ success: true })); return;
+                        res.statusCode = 500; res.end('{}'); return;
                     }
                     res.end(JSON.stringify({ success: true, data: { items: accountKeys.ai, total: accountKeys.ai.length } })); return;
                 }
@@ -40,8 +44,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
                         res.end(JSON.stringify({ id: 'user1', username: `${site} User`, is_active: 1 })); return;
                     }
                     if (req.method === 'POST') {
-                        const token = { id: 1, user_id: 'user1', name: 'Corvas Canvas', is_active: 1, token_key: `sk-${site}FixtureOnly123` };
-                        accountKeys[site].push(token); res.end(JSON.stringify(token)); return;
+                        res.statusCode = 500; res.end('{}'); return;
                     }
                     res.end(JSON.stringify({ data: accountKeys[site] })); return;
                 }
@@ -57,7 +60,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
                 }
                 res.setHeader('content-type', 'text/html; charset=utf-8');
                 res.end(`<html><body style="background:#fff;color:#222;font:16px sans-serif;padding:40px"><h1>${site} 原站页面</h1>
-                    <button id="login" onclick="${site === 'ai' ? "document.cookie='imageLoggedIn=1;path=/;max-age=86400';" : `localStorage.setItem('token','${site}-fixture');`}location.href='/dashboard'">登录</button>
+                    <button id="login" onclick="${site === 'ai' ? "document.cookie='imageLoggedIn=1;path=/';" : `${site === 'art' ? 'sessionStorage' : 'localStorage'}.setItem('token','${site}-fixture');sessionStorage.setItem('user','{&quot;id&quot;:&quot;user1&quot;}');`}location.href='/dashboard'">登录</button>
                     <a id="download" href="/video.mp4?signature=private" download="result.mp4">下载视频</a>
                     <script>if('${site}'==='ai'&&document.cookie.includes('imageLoggedIn=1')) fetch('/api/user/self',{headers:{Authorization:'Bearer ai-fixture'}});if(location.pathname==='/task-logs') fetch('/api/v1/task_logs?page=1&per_page=20&start_date=2026-10-07&end_date=2026-10-07',{headers:{Authorization:'Bearer '+localStorage.getItem('token')}}).then(r=>r.json()).then(()=>document.body.dataset.ready='yes')</script>
                     </body></html>`);
@@ -91,7 +94,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             await page.locator('#connect[data-state="connected"]').waitFor();
             await page.locator('#connect').click();
             await page.locator('#connect[data-state="connected"]').waitFor();
-            assert.equal(accountKeys[site].length, 1, 'Reconnection must reuse the dedicated key');
+            assert.equal(accountKeys[site].length, 3, 'Importing existing keys must not create a dedicated key');
             if (site === 'ai') {
                 assert.equal(await inSite(site, "localStorage.getItem('token')"), null, 'New API authentication comes from its own HTTP session');
                 continue;
@@ -138,14 +141,16 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         });
         const reopened = await reopenedPromise;
         await reopened.locator('#connect[data-state="connected"]').waitFor();
-        assert.equal(accountKeys.ai.length, 1, 'Saved image login is reused after closing the browser');
-        assert.equal(Object.values(accountKeys).reduce((count, keys) => count + keys.length, 0), 3);
+        assert.equal(accountKeys.ai.length, 3, 'Saved image login is reused after closing the browser');
+        assert.equal(Object.values(accountKeys).reduce((count, keys) => count + keys.length, 0), 9);
         const linked = await app.evaluate(() => global.relayAccountStore.load().config.providers);
-        assert.equal(linked.length, 3);
+        assert.equal(linked.length, 6);
         assert.equal(linked[0].endpoint, 'https://ai.ravenhash.org/v1');
         assert.equal(linked[0].capability, 'image');
-        assert.equal(linked[1].endpoint, 'https://art.ravenhash.org/v1');
-        assert.equal(linked[2].endpoint, 'https://cart.ravenhash.org/v1');
+        assert.equal(linked[2].endpoint, 'https://art.ravenhash.org/v1');
+        assert.equal(linked[4].endpoint, 'https://cart.ravenhash.org/v1');
+        assert.ok(linked.every(provider => ['1', '2'].includes(provider.relayAccount.tokenId)));
+        assert.doesNotMatch(JSON.stringify(await app.evaluate(() => global.relaySelections)), /FixtureOnly|token_key|apiKey/);
         const encrypted = await fs.readFile(path.join(profile, 'data/api-config.v1.json'), 'utf8');
         assert.equal(JSON.parse(encrypted).format, 'safe-storage');
         assert.doesNotMatch(encrypted, /FixtureOnly123|art-fixture|cart-fixture/);
@@ -154,11 +159,27 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         const restarted = await app.firstWindow();
         await restarted.locator('#connect[data-state="connected"]').waitFor();
         assert.equal(await app.evaluate(() => global.relaySmoke.site), 'ai');
-        assert.equal(accountKeys.ai.length, 1, 'Application restart restores the saved session without creating another key');
+        assert.equal(accountKeys.ai.length, 3, 'Application restart restores the saved session without creating another key');
         await restarted.locator('#switch').click();
         await restarted.locator('[data-site="art"]').click();
         await restarted.locator('#connect[data-state="connected"]').waitFor();
-        assert.equal(accountKeys.art.length, 1, 'Video login storage also survives application restart');
+        assert.equal(accountKeys.art.length, 3, 'Video sessionStorage survives application restart');
+        assert.equal(await inSite('art', "sessionStorage.getItem('token')"), 'art-fixture');
+        assert.equal(await inSite('art', "localStorage.getItem('token')"), null);
+        const sessionFile = await fs.readFile(path.join(profile, 'relay-sessions.v1.json'), 'utf8');
+        assert.doesNotMatch(sessionFile, /art-fixture|imageLoggedIn|cart-fixture/);
+        await inSite('art', 'sessionStorage.clear(); localStorage.clear();');
+        await app.evaluate(() => global.relaySmoke.saveSession('art'));
+        await app.evaluate(() => global.relaySmoke.open({ site: 'ai' }));
+        await inSite('ai', "document.cookie='imageLoggedIn=;path=/;max-age=0';fetch('/api/user/auth/logout',{method:'POST',headers:{Authorization:'Bearer ai-fixture'}})");
+        await app.close(); app = await launch();
+        const loggedOut = await app.firstWindow();
+        await loggedOut.locator('#connect[data-state="signed-out"]').waitFor();
+        assert.equal(await inSite('ai', "document.cookie.includes('imageLoggedIn=1')"), false);
+        await loggedOut.locator('#switch').click();
+        await loggedOut.locator('[data-site="art"]').click();
+        await loggedOut.locator('#connect[data-state="signed-out"]').waitFor();
+        assert.equal(await inSite('art', "sessionStorage.getItem('token')"), null);
         assert.deepEqual(errors, []);
         console.log(JSON.stringify({ ok: true, downloadCount, mutations, originalSiteUI: true, originalNodeRestored: true, separateSites: true }));
     } finally {

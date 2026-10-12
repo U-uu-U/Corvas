@@ -84,6 +84,10 @@ export class ContextMenu {
                 } else if (action === 'repairMaterial') {
                     const ev = new CustomEvent('context-repair-material', { detail: { itemIds, filePaths, fileTargets } });
                     document.dispatchEvent(ev);
+                } else if (action === 'processMedia') {
+                    document.dispatchEvent(new CustomEvent('context-process-media', {
+                        detail: { nodeId, filePath: primaryPath, fileTargets, itemIds }
+                    }));
                 } else if (action === 'relinkMaterial') {
                     const primaryTarget = fileTargets.find(target => target.itemId === nodeId) || fileTargets[0] || null;
                     const ev = new CustomEvent('context-relink-material', {
@@ -170,6 +174,8 @@ export class ContextMenu {
         if (repairItem) {
             repairItem.style.display = hasFiles ? '' : 'none';
         }
+        const processItem = this.el.querySelector('[data-action="processMedia"]');
+        if (processItem) processItem.style.display = hasFiles && /\.(jpe?g|png|webp|gif|bmp|tiff?|svg|ico|mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|aac|flac|ogg|wma|m4a)$/i.test(item.filePath || filePaths[0] || '') ? '' : 'none';
 
         const relinkItem = this.el.querySelector('[data-action="relinkMaterial"]');
         if (relinkItem) {

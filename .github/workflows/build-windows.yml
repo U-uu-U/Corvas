@@ -77,6 +77,9 @@ jobs:
       - name: Package Windows app
         run: npx electron-builder --win --publish never
 
+      - name: Verify packaged media conversion tools
+        run: node scripts/packaged-media-tools-smoke.cjs
+
       # 不做"打包后启动"冒烟：团队约定 Windows 产物的人工验证在本地进行。
       # 这里只确认产物确实生成，避免 electron-builder 静默跳过某个目标。
       - name: Verify artifacts exist

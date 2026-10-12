@@ -32,8 +32,9 @@ import {
     parseAgentImageCompilationResponse
 } from './agent-image-generation.js';
 import { reconcileApiConfig } from './api-config-recovery.js';
-import { mergeRelayAccount } from './relay-account-config.js';
+import { mergeRelayAccounts } from './relay-account-config.js';
 import { createSiteLogin } from './site-login.js';
+import { createRelayKeyPicker } from './relay-key-picker.js';
 import { CANCELED_IMAGE_REFERENCES } from './node-types.js';
 import { imageGenerationRequestParams, normalizeVideoGenerationResolution } from './generation-request-params.js';
 import { requestRecoveryTaskId } from './generation-recovery-dialog.js';
@@ -405,6 +406,8 @@ export class AgentSidebar {
         this.apiConfigReady = this._restoreDurableApiConfig();
         void this.apiConfigReady.then(() => this.siteLogin?.start());
         this.relayAccountSync = Promise.resolve();
+        this.relayKeyPicker = createRelayKeyPicker();
+        window.flowCanvas?.apiConfig?.onRelayAccountSelection?.(catalog => this.relayKeyPicker.select(catalog));
         window.flowCanvas?.apiConfig?.onRelayAccount?.(account => {
             this.relayAccountSync = this.relayAccountSync.catch(() => {}).then(() => this._connectRelayAccount(account));
             return this.relayAccountSync;
@@ -4112,6 +4115,8 @@ export class AgentSidebar {
     }
 
     async _connectRelayAccount(account) {
+        const accounts = Array.isArray(account) ? account : [account];
+        account = accounts[0];
         await this.apiConfigReady;
         const bridge = window.flowCanvas?.apiConfig;
         if (!bridge?.save) throw new Error('API config storage unavailable');
@@ -4119,7 +4124,7 @@ export class AgentSidebar {
             await modelConfigStore.refresh({ force: true, reason: 'relay-account' });
         }
         const previous = this._apiConfigSnapshot();
-        const next = mergeRelayAccount(previous, modelConfigStore.getConfig(), account);
+        const next = mergeRelayAccounts(previous, modelConfigStore.getConfig(), accounts);
         clearTimeout(this.apiConfigSaveTimer);
         this.providers = next.providers;
         this.globalConfig = next.globalConfig;

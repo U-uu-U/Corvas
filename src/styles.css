@@ -5903,28 +5903,28 @@ select.plan-cell-input {
     color: #666b74;
 }
 
-.generation-composer-reference > button {
+.generation-composer-reference > .generation-composer-reference-remove {
     position: absolute;
-    top: 2px;
-    right: 2px;
-    display: none;
-    width: 17px;
-    height: 17px;
+    top: 0;
+    left: 24px;
+    display: grid;
+    width: 16px;
+    height: 16px;
     place-items: center;
     padding: 0;
     border: 0;
-    border-radius: 50%;
-    background: rgba(18, 19, 21, 0.9);
-    color: #e5e6e8;
-    font: inherit;
-    font-size: 13px;
-    line-height: 1;
+    border-radius: 0;
+    background: transparent;
+    color: #ffffff;
+    filter: drop-shadow(0 0 1px #000000);
+    font: 16px/1 Arial, sans-serif;
     cursor: pointer;
 }
 
-.generation-composer-reference:hover > button,
-.generation-composer-reference:focus-within > button {
-    display: grid;
+.generation-composer-reference-remove:hover,
+.generation-composer-reference-remove:focus-visible {
+    color: #ffb7b7;
+    outline: none;
 }
 
 .generation-composer-prompt-shell {

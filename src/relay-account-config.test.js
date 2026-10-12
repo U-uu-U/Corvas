@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeRelayAccount } from './relay-account-config.js';
+import { mergeRelayAccount, mergeRelayAccounts } from './relay-account-config.js';
 
 const catalog = { catalogMode: 'remote', defaultModels: { video: 'second' }, models: ['first', 'second'].map(model => ({
     id: model, kind: 'video', catalog: { model, hosts: ['art.ravenhash.org', 'cart.ravenhash.org'] }
@@ -59,4 +59,21 @@ test('image login creates only the model roles actually published for the image 
     assert.equal(linked.providers[0].endpoint, 'https://ai.ravenhash.org/v1');
     assert.equal(linked.globalConfig.imageProviderId, linked.providers[0].id);
     assert.equal(linked.globalConfig.videoProviderId, undefined);
+});
+
+test('multiple keys have separate providers and reimport preserves legacy IDs and bindings', () => {
+    const first = mergeRelayAccount({}, catalog, account);
+    first.providers[0].id = 'legacy-provider-id';
+    first.globalConfig.videoProviderId = 'legacy-provider-id::model:first';
+    const second = { ...account, tokenId: '2', tokenName: 'Second Key', apiKey: 'sk-secondFixture123' };
+    const config = mergeRelayAccounts(first, catalog, [account, second]);
+    assert.equal(config.providers.length, 2);
+    assert.equal(config.providers[0].id, 'legacy-provider-id');
+    assert.notEqual(config.providers[0].id, config.providers[1].id);
+    assert.ok(config.providers[1].name.includes('Second Key'));
+    assert.equal(config.globalConfig.videoProviderId, 'legacy-provider-id::model:first');
+    const again = mergeRelayAccounts(config, catalog, [account, second]);
+    assert.deepEqual(again, config);
+    assert.throws(() => mergeRelayAccounts(config, catalog, [account, { ...second, apiKey: 'bad' }]));
+    assert.equal(config.providers[1].apiKey, 'sk-secondFixture123');
 });

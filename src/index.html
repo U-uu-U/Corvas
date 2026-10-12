@@ -154,6 +154,10 @@
                 <button class="canvas-tool-btn" id="canvasToolPlan" type="button" title="新建规划表" aria-label="新建规划表">
                     <svg class="flow-icon" aria-hidden="true"><use href="./icons/iconamoon.svg#plan"></use></svg>
                 </button>
+                <button class="canvas-tool-btn" id="canvasToolMediaProcess" type="button" title="素材处理" aria-label="素材处理"
+                    aria-controls="mediaProcessingPanel" aria-expanded="false">
+                    <svg class="flow-icon" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-filter"></use></svg>
+                </button>
                 <span class="canvas-tool-separator" aria-hidden="true"></span>
                 <button class="canvas-tool-btn canvas-task-history-btn" id="agentTaskHistoryBtn" type="button"
                     title="打开任务记录" aria-label="打开任务记录" aria-controls="agentTaskHistory" aria-expanded="false">
@@ -875,6 +879,10 @@
         <div class="context-menu-item" data-action="repairMaterial">
             <span class="context-menu-icon icon-repair"></span>
             <span>自动修补断联素材</span>
+        </div>
+        <div class="context-menu-item" data-action="processMedia">
+            <svg class="flow-icon flow-icon-sm" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-filter"></use></svg>
+            <span>素材处理</span>
         </div>
         <div class="context-menu-item" data-action="relinkMaterial">
             <span class="context-menu-icon icon-link"></span>

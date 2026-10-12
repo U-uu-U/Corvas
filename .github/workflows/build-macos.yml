@@ -57,6 +57,8 @@ jobs:
         run: npm test
       - name: Package macOS app
         run: npx electron-builder --mac --universal --publish never -c.electronDownload.mirror=https://github.com/electron/electron/releases/download/
+      - name: Verify universal media conversion tools
+        run: node scripts/packaged-media-tools-smoke.cjs
       - name: Install smoke-test tooling
         run: |
           npm install --no-save --package-lock=false playwright
