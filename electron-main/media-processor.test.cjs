@@ -8,6 +8,8 @@ const { execFileSync } = require('node:child_process');
 const sharp = require('sharp');
 const { MediaProcessor, mediaToolPaths, optionsFor } = require('./media-processor.cjs');
 
+// Avoid retaining fixture file handles in libvips on Windows.
+sharp.cache(false);
 const tools = mediaToolPaths();
 const digest = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const token = () => crypto.randomUUID();

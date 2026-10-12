@@ -1,6 +1,25 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { Readable } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
+const { createGunzip } = require('node:zlib');
+
+async function downloadProbe(release, arch, destination) {
+    if (fs.existsSync(destination)) return;
+    const response = await fetch(`https://github.com/eugeneware/ffmpeg-static/releases/download/${release}/ffprobe-darwin-${arch}.gz`,
+        { signal: AbortSignal.timeout(120000) });
+    if (!response.ok) throw new Error(`FFprobe download failed: HTTP ${response.status}`);
+    const temporary = destination+'.download';
+    try {
+        await pipeline(Readable.fromWeb(response.body), createGunzip(), fs.createWriteStream(temporary));
+        fs.chmodSync(temporary, 0o755);
+        execFileSync('lipo', ['-verify_arch', arch === 'x64' ? 'x86_64' : 'arm64', temporary]);
+        fs.renameSync(temporary, destination);
+    } finally {
+        fs.rmSync(temporary, { force: true });
+    }
+}
 
 // Package only the tools for the target OS. macOS tools contain both architectures.
 module.exports = async function prepareMediaTools(context = {}) {
@@ -23,7 +42,14 @@ module.exports = async function prepareMediaTools(context = {}) {
                 env: { ...process.env, FFMPEG_BIN: destination, npm_config_platform: 'darwin', npm_config_arch: arch,
                     FFMPEG_BINARY_RELEASE: require('ffmpeg-static/package.json')['ffmpeg-static']['binary-release-tag'] } });
             ffmpegs.push(destination);
-            ffprobes.push(path.join(ffprobeRoot, 'bin', 'darwin', arch, 'ffprobe'));
+            const probe = path.join(cache, 'ffprobe-'+arch);
+            // ffprobe-static@3.1.0 labels an Intel binary as arm64; use the matching FFmpeg release.
+            await downloadProbe(release, arch, probe);
+            ffprobes.push(probe);
+            for (const suffix of ['LICENSE', 'README']) {
+                const notice = destination+'.'+suffix;
+                if (fs.existsSync(notice)) fs.copyFileSync(notice, path.join(output, `media-tools-${arch}.${suffix}`));
+            }
         }
         execFileSync('lipo', ['-create', ...ffmpegs, '-output', path.join(output, 'ffmpeg')]);
         execFileSync('lipo', ['-create', ...ffprobes, '-output', path.join(output, 'ffprobe')]);
