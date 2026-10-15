@@ -14,6 +14,7 @@
 .relay-key-copy strong { font-size:13px; overflow-wrap:anywhere; }
 .relay-key-copy code { font-size:12px; color:var(--text-secondary); overflow-wrap:anywhere; }
 .relay-key-row small { font-size:11px; color:#8bbb9f; flex-shrink:0; }
+.relay-key-copy small { color:var(--text-secondary); overflow-wrap:anywhere; }
 .relay-key-row[data-disabled=true] { opacity:.6; cursor:default; }
 .relay-key-row[data-disabled=true] small { color:#d1a46a; }
 .relay-key-picker footer { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }

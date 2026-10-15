@@ -6,6 +6,11 @@ export function isRemoteCatalog(config) {
     return config?.catalogMode === 'remote';
 }
 
+export function providerAllowsModel(provider, model) {
+    const available = provider?.modelAvailability?.models;
+    return !Array.isArray(available) || available.includes(model);
+}
+
 function endpointHostname(endpoint) {
     if (typeof endpoint !== 'string' || !endpoint.trim()) return '';
     try {
@@ -124,13 +129,14 @@ export function expandCatalogProviders(config, providers, { includeHidden = fals
 
     return accounts.flatMap(provider => {
         if (!provider || !provider.id) return [];
-        if (!isCatalogManaged(config, provider)) return expandLegacyProviders([provider]);
+        if (!isCatalogManaged(config, provider)) return expandLegacyProviders([provider])
+            .filter(option => providerAllowsModel(provider, option.model));
         if (!isRemoteCatalog(config)) return [];
         const hostname = endpointHostname(provider.endpoint);
         if (!hostname) return [];
         const kind = config.catalogScope ? accountKind(config, provider, hostname) : null;
         const entries = getCatalogProviderEntries(config, kind ? { ...provider, kind } : provider, { includeHidden });
-        return entries.map(entry => {
+        return entries.filter(entry => providerAllowsModel(provider, catalogModel(entry))).map(entry => {
             const model = catalogModel(entry);
             return {
                 ...provider,

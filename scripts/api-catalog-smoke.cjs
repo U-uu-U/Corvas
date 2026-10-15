@@ -39,13 +39,13 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
     try {
         await fs.mkdir(artifactDir, { recursive: true });
         await fs.mkdir(path.join(profile, 'data'));
+        await fs.writeFile(path.join(profile, 'data/relay-browser.json'), JSON.stringify({ onboardingSkipped: true }));
         const items = [{ id: 'api-catalog-video', kind: 'op', nodeType: 'video', x: 100, y: 100, width: 320, height: 180,
             config: { prompt: 'Local fixture only', duration: 30, ratio: '16:9', resolution: '720p' } }];
         await fs.writeFile(path.join(profile, 'data/board.json'), JSON.stringify({ version: 1, activeGroupId: 'catalog-smoke', items,
             connections: [], folderGroups: [{ id: 'catalog-smoke', name: 'API catalog smoke', savedItems: items,
                 connections: [], folders: [], boardRevision: 0 }], mcp: { enabled: false }, viewport: { x: 0, y: 0, scale: 1 } }));
         const env = { ...process.env, FLOW_MCP_SMOKE_PROFILE: profile,
-            FLOW_API_CATALOG_SMOKE_ONBOARDING: '1',
             FLOW_API_CATALOG_SMOKE_URL: `http://127.0.0.1:${server.address().port}/config` };
         delete env.ELECTRON_RUN_AS_NODE;
         app = await electron.launch({ executablePath: require('electron'), args: ['--disable-gpu',
@@ -78,6 +78,7 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
             const onboarding = page.locator('#siteLoginDialog[open]');
             if (await onboarding.count()) {
                 assert.equal(await onboarding.locator('[data-login-site]').count(), 3);
+                await onboarding.locator('header img').evaluate(image => image.decode());
                 const bounds = await onboarding.evaluate(element => {
                     const rect = element.getBoundingClientRect();
                     return { centerX: rect.x + rect.width / 2, centerY: rect.y + rect.height / 2,
@@ -92,9 +93,18 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
                 await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
                     .find(window => /index\.html|^http:\/\/127\.0\.0\.1:15321\//.test(window.webContents.getURL())).setSize(1400, 900));
                 await onboarding.locator('[data-login-skip]').click();
+                await page.reload();
+                await onboarding.waitFor();
+                assert.equal(await onboarding.locator('[data-login-site]').count(), 3, 'An empty API list must prompt again after reload, even with a legacy skip flag');
+                await onboarding.locator('[data-login-manual]').click();
+                await form.waitFor();
+                assert.equal(await page.locator('#agentApiSettingsPane').isVisible(), true);
+                await page.locator('#agentApiFormClose').click();
             }
-            await page.locator('#agentToggleBtn').hover();
-            await page.locator('#agentSettingsBtn').click();
+            if (!await page.locator('#agentSettings.show').isVisible()) {
+                await page.locator('#agentToggleBtn').hover();
+                await page.locator('#agentSettingsBtn').click();
+            }
             await page.locator('#agentApiSettingsTab').click();
             assert.equal(await page.locator('#agentStationAccounts [data-station]').count(), 3);
             assert.equal(await page.locator('#agentLegacyApiConfiguration').isVisible(), true);
@@ -125,10 +135,11 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
         };
         const assertManaged = async kind => {
             assert.equal(await page.locator('#agentFormCapability').inputValue(), kind);
-            for (const id of ['agentFetchModelsBtn', 'agentAddModelSlotBtn', 'agentAdditionalModels', 'agentFormModel']) {
+            for (const id of ['agentAddModelSlotBtn', 'agentAdditionalModels', 'agentFormModel']) {
                 assert.equal(await page.locator(`#${id}`).isVisible(), false, `${id} must be hidden for remote catalog`);
             }
             assert.equal(await page.locator('#agentFetchedModelSelect').isVisible(), true);
+            assert.equal(await page.locator('#agentFetchModelsBtn').isVisible(), true);
         };
         const save = async (name, endpoint) => {
             await page.locator('#agentFormSaveBtn').click();
@@ -170,6 +181,7 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
             await page.screenshot({ path: path.join(artifactDir, `api-catalog-${label}.png`) });
         };
 
+        await page.locator('#siteLoginDialog[open]').waitFor();
         await openSettings();
         await page.locator('#agentAddApiBtn').click();
         await page.locator('[data-template="ravenhash-video-cart"]').click();
@@ -261,6 +273,7 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
         assert.equal((await saved()).providers.filter(provider => provider.name === 'Art remote').length, 1);
         await page.reload();
         await page.waitForFunction(() => window.__flowCanvasGetModelConfigSnapshot?.().status.origin === 'remote');
+        assert.equal(await page.locator('#siteLoginDialog[open]').count(), 0, 'A restored manual API account suppresses startup setup');
         assert.equal((await saved()).providers.find(provider => provider.id === art.id).endpoint, 'https://cart.ravenhash.org/v1',
             'The migrated account must keep the Cart endpoint after reload');
         await openSettings();
@@ -378,6 +391,7 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
                     tokenId, tokenName: `Selected ${tokenId}`, apiKey: `sk-${site}LinkedFixture${tokenId}` })) });
             }), { site, tokenIds });
         };
+        await app.evaluate(() => { globalThis.apiCatalogSmoke.modelFetchResult = { success: true, models: ['sd2.5-extra'] }; });
         await importAccount('art', ['42', '43']);
         await importAccount('art', ['42', '43']);
         await importAccount('cart');
@@ -390,12 +404,60 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote',
         assert.equal(linked[0].modelCatalog, 'remote');
         assert.ok((await saved()).providers.some(provider => provider.id === custom.id), 'Existing custom API is preserved');
         assert.equal(JSON.stringify(requests).includes('LinkedFixture'), false);
-        assert.equal(await app.evaluate(() => globalThis.apiCatalogSmoke.fetchModelsCalls), 0);
+        assert.equal(await app.evaluate(() => globalThis.apiCatalogSmoke.fetchModelsCalls), 5, 'Only explicit key imports trigger permission checks');
+        assert.ok(linked.every(provider => provider.modelAvailability.models.join(',') === 'sd2.5-extra'));
+        videoA.catalog.enabled = true;
+        videoB.catalog.enabled = true;
+        config.models = [videoA, videoB, imageA];
+        await refresh();
+        await edit('Art remote');
+        await app.evaluate(() => { globalThis.apiCatalogSmoke.modelFetchResult = { success: true, models: ['sd2.5-route1', 'unpublished-model'] }; });
+        await page.locator('#agentFetchModelsBtn').click();
+        await page.waitForFunction(() => document.querySelector('#agentModelFetchStatus').textContent.includes('当前目录可用 1 个'));
+        assert.deepEqual((await choices()).map(option => option.value), ['sd2.5-route1']);
+        assert.equal(await page.locator('#agentFetchedModelSelect').inputValue(), 'sd2.5-route2');
+        assert.equal(await page.locator('#agentFetchedModelSelect option:checked').isDisabled(), true);
+        await page.locator('#agentFormSaveBtn').click();
+        assert.equal(await form.isVisible(), true);
+        assert.match(await page.locator('#agentModelFetchStatus').innerText(), /分组权限/);
+        await app.evaluate(() => { globalThis.apiCatalogSmoke.modelFetchResult = { success: false, error: 'Fixture temporary outage' }; });
+        await page.locator('#agentFetchModelsBtn').click();
+        await page.waitForFunction(() => document.querySelector('#agentModelFetchStatus').textContent.includes('拉取失败'));
+        assert.deepEqual((await choices()).map(option => option.value), ['sd2.5-route1']);
+        await app.evaluate(() => { globalThis.apiCatalogSmoke.modelFetchResult = { success: true, models: [] }; });
+        await page.locator('#agentFetchModelsBtn').click();
+        await page.waitForFunction(() => document.querySelector('#agentModelFetchStatus').textContent.includes('没有可用模型'));
+        assert.deepEqual(await choices(), []);
+        await page.locator('#agentFormKey').fill(fixtureKey + '-changed');
+        assert.equal((await choices()).length, 2);
+        await app.evaluate(() => { globalThis.apiCatalogSmoke.modelFetchResult = { success: true, models: ['sd2.5-route1', 'sd2.5-route2'] }; });
+        await page.locator('#agentFetchModelsBtn').click();
+        await page.waitForFunction(() => document.querySelector('#agentModelFetchStatus').textContent.includes('当前目录可用 2 个'));
+        for (const [theme, width] of [['dark', 1440], ['light', 820]]) {
+            await page.evaluate(theme => {
+                document.documentElement.dataset.theme = theme;
+                document.documentElement.style.setProperty('--accent', '#ffffff');
+                document.documentElement.style.setProperty('--accent-hover', '#ffffff');
+            }, theme);
+            await snapshot(`manual-fetch-${theme}`, width);
+            const contrast = await page.locator('#agentFormSaveBtn').evaluate(button => {
+                const style = getComputedStyle(button);
+                const luminance = color => color.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => {
+                    const s = value / 255;
+                    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+                }).reduce((total, value, index) => total + value * [0.2126, 0.7152, 0.0722][index], 0);
+                const text = luminance(style.color), background = luminance(style.backgroundColor);
+                return (Math.max(text, background) + 0.05) / (Math.min(text, background) + 0.05);
+            });
+            assert.ok(contrast >= 4.5, `Save button contrast ${contrast} in ${theme}`);
+            await form.screenshot({ path: path.join(artifactDir, `api-form-manual-fetch-${theme}.png`) });
+        }
+        assert.equal(await app.evaluate(() => globalThis.apiCatalogSmoke.fetchModelsCalls), 9);
         assert.ok(requests.length >= 5, 'Real localhost CONFIG requests must be observed');
         assert.equal(JSON.stringify(requests).includes(fixtureKey), false, 'CONFIG server must never receive API keys');
         assert.ok(requests.every(request => !request.headers.authorization && !request.headers['x-api-key']));
         assert.deepEqual(errors, []);
-        console.log(`PASS API catalog ${process.env.FLOW_SOURCE_SMOKE === '1' ? 'source' : 'packaged'} desktop smoke: art/cart exact URL save; Cart template preservation and Get API route; Art-to-Cart edit/reload; remote image outside scope; live rename/add/disable/clear; custom text; no model-list calls or CONFIG key leakage; desktop and compact layout.`);
+        console.log(`PASS API catalog ${process.env.FLOW_SOURCE_SMOKE === '1' ? 'source' : 'packaged'} desktop smoke: empty API startup prompts despite old skip flags, manual setup and saved-account reload; permission checks on explicit key import and manual lookup; no CONFIG key leakage; desktop and compact layout.`);
     } catch (error) {
         console.error('Renderer errors:', errors);
         if (app) console.error('Early renderer errors:', await app.evaluate(() => globalThis.apiCatalogSmoke.rendererErrors));

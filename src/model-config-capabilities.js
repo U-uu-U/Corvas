@@ -723,6 +723,10 @@ export function toImageProfileOverrides(config, entry) {
     return {
         resolutionTiers: IMAGE_RESOLUTION_TIERS.filter(tier => tiers.includes(tier)),
         defaultResolutionTier: tiers.includes(option.default) ? option.default : tiers[0],
+        ...(entry.options?.ratio?.type === 'enum' ? { ratios: [...entry.options.ratio.values],
+            defaultRatio: entry.options.ratio.default || entry.options.ratio.values[0] } : {}),
+        ...(typeof entry.capabilities?.webSearch?.supported === 'boolean'
+            ? { supportsWebSearch: entry.capabilities.webSearch.supported } : {}),
         capabilitySource: 'config',
         configId: entry.id
     };

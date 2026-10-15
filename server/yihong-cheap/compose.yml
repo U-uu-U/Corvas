@@ -1,0 +1,30 @@
+services:
+  yihong-cheap-adapter:
+    image: docker.1ms.run/library/python:3.12-alpine
+    container_name: yihong-cheap-adapter
+    working_dir: /app
+    command: [python, -B, adapter.py]
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    mem_limit: 192m
+    pids_limit: 96
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PUBLIC_MEDIA: ${PUBLIC_MEDIA}
+      MEDIA_DIR: /media
+    volumes:
+      - ./adapter.py:/app/adapter.py:ro
+      - ./media.py:/app/media.py:ro
+      - ${MEDIA_HOST_DIR}:/media
+    networks: [relay-network]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3015/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+networks:
+  relay-network:
+    name: ${NETWORK_NAME}
+    external: true

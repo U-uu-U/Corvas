@@ -3,7 +3,7 @@ import relaySites from '../shared/relay-sites.cjs';
 const { SITES } = relaySites;
 const icon = name => `<svg class="flow-icon" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-${name}"></use></svg>`;
 
-export function createSiteLogin({ getProviders }) {
+export function createSiteLogin({ getProviders, onManualSetup }) {
     const root = document.getElementById('agentStationAccounts');
     if (!root) return null;
     const api = window.flowCanvas?.relay;
@@ -13,11 +13,12 @@ export function createSiteLogin({ getProviders }) {
     dialog.id = 'siteLoginDialog';
     dialog.className = 'site-login-dialog';
     const logo = new URL('../electron-main/assets/app-icon.png', import.meta.url).href;
-    dialog.innerHTML = `<header><img src="${logo}" alt="Corvas"><h1>登录 Corvas</h1></header>
+    dialog.innerHTML = `<header><img src="${logo}" alt="Corvas"><h1>配置 API</h1></header>
         <div class="site-login-choices">${Object.entries(SITES).map(([site, info]) => `
             <button type="button" data-login-site="${site}">${icon(info.icon)}<strong>${info.name}</strong><small>${new URL(info.origin).hostname}</small></button>`).join('')}</div>
-        <p class="site-login-status" role="status"></p><footer><button type="button" data-login-skip>暂不登录</button></footer>`;
-    dialog.setAttribute('aria-label', '登录 Corvas');
+        <p class="site-login-status" role="status"></p><footer><button type="button" data-login-manual>${icon('settings')}手动配置</button>
+        <button type="button" data-login-skip>稍后配置</button></footer>`;
+    dialog.setAttribute('aria-label', '配置 API');
     document.body.append(dialog);
     root.innerHTML = Object.entries(SITES).map(([site, info]) => `
         <article class="site-account" data-station="${site}">
@@ -50,7 +51,7 @@ export function createSiteLogin({ getProviders }) {
             card.querySelector('[data-open-site]').disabled = Boolean(opening) || !api?.open;
         }
         for (const button of dialog.querySelectorAll('[data-login-site]')) button.disabled = Boolean(opening) || !api?.open;
-        if (providers.some(provider => provider.relayAccount) && dialog.open) dialog.close();
+        if (providers.length && dialog.open) dialog.close();
     }
     async function open(site, login) {
         if (opening) return;
@@ -68,19 +69,18 @@ export function createSiteLogin({ getProviders }) {
         if (login) void open(login.dataset.loginSite, true);
         else if (backend) void open(backend.dataset.openSite, false);
     });
-    const skip = async () => {
-        try { snapshot = await api.skipOnboarding(); if (dialog.open) dialog.close(); }
-        catch { message('暂未保存，请重试'); }
-    };
-    dialog.querySelector('[data-login-skip]').addEventListener('click', () => { void skip(); });
-    dialog.addEventListener('cancel', event => { event.preventDefault(); void skip(); });
+    const skip = () => { if (dialog.open) dialog.close(); };
+    dialog.querySelector('[data-login-skip]').addEventListener('click', skip);
+    dialog.querySelector('[data-login-manual]').addEventListener('click', () => { skip(); onManualSetup?.(); });
+    dialog.addEventListener('cancel', event => { event.preventDefault(); skip(); });
     api?.onState?.(state => { snapshot = state; render(); });
     render();
-    return { render, async start() {
-        if (!api?.status) return;
+    return { render, async start({ configReady = true } = {}) {
+        if (!configReady) return;
+        if (!getProviders().length && !dialog.open) dialog.showModal();
+        if (!api?.status) { message('站点登录暂不可用，请使用手动配置'); return; }
         try {
             snapshot = await api.status(); render();
-            if (!snapshot.onboardingSkipped && !getProviders().some(provider => provider.apiKey) && !dialog.open) dialog.showModal();
         } catch { message('登录状态暂时无法读取'); }
     } };
 }

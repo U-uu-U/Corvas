@@ -62,8 +62,6 @@ if (process.env.FLOW_UPDATE_SMOKE_ENTRY === '1' && process.versions.electron) {
             assert.ok(page);
             const errors = []; page.on('pageerror', error => errors.push(error.message));
             await page.waitForFunction(() => window.__flowCanvasGetModelConfigSnapshot?.().status.revision === 43);
-            await page.locator('#mcpStartupNotice').waitFor({ state: 'visible' });
-            await page.locator('#mcpStartupNotice [data-action=close]').click();
             assert.ok(configRequests > 0);
             assert.equal(await app.evaluate(() => globalThis.updateSmoke.downloads), 0);
             await page.locator('#agentToggleBtn').hover();
@@ -78,8 +76,6 @@ if (process.env.FLOW_UPDATE_SMOKE_ENTRY === '1' && process.versions.electron) {
             await page.reload();
             await page.waitForFunction(() => window.__flowCanvasGetModelConfigSnapshot?.().status.revision === 45,
                 null, { timeout: 7000 });
-            await page.locator('#mcpStartupNotice').waitFor({ state: 'visible' });
-            await page.locator('#mcpStartupNotice [data-action=close]').click();
             await page.locator('#agentToggleBtn').hover();
             await page.locator('#agentSettingsBtn').click();
             await page.getByRole('tab', { name: '软件更新' }).click();

@@ -1859,7 +1859,8 @@ body.text-node-resizing * {
 body.platform-win32 .board-performance {
     top: 5px;
     left: 12px;
-    z-index: 13001;
+    /* The open sidebar raises the window drag region to 13002. */
+    z-index: 13003;
 }
 
 body.platform-win32 .board-usage {
@@ -2867,6 +2868,31 @@ body.platform-win32 .agent-settings-btn {
     cursor: wait;
 }
 
+.agent-fetch-models-btn {
+    display: inline-flex;
+    min-height: 36px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-color: var(--border-color);
+    background: var(--hover-bg);
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.agent-fetch-models-btn:hover,
+.agent-fetch-models-btn:focus-visible {
+    border-color: var(--text-secondary);
+    background: var(--hover-bg);
+    color: var(--text-primary);
+}
+
+.agent-fetch-models-btn .flow-icon {
+    width: 14px;
+    height: 14px;
+    flex-basis: 14px;
+}
+
 .agent-fetched-model-select {
     margin: 0;
 }
@@ -3094,18 +3120,30 @@ body.platform-win32 .agent-settings-btn {
 
 .agent-save-settings-btn {
     width: 100%;
+    min-height: 36px;
     padding: 8px;
-    background: var(--accent);
-    color: #fff;
-    border: none;
+    background: #3b3e45;
+    color: #f5f6f8;
+    border: 1px solid #666b75;
     border-radius: 6px;
     font-size: 13px;
+    font-weight: 600;
     cursor: pointer;
     transition: background 0.2s;
 }
 
 .agent-save-settings-btn:hover {
-    background: var(--accent-hover);
+    background: #4b4f58;
+}
+
+.agent-save-settings-btn:focus-visible {
+    outline: 2px solid var(--text-secondary);
+    outline-offset: 2px;
+}
+
+.agent-save-settings-btn:disabled {
+    opacity: 0.55;
+    cursor: wait;
 }
 
 /* 消息区域 */
@@ -5641,7 +5679,7 @@ select.plan-cell-input {
     box-sizing: border-box;
     width: min(680px, calc(100vw - 24px));
     min-height: 184px;
-    max-height: min(360px, calc(100vh - 24px));
+    max-height: calc(100vh - 24px);
     gap: 8px;
     padding: 11px 12px 10px;
     overflow-x: hidden;
@@ -5658,6 +5696,38 @@ select.plan-cell-input {
 
 .generation-composer[data-placement="above"] {
     transform-origin: center bottom;
+}
+
+.generation-composer-prompt-length {
+    display: flex;
+    min-width: 0;
+    min-height: 18px;
+    align-items: flex-start;
+    gap: 12px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 18px;
+}
+
+.generation-composer-length-warning {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.generation-composer-prompt-length [data-prompt-length-count] {
+    flex: 0 0 auto;
+    min-width: 70px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.generation-composer-prompt-length.is-over-limit {
+    color: #e3ad68;
+}
+
+:root[data-theme='light'] .generation-composer-prompt-length.is-over-limit {
+    color: #975014;
 }
 
 .generation-composer-reference-row {
@@ -5939,7 +6009,7 @@ select.plan-cell-input {
     font-weight: 500;
     line-height: 1.5;
     letter-spacing: 0;
-    resize: vertical;
+    resize: none;
     scrollbar-color: rgba(126, 131, 140, 0.62) transparent;
     scrollbar-width: thin;
     cursor: text;
@@ -5978,13 +6048,13 @@ select.plan-cell-input {
     background: transparent;
 }
 
-.generation-composer-prompt-shell::-webkit-resizer {
-    background: linear-gradient(135deg,
-        transparent 0 48%,
-        #585d65 49% 56%,
-        transparent 57% 66%,
-        #777c85 67% 74%,
-        transparent 75% 100%);
+.generation-composer-resize {
+    position: fixed;
+    z-index: 12021;
+}
+
+.generation-composer.is-resizing {
+    user-select: none;
 }
 
 .generation-composer-citation {
@@ -7485,7 +7555,7 @@ select.plan-cell-input {
     border: 0;
     border-radius: 6px;
     background: transparent;
-    color: #83868b;
+    color: #bfc2c7;
     font: inherit;
     font-size: 13px;
     letter-spacing: 0;
@@ -7528,7 +7598,7 @@ select.plan-cell-input {
     border: 0;
     border-radius: 7px;
     background: transparent;
-    color: #85888d;
+    color: #bfc2c7;
     font: inherit;
     font-size: 10px;
     letter-spacing: 0;

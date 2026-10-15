@@ -11,6 +11,7 @@ shell.openExternal = async url => { globalThis.apiCatalogSmoke.openedUrls.push(u
 const handle = ipcMain.handle.bind(ipcMain);
 ipcMain.handle = (channel, listener) => handle(channel, channel === 'ai:fetchModels' ? () => {
     globalThis.apiCatalogSmoke.fetchModelsCalls++;
+    if (globalThis.apiCatalogSmoke.modelFetchResult) return globalThis.apiCatalogSmoke.modelFetchResult;
     throw new Error('API catalog smoke must never fetch provider models');
 } : channel === 'shell:openRavenHash' ? (event, site) => {
     globalThis.apiCatalogSmoke.openedSites.push(site);

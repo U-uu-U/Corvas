@@ -11,8 +11,9 @@
 .site-login-choices button:nth-child(3) .flow-icon { color:#8abce8; }
 .site-login-choices strong { font-size:16px; font-weight:600; }
 .site-login-choices small { font-size:11px; color:#a4aab2; overflow-wrap:anywhere; }
-.site-login-dialog footer { display:flex; justify-content:flex-end; margin-top:16px; }
+.site-login-dialog footer { display:flex; justify-content:flex-end; gap:12px; margin-top:16px; flex-wrap:wrap; }
 .site-login-dialog footer button { border:0; background:transparent; color:#aeb6bf; font:inherit; padding:8px; cursor:pointer; }
+.site-login-dialog [data-login-manual] { display:inline-flex; align-items:center; gap:6px; margin-right:auto; }
 .site-login-dialog button:focus-visible,.site-account button:focus-visible { outline:2px solid #7db9a8; outline-offset:3px; }
 .site-login-status { min-height:18px; font-size:12px; line-height:1.5; color:#deb089; margin:14px 0 0; overflow-wrap:anywhere; }
 .site-account-list { display:flex; flex-direction:column; gap:12px; }
