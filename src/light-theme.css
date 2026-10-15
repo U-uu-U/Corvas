@@ -279,7 +279,6 @@
 }
 
 :root[data-theme='light'] .agent-add-api-btn,
-:root[data-theme='light'] .agent-save-settings-btn,
 :root[data-theme='light'] .agent-composer-popover-footer button.primary,
 :root[data-theme='light'] .agent-skill-form-actions button.primary,
 :root[data-theme='light'] .agent-provider-guide-actions button.primary {
@@ -290,7 +289,6 @@
 }
 
 :root[data-theme='light'] .agent-add-api-btn:hover,
-:root[data-theme='light'] .agent-save-settings-btn:hover,
 :root[data-theme='light'] .agent-composer-popover-footer button.primary:hover,
 :root[data-theme='light'] .agent-skill-form-actions button.primary:hover,
 :root[data-theme='light'] .agent-provider-guide-actions button.primary:hover {
@@ -442,6 +440,28 @@
 :root[data-theme='light'] .generation-composer-popover-title,
 :root[data-theme='light'] .generation-composer-setting-title {
     color: #17171c;
+}
+
+:root[data-theme='light'] .generation-composer-segmented,
+:root[data-theme='light'] .generation-composer-ratio-grid {
+    background: #f0f1f3;
+}
+
+:root[data-theme='light'] .generation-composer-segmented button,
+:root[data-theme='light'] .generation-composer-ratio-grid button {
+    color: #535761;
+}
+
+:root[data-theme='light'] .generation-composer-segmented button:hover:not(:disabled),
+:root[data-theme='light'] .generation-composer-ratio-grid button:hover {
+    background: #e2e4e8;
+    color: #23262c;
+}
+
+:root[data-theme='light'] .generation-composer-segmented button.selected,
+:root[data-theme='light'] .generation-composer-ratio-grid button.selected {
+    background: #353941;
+    color: #ffffff;
 }
 
 :root[data-theme='light'] .connection-node-menu-copy small,

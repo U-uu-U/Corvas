@@ -25,6 +25,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         assert.ok(page, 'Source renderer must open');
         page.on('pageerror', error => errors.push(error.message));
         await page.waitForFunction(() => window.Konva?.stages[0]);
+        await page.locator('#siteLoginDialog[open] [data-login-skip]').click();
         await page.evaluate(() => {
             window.__contextEvents = [];
             for (const type of ['mousedown', 'pointerup', 'mouseup', 'contextmenu']) {

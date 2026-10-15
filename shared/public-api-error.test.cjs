@@ -80,6 +80,24 @@ test('POST transport and 5xx retain unknown outcome without resubmission', () =>
     }
 });
 
+test('unsupported Images API is a definite protocol rejection instead of a service outage', () => {
+    const payload = { error: { message: 'Images API is not supported for this platform' } };
+    for (const options of [{}, { protocolVersion: 2, origin: 'client_account' }]) {
+        const result = mapLocalError(404, payload, options);
+        assert.equal(result.code, 'RH_MODEL_ENDPOINT_MISMATCH');
+        if (options.protocolVersion === 2) {
+            assert.equal(result.confirmedFailure, true);
+            assert.equal(result.submissionState, 'rejected');
+        }
+        assert.equal(result.submissionUnknown, false);
+        assert.equal(result.retryable, false);
+        assert.match(result.error, /接口不匹配/);
+        assert.doesNotMatch(result.error, /服务暂时不可用|稍后重试查询/);
+    }
+    assert.equal(mapLocalError(502, payload, { transport: true }).code, 'RH_SUBMISSION_UNKNOWN');
+    assert.equal(mapLocalError(400, { error: 'Reference images are not supported' }).code, 'RH_INVALID_REQUEST');
+});
+
 test('explicit model routing rejection is unavailable while ambiguous POST failures remain unknown', () => {
     const rejection = { code: 'fail_to_fetch_task', message: JSON.stringify({ error: {
         code: 'model_not_found', type: 'new_api_error',
@@ -123,6 +141,25 @@ test('gateway preserves explicit routing rejection codes through message extract
     }
     assert.equal(normalizeRelayFailure(503, { error: { message: 'No available channel for model sd2-fast' } }).body.error.code,
         'RH_SUBMISSION_UNKNOWN', 'unstructured 503 remains ambiguous');
+});
+
+test('Chinese New API routing rejection preserves rejection state and hides private group details', () => {
+    const payload = { error: { code: 'model_not_found', type: 'new_api_error',
+        message: '当前分组 private-group 下对于模型 gpt-image-2.5-sunburst 无可用渠道（distributor）' } };
+    for (const value of [payload, { message: JSON.stringify(payload) }]) {
+        const result = mapLocalError(503, value, { protocolVersion: 2, origin: 'client_account' });
+        assert.equal(result.code, 'RH_MODEL_UNAVAILABLE');
+        assert.equal(result.submissionState, 'rejected');
+        assert.equal(result.confirmedFailure, true);
+        assert.equal(result.retryable, false);
+        assert.equal(result.billingState, 'unknown');
+        assert.match(result.error, /Key 的分组权限/);
+        assert.doesNotMatch(result.error, /private-group|sunburst|distributor/);
+    }
+    for (const options of [{ transport: true }, { taskId: 'existing-task' }]) {
+        assert.equal(normalizeRelayFailure(503, payload, options).body.error.code, 'RH_SUBMISSION_UNKNOWN');
+    }
+    assert.equal(normalizeRelayFailure(503, { error: { message: payload.error.message } }).body.error.code, 'RH_SUBMISSION_UNKNOWN');
 });
 
 test('does not treat creative content or completed results as error fields', () => {

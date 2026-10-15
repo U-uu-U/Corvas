@@ -63,6 +63,28 @@ test('empty POST response is not resubmitted and diagnostic excludes credentials
     assert.equal(result.error.includes('fixture prompt'), false);
 });
 
+test('image POST never repeats ambiguous 503 or a definite missing-channel rejection', async () => {
+    const rejected = { error: { code: 'model_not_found', type: 'new_api_error',
+        message: '当前分组 private-group 下对于模型 gpt-image-2.5-sunburst 无可用渠道（distributor）' } };
+    for (const [payload, code] of [[rejected, 'RH_MODEL_UNAVAILABLE'], [{ error: 'temporarily unavailable' }, 'RH_SUBMISSION_UNKNOWN']]) {
+        let calls = 0;
+        const run = imageRequest(async () => { calls++; return Response.json(payload, { status: 503 }); });
+        const result = await run('fixture prompt', '.', options);
+        assert.equal(calls, 1);
+        assert.equal(result.code, code);
+        assert.doesNotMatch(result.error, /private-group|fixture-secret|fixture prompt/);
+    }
+});
+
+test('image POST connection reset before headers remains unknown and is never resubmitted', async () => {
+    let calls = 0;
+    const run = imageRequest(async () => { calls++; throw new Error('net::ERR_CONNECTION_RESET'); });
+    const result = await run('fixture prompt', '.', options);
+    assert.equal(calls, 1);
+    assert.equal(result.code, 'RH_SUBMISSION_UNKNOWN');
+    assert.equal(result.submissionUnknown, true);
+});
+
 test('deadline stays active during response body and Location task ID survives interruption', async () => {
     let expire, calls = 0, cleaned = false;
     const submitted = [];

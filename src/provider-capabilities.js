@@ -1,3 +1,6 @@
+import nanoBanana from '../shared/nano-banana.cjs';
+export const isNanoBananaModel = nanoBanana.isNanoBananaModel;
+
 export const PROVIDER_CAPABILITIES = Object.freeze({
     // Text providers also own multimodal understanding and reverse prompting.
     TEXT: 'text',
@@ -16,6 +19,7 @@ export function normalizeProviderCapability(value) {
 export function inferProviderCapability(provider = {}) {
     const explicit = normalizeProviderCapability(provider.capability);
     if (explicit) return explicit;
+    if (isNanoBananaModel(provider.model)) return PROVIDER_CAPABILITIES.IMAGE;
 
     const marker = `${provider.model || ''} ${provider.endpoint || ''} ${provider.name || ''}`.toLowerCase();
     if (/^ch(?:0107|1401)-sd-2\.5-720p(?:\s|$)/.test(marker)) return PROVIDER_CAPABILITIES.VIDEO;
@@ -35,6 +39,7 @@ export function providerHasCapability(provider, capability) {
 
 export function canUseTextProvider(provider) {
     if (!provider?.model) return false;
+    if (isNanoBananaModel(provider.model)) return false;
     const capability = normalizeProviderCapability(provider.capability);
     if (capability && capability !== PROVIDER_CAPABILITIES.TEXT) return false;
     // A saved role is not proof that a dedicated generation model supports chat.

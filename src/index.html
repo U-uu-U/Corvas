@@ -751,7 +751,10 @@
                                 <select class="agent-setting-input agent-fetched-model-select" id="agentFetchedModelSelect" hidden>
                                     <option value="">选择模型</option>
                                 </select>
-                                <button type="button" class="agent-fetch-models-btn" id="agentFetchModelsBtn">拉取模型</button>
+                                <button type="button" class="agent-fetch-models-btn" id="agentFetchModelsBtn">
+                                    <svg class="flow-icon" aria-hidden="true"><use href="./icons/flow-icons.svg#icon-download"></use></svg>
+                                    <span data-fetch-models-label>拉取模型</span>
+                                </button>
                             </div>
                             <datalist id="agentFetchedModelOptions"></datalist>
                             <div class="agent-additional-models" id="agentAdditionalModels"></div>
@@ -765,7 +768,7 @@
                             <div class="agent-model-fetch-status" id="agentModelFetchStatus" aria-live="polite"></div>
                         </div>
 
-                            <button class="agent-save-settings-btn" id="agentFormSaveBtn">保存</button>
+                            <button type="button" class="agent-save-settings-btn" id="agentFormSaveBtn">保存</button>
                         </div>
                         </div>
                     </section>

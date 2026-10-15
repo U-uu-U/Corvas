@@ -2,8 +2,9 @@ const { normalizeParameterIssues, normalizePublicDetail, safeRequestId, formatPu
 const { prepareCustomerMessage, extractErrorReasons } = require('./customer-error-message.cjs');
 
 const CATALOG = Object.freeze({
+    RH_IMAGE_PROVIDER_UNAVAILABLE: [400, '当前节点的生图账号不存在、缺少 Key 或不支持所选模型。请在生成面板重新选择模型和账号，或到设置中补齐对应 API。'],
     RH_ASSET_PENDING: [409, '参考素材仍在审核，尚未提交视频任务；稍后重试会复用素材 ID。'],
-    RH_MODEL_ENDPOINT_MISMATCH: [400, '当前模型不支持这类调用。请检查节点或 Agent 选择的模型；文字分析需要文字或视觉理解模型，不能使用图片生成模型。'],
+    RH_MODEL_ENDPOINT_MISMATCH: [400, '当前模型与调用接口不匹配，请检查模型和 API 配置。若刚更新模型适配，请重启画布；仍失败时请联系管理员核对接口协议。'],
     RH_REFERENCE_COPYRIGHT: [400, '参考素材触发版权保护，审核未通过。请更换为有权使用且符合模型要求的素材后重新提交。'],
     RH_COPYRIGHT_REJECTED: [400, '本次生成触发版权保护，审核未通过。请检查提示词与参考素材，调整后重新提交。'],
     RH_PROMPT_REJECTED: [400, '提示词审核未通过，请修改提示词后重新提交。'],
@@ -16,7 +17,7 @@ const CATALOG = Object.freeze({
     RH_PERMISSION_DENIED: [403, '\u5f53\u524d\u8bf7\u6c42\u65e0\u8bbf\u95ee\u6743\u9650\uff0c\u8bf7\u68c0\u67e5\u8d26\u6237\u548c\u6a21\u578b\u6743\u9650\u3002'],
     RH_QUOTA_EXHAUSTED: [402, '\u53ef\u7528\u989d\u5ea6\u4e0d\u8db3\uff0c\u8bf7\u68c0\u67e5\u8d26\u6237\u989d\u5ea6\u6216\u8054\u7cfb\u7ba1\u7406\u5458\u3002'],
     RH_RATE_LIMITED: [429, '\u8bf7\u6c42\u8fc7\u4e8e\u9891\u7e41\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002'],
-    RH_MODEL_UNAVAILABLE: [503, '\u5f53\u524d\u6a21\u578b\u6682\u4e0d\u53ef\u7528\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u6216\u9009\u62e9\u5176\u4ed6\u6a21\u578b\u3002'],
+    RH_MODEL_UNAVAILABLE: [503, '当前模型暂无可用渠道，请检查 API 配置与模型是否匹配，或联系管理员核对 Key 的分组权限。'],
     RH_CONTENT_REJECTED: [400, '内容审核未通过，请检查提示词和参考素材，修改后重新提交。'],
     RH_MEDIA_TOO_LARGE: [413, '\u7d20\u6750\u8d85\u8fc7\u63a5\u53e3\u5927\u5c0f\u9650\u5236\uff0c\u8bf7\u538b\u7f29\u7d20\u6750\u540e\u518d\u8bd5\u3002'],
     RH_MEDIA_UNREADABLE: [400, '\u53c2\u8003\u7d20\u6750\u65e0\u6cd5\u8bfb\u53d6\uff0c\u8bf7\u91cd\u65b0\u4e0a\u4f20\u6216\u66f4\u6362\u7d20\u6750\u3002'],
@@ -111,14 +112,21 @@ function errorText(value, depth = 0) {
     return `${direct} ${nested}`.slice(0, 16384);
 }
 
+function isModelRoutingRejection(value, { transport = false, taskId } = {}) {
+    if (transport || taskId || findTaskId(value)) return false;
+    const text = errorText(value);
+    return /\bmodel_not_found\b/i.test(text)
+        && /no available channel for model|分组.{0,160}模型.{0,160}无可用渠道/i.test(text);
+}
+
 function classify(status, value, { query = false, terminal = false, transport = false } = {}) {
     const text = errorText(value);
     // A completed routing rejection is distinct from a lost POST response.
-    if (!transport && !findTaskId(value) && /\bmodel_not_found\b/i.test(text)
-        && /no available channel for model/i.test(text)) return 'RH_MODEL_UNAVAILABLE';
+    if (isModelRoutingRejection(value, { transport })) return 'RH_MODEL_UNAVAILABLE';
     // An uncertain POST must never turn into an invitation to automatically resubmit.
     if (!query && !terminal && (transport || status === 408 || status >= 500)) return 'RH_SUBMISSION_UNKNOWN';
     if (/not supported on (?:the )?chat completions endpoint|(?:does not support|unsupported).{0,30}chat[ _-]?completions|chat[ _-]?completions.{0,30}(?:not supported|unsupported)/i.test(text)) return 'RH_MODEL_ENDPOINT_MISMATCH';
+    if (/\bimages?\s+api\s+(?:is\s+)?not\s+supported\b|\b(?:unsupported|does not support)\s+(?:the\s+)?images?\s+api\b/i.test(text)) return 'RH_MODEL_ENDPOINT_MISMATCH';
     if (/(?:只|仅)支持生成包含(?:您|你)自己(?:的|肖像|人脸)|仅支持(?:本人|自己)(?:的)?肖像|only\s+(?:supports?\s+)?(?:generat\w+\s+)?videos?\s+(?:of|featuring|containing)\s+(?:you\b|yourself\b)|only.{0,60}(?:your own likeness|your own face)/i.test(text)) return 'RH_PORTRAIT_SELF_REQUIRED';
     if (/肖像保护|人脸.{0,16}(?:保护|限制|不支持|禁止)|(?:portrait|likeness)\s+protection|(?:real(?:istic)?[ -]?(?:people|person|face)|human[ -]?faces?).{0,40}(?:not supported|not allowed|prohibited|restricted)/i.test(text)) return 'RH_PORTRAIT_RESTRICTED';
     const rejected = /未通过|不通过|不予通过|未能通过|违规|违反|拒绝|不允许|禁止|(?:审核|审查|检测|检查|校验).{0,8}失败|reject(?:ed|ion)?|violat(?:ion|es?|ed)|not[_ -]?(?:allowed|supported|pass)|fail(?:ed|ure)?|block(?:ed)?|prohibit(?:ed)?/i;
@@ -298,9 +306,7 @@ function normalizeRelayFailure(status, payload, options = {}) {
     const taskId = safeTaskId(options.taskId) || findExplicitTaskId(value);
     const terminal = options.terminal === true || (query && isTerminalFailure(value));
     const transport = options.transport === true;
-    const text = errorText(value);
-    const routingRejected = !transport && !taskId && /\bmodel_not_found\b/i.test(text)
-        && /no available channel for model/i.test(text);
+    const routingRejected = isModelRoutingRejection(value, { transport, taskId });
     const extracted = extractErrorReasons(value);
     const classificationValue = extracted.length ? { task_id: taskId, error: { message: extracted.map(item => item.text).join('\n') } } : value;
     let code = (Object.hasOwn(CATALOG, options.code || '') ? options.code : null) || mappedRuleCode(value, options.rules)

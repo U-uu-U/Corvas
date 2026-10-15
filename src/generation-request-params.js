@@ -1,15 +1,19 @@
-import { isGptImage2Model, isMidjourneyImageModel } from './provider-capabilities.js';
+import { isGptImage2Model, isMidjourneyImageModel, isNanoBananaModel } from './provider-capabilities.js';
+import nanoBanana from '../shared/nano-banana.cjs';
 
 export function imageGenerationRequestParams(config = {}, model = '', nodeId = null) {
     const gptImage2 = isGptImage2Model(model);
+    const nativeImage = isNanoBananaModel(model);
+    const imageSize = config.resolutionTier || nanoBanana.nanoBananaTier(config.size || `${config.width}x${config.height}`);
     return {
-        size: config.size || `${config.width || 1024}x${config.height || 1024}`,
-        quality: config.quality || 'high',
+        size: nativeImage ? imageSize : config.size || `${config.width || 1024}x${config.height || 1024}`,
+        quality: nativeImage ? undefined : config.quality || 'high',
         responseFormat: gptImage2 ? (config.responseFormat || 'url') : 'url',
         historyDisabled: gptImage2 ? config.historyDisabled !== false : true,
         stream: gptImage2 ? config.stream === true : false,
-        webSearch: config.webSearch === true ? true : undefined,
+        webSearch: !nativeImage && config.webSearch === true ? true : undefined,
         nodeId,
+        ...(nativeImage ? { ratio: config.ratio || 'adaptive', resolutionTier: imageSize } : {}),
         ...(isMidjourneyImageModel(model) ? { midjourney: {
             ratio: config.ratio, version: config.midjourneyVersion, raw: config.midjourneyRaw === true,
             stylize: config.midjourneyStylize, chaos: config.midjourneyChaos, weird: config.midjourneyWeird,

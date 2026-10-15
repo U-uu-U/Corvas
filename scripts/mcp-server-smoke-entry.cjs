@@ -9,5 +9,4 @@ app.whenReady().then(() => {
         callback({ cancel: new URL(details.url).hostname !== '127.0.0.1' });
     });
 });
-require(process.env.FLOW_MCP_SERVER_SMOKE_ASAR
-    ? path.join(process.env.FLOW_MCP_SERVER_SMOKE_ASAR, 'electron-main/main.js') : '../electron-main/main.js');
+require('../electron-main/main.js');

@@ -65,7 +65,7 @@ async function readRelayTokens(options) {
     }
     const tokens = new Map();
     for (let page = 1; page <= 10; page++) {
-        const data = await request(site === 'ai' ? `/api/token/?p=${page}&size=100` : `/api/v1/tokens?page=${page}&per_page=100`);
+        const data = await request(site === 'ai' ? `/api/token/?p=${page}&page_size=100` : `/api/v1/tokens?page=${page}&per_page=100`);
         const items = site === 'ai' ? (Array.isArray(data) ? data : data?.items) : data?.data;
         if (!Array.isArray(items)) throw failure('站点未返回有效的 API Key 列表');
         for (const token of items) {
@@ -88,7 +88,8 @@ async function listRelayAccounts(options) {
         const secret = String(options.site === 'ai' ? token.key || '' : token.token_key || '');
         const reason = tokenState(options.site, token);
         return { id: String(token.id), name: String(token.name || `Key ${token.id}`).slice(0, 120),
-            maskedKey: secret ? `sk-...${secret.slice(-4)}` : '', enabled: !reason, reason };
+            maskedKey: secret ? `sk-...${secret.slice(-4)}` : '',
+            group: typeof token.group === 'string' ? token.group.slice(0, 120) : '', enabled: !reason, reason };
     }) };
 }
 

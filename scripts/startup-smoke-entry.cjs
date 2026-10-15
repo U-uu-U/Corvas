@@ -34,5 +34,4 @@ app.whenReady().then(() => {
         callback({ cancel: !details.url.startsWith('http://127.0.0.1:15321/') });
     });
 });
-require(process.env.FLOW_STARTUP_SMOKE_ASAR
-    ? path.join(process.env.FLOW_STARTUP_SMOKE_ASAR, 'electron-main/main.js') : '../electron-main/main.js');
+require('../electron-main/main.js');
