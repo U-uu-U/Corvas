@@ -49,6 +49,7 @@ const { mediaToolPaths } = require('../electron-main/media-processor.cjs');
         assert.ok(page);
         page.on('pageerror', error => errors.push(error.message));
         await page.waitForFunction(() => window.Konva?.stages[0]?.findOne('#source-image') && window.flowCanvas.mediaProcess);
+        await page.locator('#siteLoginDialog[open] [data-login-skip]').click();
         const selectNode = async id => page.evaluate(id => {
             const node = window.Konva.stages[0].findOne('#'+id);
             node.fire('click', { evt: { button: 0, ctrlKey: false, metaKey: false, shiftKey: false } });

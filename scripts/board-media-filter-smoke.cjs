@@ -28,6 +28,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         page.on('pageerror', error => errors.push(error.message));
         await page.waitForFunction(() => window.Konva?.stages[0]?.findOne('#generator'));
         await page.waitForFunction(async () => (await window.flowCanvas.mcpServer.status()).windowVisible);
+        await page.locator('#siteLoginDialog[open] [data-login-skip]').click();
         const popup = page.locator('#mcpStartupNotice [data-action=close]');
         if (await popup.isVisible()) await popup.click();
         return page;

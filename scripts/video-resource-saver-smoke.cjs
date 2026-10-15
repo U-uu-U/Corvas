@@ -10,6 +10,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
     let app;
     try {
         await fs.mkdir(path.join(profile, 'data'));
+        await fs.writeFile(path.join(profile, 'data/relay-browser.json'), JSON.stringify({ onboardingSkipped: true }));
         const media = path.join(profile, 'data', 'captured');
         await fs.mkdir(media);
         const video = path.join(media, 'sample.mp4');
@@ -44,6 +45,22 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             return source && (source.tagName === 'VIDEO' ? source.readyState >= 2 : source.width > 0);
         }));
         await waitForFrames();
+        await page.locator('#siteLoginDialog[open] [data-login-skip]').click();
+        const saver = page.locator('#boardResourceSaverBtn');
+        for (const sidebarOpen of [false, true]) {
+            await page.evaluate(open => document.body.classList.toggle('agent-open', open), sidebarOpen);
+            const hit = await saver.evaluate(button => {
+                const rect = button.getBoundingClientRect();
+                const target = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+                return { id: target?.id, className: target?.className, matches: button.contains(target) };
+            });
+            assert.equal(hit.matches, true, `Top saver is covered with sidebar ${sidebarOpen}: ${JSON.stringify(hit)}`);
+            await saver.click();
+            await page.waitForFunction(() => document.querySelector('#boardResourceSaverBtn').getAttribute('aria-checked') === 'true');
+            await saver.click();
+            await page.waitForFunction(() => document.querySelector('#boardResourceSaverBtn').getAttribute('aria-checked') === 'false');
+        }
+        await page.evaluate(() => document.body.classList.remove('agent-open'));
         await page.evaluate(filePath => {
             localStorage.setItem('flow-canvas-generation-tasks', JSON.stringify([
                 { id: 'complete', kind: 'video', status: 'success', filePath, params: { nodeId: 'generated-video' } },
@@ -52,6 +69,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         }, video);
         await page.reload();
         await waitForFrames();
+        await page.locator('#siteLoginDialog[open] [data-login-skip]').click();
         const checkPixels = async () => {
             const colors = await page.evaluate(() => ['generated-video', 'imported-video'].map(id => {
                 const source = window.Konva.stages[0].findOne(`#${id}`).findOne('.displayNode').image();

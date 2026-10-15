@@ -7,6 +7,19 @@ const catalog = { catalogMode: 'remote', defaultModels: { video: 'second' }, mod
 })) };
 const account = { site: 'art', userId: 'user1', username: 'Fixture', tokenId: '1', apiKey: 'sk-fixtureOnly123' };
 
+test('different keys create only authorized roles and select the first available key for each role', () => {
+    const mixed = { catalogMode: 'remote', models: ['image', 'text'].map(kind => ({ id: kind, kind,
+        catalog: { model: kind, hosts: ['ai.ravenhash.org'] } })) };
+    const keys = ['text', 'image'].map((model, index) => ({ ...account, site: 'ai', tokenId: String(index + 1),
+        modelAvailability: { models: [model], checkedAt: '2026-10-13' } }));
+    const linked = mergeRelayAccounts({}, mixed, keys);
+    assert.deepEqual(linked.providers.map(provider => provider.capability), ['text', 'image']);
+    assert.equal(linked.globalConfig.textProviderId, linked.providers[0].id);
+    assert.equal(linked.globalConfig.imageProviderId, linked.providers[1].id);
+    assert.throws(() => mergeRelayAccount(linked, mixed, { ...keys[0], modelAvailability: { models: [] } }), /没有可用模型/);
+    assert.equal(linked.providers.length, 2);
+});
+
 test('login imports the correct station and CONFIG models without changing unrelated API accounts', () => {
     const config = { providers: [{ id: 'custom', apiKey: 'keep', endpoint: 'https://example.test' }], globalConfig: { custom: true } };
     const original = structuredClone(config);

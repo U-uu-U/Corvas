@@ -9,6 +9,17 @@ const entry = (id = 'remote-a', overrides = {}) => ({ id, kind: 'video', priorit
     catalog: { model: id, hosts: ['art.example.test'] }, ...overrides });
 const remote = (...models) => ({ catalogMode: 'remote', models });
 
+test('verified account models filter CONFIG choices without changing the remote directory', () => {
+    const config = remote(entry('one'), entry('two'), entry('three'));
+    const one = { ...account, id: 'one-key', modelAvailability: { models: ['one'], checkedAt: '2026-10-13' } };
+    const two = { ...account, id: 'two-key', modelAvailability: { models: ['two'] } };
+    assert.deepEqual(expandCatalogProviders(config, [one, two]).map(provider => [provider.sourceProviderId, provider.model]),
+        [['one-key', 'one'], ['two-key', 'two']]);
+    assert.equal(expandCatalogProviders(config, [{ ...one, modelAvailability: { models: [] } }]).length, 0);
+    assert.equal(expandCatalogProviders(config, [account]).length, 3, 'unverified accounts keep the remote catalog behavior');
+    assert.equal(getCatalogProviderEntries(config, one).length, 3, 'the editing form can still inspect the whole directory');
+});
+
 test('remote defaults resolve exact entries on the preferred account and safely ignore unavailable defaults', () => {
     const config = { ...remote(entry('first'), entry('second')), defaultModels: { video: 'second' } };
     const accounts = [{ ...account, model: 'first' }, { ...account, id: 'preferred', model: 'first' }];

@@ -2,6 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentSidebar } from './agent-sidebar.js';
 
+test('missing and unauthorized image bindings never borrow an unrelated default key', () => {
+    const image = { id: 'image', capability: 'image', model: 'gpt-image-2', models: ['gpt-image-2'], apiKey: 'fixture' };
+    const nano = { id: 'nano', capability: 'image', model: 'gemini-nano-banana-2.1', models: ['gemini-nano-banana-2.1'],
+        apiKey: 'nano-fixture', modelAvailability: { models: ['gemini-nano-banana-2.1'] } };
+    const sidebar = Object.assign(Object.create(AgentSidebar.prototype), {
+        providers: [image, nano], globalConfig: { imageProviderId: nano.id }
+    });
+    assert.equal(sidebar.getImageProviderConfig({ providerId: 'deleted', model: image.model }), null);
+    assert.equal(sidebar.getImageProviderConfig({ providerId: nano.id, model: image.model }), null);
+    assert.equal(sidebar.getImageProviderConfig({ providerId: image.id, model: image.model }).apiKey, 'fixture');
+    assert.equal(sidebar.getImageProviderConfig().apiKey, 'nano-fixture');
+});
+
 test('correct image configuration cannot leak through a stale text-node binding', () => {
     const image = { id: 'image-api', capability: 'image', endpoint: 'https://ai.ravenhash.org/v1', apiKey: 'fixture',
         model: 'gpt-image-2', models: ['gpt-image-2', 'gpt-image-2.5-sunburst'] };

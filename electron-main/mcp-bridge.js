@@ -40,7 +40,6 @@ const {
     isMidjourneyImagineModel,
     isMidjourneyImageModel,
     isRetryableImageHttpStatus,
-    isRetryableImageNetworkError,
     midjourneyGridRegions,
     parseImageApiResponseText,
     prependMidjourneyImagePrompts,
@@ -52,6 +51,8 @@ const { normalizePublicDetail } = require('../shared/public-error-detail.cjs');
 const parameterRules = require('../shared/model-parameter-rules.cjs');
 const { classifyErrorReportSite } = require('../shared/error-report-contract.cjs');
 const { imageRequestFailure } = require('./image-request-diagnostics.cjs');
+const { isNanoBananaModel } = require('../shared/nano-banana.cjs');
+const { buildNanoBananaEndpoint, buildNanoBananaRequest, normalizeNanoBananaResponse } = require('./nano-banana.cjs');
 const { namingPrompt, writeGeneratedMedia } = require('./generated-media-names.cjs');
 const { diagnostic: recordDiagnostic } = require('./diagnostics.cjs');
 const { mapLocalError: mapPublicError, publicErrorResult, failureNode } = require('../shared/public-api-error.cjs');
@@ -318,7 +319,7 @@ class FlowCanvasBridge {
             endpoint: body.providerConfig?.endpoint, site: classifyErrorReportSite(body.providerConfig?.endpoint), imageCount: body.sourceReferences?.length || 0,
             videoCount: body.videoReferences?.length || 0, audioCount: body.audioReferences?.length || 0,
             size: body.size, duration: body.duration, resolution: body.resolution, stream: body.stream });
-        const params = Object.fromEntries(['size', 'quality', 'responseFormat', 'historyDisabled', 'stream',
+        const params = Object.fromEntries(['size', 'resolutionTier', 'quality', 'responseFormat', 'historyDisabled', 'stream',
             'ratio', 'resolution', 'duration', 'cameraFixed', 'generateAudio', 'webSearch', 'watermark', 'n', 'midjourney']
             .filter(key => body[key] !== undefined).map(key => [key, body[key]]));
         params.videoSourcePaths = (body.videoReferences || []).map(reference => reference.filePath).filter(Boolean);
@@ -2224,8 +2225,9 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
         const requestedQuality = String(options.quality || 'high').trim().toLowerCase();
         const quality = ['auto', 'low', 'medium', 'high'].includes(requestedQuality) ? requestedQuality : 'high';
         const midjourneyModel = isMidjourneyImageModel(model);
+        const nanoBanana = isNanoBananaModel(model);
         const nativeMidjourney = shouldUseNativeMidjourneyRoute(model, providerConfig.endpoint);
-        const openAiImageEdit = isEdit && !midjourneyModel;
+        const openAiImageEdit = isEdit && !midjourneyModel && !nanoBanana;
         let midjourneyImageUrls = [];
         if (midjourneyModel && isEdit && !nativeMidjourney) {
             const dataUris = sourceImages.map(image =>
@@ -2242,7 +2244,7 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
         const midjourneyOptions = midjourneyModel
             ? { ...(options.midjourney || {}), hasImagePrompt: sourceImages.length > 0 }
             : options.midjourney;
-        const endpoint = nativeMidjourney
+        const endpoint = nanoBanana ? buildNanoBananaEndpoint(providerConfig.endpoint, model) : nativeMidjourney
             ? buildMidjourneySubmitEndpoint(providerConfig.endpoint)
             : buildOpenAiImageEndpoint(providerConfig.endpoint, openAiImageEdit ? 'edits' : 'generations');
         const buildRequest = (compatibilityMode = false) => {
@@ -2289,7 +2291,10 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
             };
         };
 
-        let { requestBody, requestPayload, contentType } = buildRequest(false);
+        let { requestBody, requestPayload, contentType } = nanoBanana
+            ? await buildNanoBananaRequest(prompt, sourceImages, options).then(requestBody => ({
+                requestBody, requestPayload: JSON.stringify(requestBody), contentType: 'application/json'
+            })) : buildRequest(false);
 
         const requestId = options.requestId || crypto.randomUUID?.() || crypto.randomBytes(16).toString('hex');
         let res;
@@ -2308,15 +2313,20 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
                 requestId: activeRequestId, startedAt,
                 clientTaskId: options.clientTaskId, projectId: options.projectId, nodeId: options.nodeId,
                 payloadBytes: Buffer.byteLength(requestPayload), imageCount: sourceImages.length,
-                referenceManifest: sourceImages.map((image, index) => ({
-                    uploadIndex: index + 1, bytes: image.buffer.length, mimeType: image.mimeType,
-                    sha256: crypto.createHash('sha256').update(image.buffer).digest('hex'),
-                    multipartField: openAiImageEdit ? (sourceImages.length === 1 ? 'image' : 'image[]') : null
-                }))
+                referenceManifest: sourceImages.map((image, index) => {
+                    const inline = nanoBanana ? requestBody.contents[0].parts[index + 1].inlineData : null;
+                    const buffer = inline ? Buffer.from(inline.data, 'base64') : image.buffer;
+                    return {
+                        uploadIndex: index + 1, bytes: buffer.length, mimeType: inline?.mimeType || image.mimeType,
+                        sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
+                        multipartField: openAiImageEdit ? (sourceImages.length === 1 ? 'image' : 'image[]') : null
+                    };
+                })
             };
             options.onRequestDiagnostic?.({ ...diagnostic, phase });
             recordDiagnostic('info', 'image.request', { ...diagnostic, endpoint, site: classifyErrorReportSite(endpoint), model,
-                params: { size: requestBody.size, quality: requestBody.quality, n: requestBody.n, stream: requestBody.stream } });
+                params: nanoBanana ? requestBody.generationConfig.imageConfig
+                    : { size: requestBody.size, quality: requestBody.quality, n: requestBody.n, stream: requestBody.stream } });
             try {
                 res = await net.fetch(endpoint, {
                     method: 'POST',
@@ -2336,7 +2346,8 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
                 phase = '读取结果';
                 recordDiagnostic('info', 'image.responseHeaders', { requestId: activeRequestId,
                     status: res.status, elapsedMs: Date.now() - startedAt,
-                    serverRequestId: res.headers.get('x-request-id') || res.headers.get('x-log-id') || res.headers.get('request-id'),
+                    serverRequestId: res.headers.get('x-request-id') || res.headers.get('x-oneapi-request-id')
+                        || res.headers.get('x-log-id') || res.headers.get('request-id'),
                     contentType: res.headers.get('content-type') });
                 const location = res.headers.get('location');
                 const earlyTaskId = location && getImageTaskId({}, res.status, location);
@@ -2356,14 +2367,9 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
                     throw remoteConnectionError('提交图片生成请求', endpoint,
                         imageRequestFailure(error, { ...diagnostic, phase, timedOut }), attempts);
                 }
-                if (!isRetryableImageNetworkError(error) || requestAttempt >= retryDelays.length) {
-                    throw remoteConnectionError('提交图片生成请求', endpoint,
-                        imageRequestFailure(error, { ...diagnostic, phase, timedOut }), attempts);
-                }
-                const retryDelay = retryDelays[requestAttempt];
-                console.warn(`[FlowCanvasBridge] Image API connection failed; retrying in ${retryDelay}ms (${attempts}/${retryDelays.length}): ${error.message}`);
-                await sleep(retryDelay, options.signal);
-                continue;
+                options.onRequestDiagnostic?.({ ...diagnostic, phase, state: 'submission_unknown' });
+                throw remoteConnectionError('提交图片生成请求', endpoint,
+                    imageRequestFailure(error, { ...diagnostic, phase, timedOut }), attempts);
             } finally {
                 requestAbort.cleanup();
             }
@@ -2371,6 +2377,8 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
 
             responseErrorText = responseText;
             if (publicErrorResult(responseText)) break;
+            const submissionError = mapLocalError(res.status, responseText, { query: false });
+            if (submissionError.submissionUnknown || submissionError.code === 'RH_MODEL_UNAVAILABLE') break;
             if (
                 midjourneyModel
                 && options.noSubmissionRetry !== true
@@ -2401,9 +2409,10 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
             return mapLocalError(res.status, text, { query: false });
         }
         const location = res.headers.get('location');
-        const json = parseImageApiResponseText(responseText, res.headers.get('content-type'))
+        let json = parseImageApiResponseText(responseText, res.headers.get('content-type'))
             || (location ? { status: 'queued' } : null);
         if (!json) return { success: false, error: 'Image API did not return valid JSON' };
+        if (nanoBanana) json = normalizeNanoBananaResponse(json);
         const mapped = publicErrorResult(json);
         if (mapped) {
             if (mapped.taskId) options.onTaskSubmitted?.({ taskId: mapped.taskId, model });
@@ -2415,7 +2424,7 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
         if (!image && failureNode(json)) {
             taskId = getImageTaskId(json, res.status, location);
             if (taskId) options.onTaskSubmitted?.({ taskId, model, location });
-            return mapLocalError(200, json, { query: false, taskId });
+            return mapLocalError(200, json, { query: false, taskId, ...(nanoBanana ? { terminal: true } : {}) });
         }
         if (isImageTaskPayload(json, res.status, location)) {
             taskId = getImageTaskId(json, res.status, location);
@@ -2485,8 +2494,8 @@ async function tryGenerateWithOpenAI(prompt, targetDir, options = {}) {
             requestedSize: size || null,
             actualSize,
             mediaType: primary.mediaType || 'image',
-            sizeMatchesRequest: !size || !actualSize || actualSize.toLowerCase() === size.toLowerCase(),
-            endpointMode: nativeMidjourney
+            sizeMatchesRequest: nanoBanana ? null : !size || !actualSize || actualSize.toLowerCase() === size.toLowerCase(),
+            endpointMode: nanoBanana ? 'gemini-image' : nativeMidjourney
                 ? 'midjourney-imagine'
                 : (midjourneyImageUrls.length ? 'midjourney-image-prompt' : (openAiImageEdit ? 'edits' : 'generations')),
             taskId: taskId || null,

@@ -73,7 +73,7 @@ import {
     referenceMaterialLabel,
     withoutReferenceCitationGuide
 } from './reference-citations.js';
-import { isGptImage2Model, isMidjourneyImageModel } from './provider-capabilities.js';
+import { isGptImage2Model, isMidjourneyImageModel, isNanoBananaModel } from './provider-capabilities.js';
 import { assertModelRequest, checkModelRequest } from './model-config-ui.js';
 import { formatModelSalePrice } from '../shared/model-presentation.mjs';
 import { appendGenerationHealth } from './generation-health-indicator.js';
@@ -8815,6 +8815,12 @@ export class CanvasManager {
         composer.setAttribute('role', 'dialog');
         composer.setAttribute('aria-label', data.nodeType === 'video' ? '视频生成设置' : '图片生成设置');
         composer.innerHTML = `
+            ${data.nodeType === 'video' ? `
+                <div class="generation-composer-prompt-length" data-prompt-length>
+                    <span class="generation-composer-length-warning" data-prompt-length-warning role="status"></span>
+                    <span data-prompt-length-count aria-label="提示词字数">0/5000</span>
+                </div>
+            ` : ''}
             <div class="generation-composer-reference-row">
                 <div class="generation-composer-reference-scroll">
                     <div class="generation-composer-references" data-reference-list></div>
@@ -8869,6 +8875,7 @@ export class CanvasManager {
             popover: null
         };
         this._generationComposer = active;
+        this._bindGenerationComposerResize(active);
 
         const prompt = composer.querySelector('[data-prompt]');
         this._setGenerationComposerPromptValue(prompt, data.config.prompt || '');
@@ -8888,6 +8895,7 @@ export class CanvasManager {
                 : '';
             const citationState = this._syncGenerationComposerCitationsFromPrompt(data, prompt);
             prompt.dataset.empty = data.config.prompt || citationState.selectedIds.size ? 'false' : 'true';
+            this._syncGenerationComposerPromptLength(prompt);
             active.changed = true;
             if (previousCitationIds !== citationState.orderedIds.join('\u0000')) {
                 this._renderGenerationComposerReferences(nodeId);
@@ -8946,6 +8954,7 @@ export class CanvasManager {
 
         composer.querySelector('[data-submit]').addEventListener('click', () => this._runGeneratorFromComposer(nodeId));
         active.closeOutside = event => {
+            if (active.resizeHandle?.contains(event.target)) return;
             const popover = active.popover;
             if (popover?.element?.contains(event.target)) return;
             if (composer.contains(event.target)) {
@@ -9016,6 +9025,20 @@ export class CanvasManager {
         prompt.replaceChildren(document.createTextNode(text), ...citations);
         citations.forEach(citation => this._ensureGenerationComposerCitationCaret(citation));
         prompt.dataset.empty = text || citations.length ? 'false' : 'true';
+        this._syncGenerationComposerPromptLength(prompt);
+    }
+
+    _syncGenerationComposerPromptLength(prompt) {
+        const composer = prompt?.closest?.('.generation-composer');
+        const meter = composer?.querySelector('[data-prompt-length]');
+        if (!meter) return;
+        const length = Array.from(this._generationComposerPromptValue(prompt)).length;
+        const exceeded = length > 5000;
+        const changed = meter.classList.contains('is-over-limit') !== exceeded;
+        meter.querySelector('[data-prompt-length-count]').textContent = `${length}/5000`;
+        meter.querySelector('[data-prompt-length-warning]').textContent = exceeded ? '字数超5000可能导致生成失败' : '';
+        meter.classList.toggle('is-over-limit', exceeded);
+        if (changed && this._generationComposer?.element === composer) this._positionGenerationComposer();
     }
 
     _focusGenerationComposerPromptEnd(prompt) {
@@ -9529,7 +9552,7 @@ export class CanvasManager {
             || (provider.sourceProviderId === (data.config?.sourceProviderId || data.config?.providerId) && provider.model === data.config?.model)
         );
         const modelLabel = selected?.modelLabel && selected.modelLabel !== '未收录模型' ? selected.modelLabel : selected?.model;
-        label.textContent = [selected?.routeLabel, modelLabel || data.config?.model].filter(Boolean).join(' · ')
+        label.textContent = [...new Set([selected?.routeLabel, modelLabel || data.config?.model].filter(Boolean))].join(' · ')
             || (providers.length ? '选择模型' : '请先添加 API');
         button.title = selected
             ? `${selected.name || '未命名 API'} · ${selected.model || '未命名模型'}`
@@ -10180,14 +10203,14 @@ export class CanvasManager {
         popover.setAttribute('aria-label', '图片生成参数');
         popover.innerHTML = `
             <div class="generation-composer-setting-section">
-                <div class="generation-composer-setting-title">画质</div>
-                <div class="generation-composer-segmented" data-quality role="group" aria-label="画质"></div>
+                <div class="generation-composer-setting-title">${isNanoBananaModel(data.config.model) ? '分辨率' : '画质'}</div>
+                <div class="generation-composer-segmented" data-quality role="group" aria-label="${isNanoBananaModel(data.config.model) ? '分辨率' : '画质'}"></div>
             </div>
             <div class="generation-composer-setting-section">
                 <div class="generation-composer-setting-title">比例</div>
                 <div class="generation-composer-ratio-grid" data-ratios role="group" aria-label="画面比例"></div>
             </div>
-            ${midjourney ? '<div class="generation-composer-midjourney-settings" data-midjourney-settings></div>' : `
+            ${midjourney ? '<div class="generation-composer-midjourney-settings" data-midjourney-settings></div>' : profile?.supportsWebSearch === false ? '' : `
                 <div class="generation-composer-setting-section">
                     <div class="generation-composer-setting-title">联网搜索</div>
                     <div class="generation-composer-segmented" data-web-search role="group" aria-label="联网搜索"></div>
@@ -10222,7 +10245,7 @@ export class CanvasManager {
             qualityHost.appendChild(button);
         });
         const ratioHost = popover.querySelector('[data-ratios]');
-        IMAGE_ASPECT_RATIOS.forEach(ratio => {
+        (profile?.ratios?.length ? profile.ratios : IMAGE_ASPECT_RATIOS).forEach(ratio => {
             const button = document.createElement('button');
             button.type = 'button';
             button.dataset.value = ratio;
@@ -10561,10 +10584,12 @@ export class CanvasManager {
             data.config.resolutionTier = allowedResolutionTiers.includes(data.config.resolutionTier)
                 ? data.config.resolutionTier
                 : inferImageResolutionTier(width, height);
-            data.config.ratio = IMAGE_ASPECT_RATIOS.includes(data.config.ratio)
-                ? data.config.ratio
-                : inferImageAspectRatio(width, height);
             const profile = this.options.getImageModelProfile?.(data.config) || null;
+            const supportedRatios = profile?.ratios?.length ? profile.ratios : IMAGE_ASPECT_RATIOS;
+            data.config.ratio = supportedRatios.includes(data.config.ratio)
+                ? data.config.ratio
+                : profile?.defaultRatio || inferImageAspectRatio(width, height);
+            if (profile?.supportsWebSearch === false) data.config.webSearch = false;
             const availableTiers = midjourney
                 ? MIDJOURNEY_RESOLUTION_TIERS.filter(tier => !profile?.resolutionTiers?.length || profile.resolutionTiers.includes(tier))
                 : (profile?.resolutionTiers || []);
@@ -10584,7 +10609,8 @@ export class CanvasManager {
             settings.type = 'button';
             settings.className = 'generation-composer-trigger generation-composer-parameter-trigger';
             settings.dataset.imageSettings = '';
-            settings.title = midjourney ? 'MJ 画质、比例与模型参数' : '画质、比例和联网搜索';
+            settings.title = midjourney ? 'MJ 画质、比例与模型参数'
+                : isNanoBananaModel(data.config.model) ? 'Nano Banana 分辨率与画面比例' : '画质、比例和联网搜索';
             settings.setAttribute('aria-label', '图片生成参数');
             settings.setAttribute('aria-haspopup', 'dialog');
             settings.innerHTML = `
@@ -10815,6 +10841,84 @@ export class CanvasManager {
         }
     }
 
+    _bindGenerationComposerResize(active) {
+        const composer = active.element;
+        const handle = document.createElement('button');
+        handle.className = 'op-text-node-resize-handle generation-composer-resize';
+        handle.type = 'button';
+        handle.title = '调整面板宽度和高度';
+        handle.setAttribute('aria-label', '调整面板宽度和高度');
+        document.body.appendChild(handle);
+        active.resizeHandle = handle;
+        const storageKey = 'flow-canvas:composer-size';
+        if (!this._generationComposerSize) {
+            try {
+                const saved = JSON.parse(localStorage.getItem(storageKey));
+                if (Number.isFinite(saved?.width) && Number.isFinite(saved?.height)) {
+                    this._generationComposerSize = saved;
+                }
+            } catch { /* Keep the default size when local preferences are unavailable. */ }
+        }
+        let drag = null;
+        const finish = () => {
+            if (!drag) return;
+            const pointerId = drag.pointerId;
+            drag = null;
+            active.resizeOrigin = null;
+            composer.classList.remove('is-resizing');
+            if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+            if (this._generationComposerSize) {
+                const rect = composer.getBoundingClientRect();
+                this._generationComposerSize = { width: rect.width, height: rect.height };
+            }
+            try { localStorage.setItem(storageKey, JSON.stringify(this._generationComposerSize)); } catch { /* Session preference still works. */ }
+        };
+        handle.addEventListener('pointerdown', event => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            this._closeGenerationComposerPopover(active);
+            const rect = composer.getBoundingClientRect();
+            drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+                width: rect.width, height: rect.height };
+            active.resizeOrigin = { left: rect.left, top: rect.top };
+            composer.classList.add('is-resizing');
+            handle.setPointerCapture(event.pointerId);
+        });
+        handle.addEventListener('pointermove', event => {
+            if (!drag || event.pointerId !== drag.pointerId) return;
+            this._generationComposerSize = { width: drag.width + event.clientX - drag.x,
+                height: drag.height + event.clientY - drag.y };
+            this._positionGenerationComposer();
+        });
+        ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(type => handle.addEventListener(type, finish));
+        handle.addEventListener('keydown', event => {
+            const direction = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+            if (!direction) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const rect = composer.getBoundingClientRect();
+            const step = event.shiftKey ? 40 : 16;
+            active.resizeOrigin = { left: rect.left, top: rect.top };
+            this._generationComposerSize = { width: rect.width + direction[0] * step,
+                height: rect.height + direction[1] * step };
+            this._positionGenerationComposer();
+            active.resizeOrigin = null;
+            try { localStorage.setItem(storageKey, JSON.stringify(this._generationComposerSize)); } catch { /* Session preference still works. */ }
+        });
+        handle.addEventListener('dblclick', event => {
+            event.preventDefault();
+            this._generationComposerSize = null;
+            active.positionOffset = null;
+            try { localStorage.removeItem(storageKey); } catch { /* Local preferences may be unavailable. */ }
+            this._positionGenerationComposer();
+        });
+        active.finishResize = finish;
+        composer.addEventListener('animationend', event => {
+            if (event.target === composer && this._generationComposer === active) this._positionGenerationComposer();
+        });
+    }
+
     _positionGenerationComposer() {
         const active = this._generationComposer;
         const entry = active ? this.items.get(active.anchorNodeId || active.nodeId) : null;
@@ -10826,7 +10930,9 @@ export class CanvasManager {
             right: Math.min(window.innerWidth, containerRect.right),
             bottom: Math.min(window.innerHeight, containerRect.bottom)
         };
-        const availableWidth = Math.max(1, bounds.right - bounds.left - 24);
+        // Reserve the outer corner for the same resize handle used by text nodes.
+        const availableWidth = Math.max(1, bounds.right - bounds.left - 40);
+        const availableHeight = Math.max(1, bounds.bottom - bounds.top - 40);
         const composer = active.element;
         // Measure the unwrapped toolbar before constraining it to the visible canvas.
         composer.classList.add('is-measuring');
@@ -10836,8 +10942,24 @@ export class CanvasManager {
             .reduce((width, key) => width + (parseFloat(style[key]) || 0), 0);
         const toolbarWidth = Math.ceil((footer?.offsetWidth || 0) + frameWidth + 2);
         composer.classList.remove('is-measuring');
-        composer.style.width = `${Math.min(Math.max(680, toolbarWidth), availableWidth)}px`;
-        composer.classList.toggle('is-compact', availableWidth < toolbarWidth);
+        const preferredSize = this._generationComposerSize;
+        const width = Math.min(Math.max(360, preferredSize?.width ?? Math.max(680, toolbarWidth)), availableWidth);
+        composer.style.width = `${width}px`;
+        composer.style.minHeight = `${Math.min(184, availableHeight)}px`;
+        composer.style.maxHeight = `${availableHeight}px`;
+        composer.classList.toggle('is-compact', width < toolbarWidth);
+        const shell = composer.querySelector('.generation-composer-prompt-shell');
+        if (shell) {
+            const otherRows = [...composer.children].filter(child => child !== shell && getComputedStyle(child).display !== 'none');
+            const frameHeight = ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth']
+                .reduce((height, key) => height + (parseFloat(style[key]) || 0), 0);
+            const chromeHeight = frameHeight + otherRows.reduce((height, child) => height + child.offsetHeight, 0)
+                + otherRows.length * (parseFloat(style.rowGap) || 0);
+            const maxPromptHeight = Math.max(24, availableHeight - chromeHeight);
+            shell.style.minHeight = `${Math.min(68, maxPromptHeight)}px`;
+            shell.style.maxHeight = `${preferredSize ? maxPromptHeight : Math.min(150, maxPromptHeight)}px`;
+            shell.style.height = preferredSize ? `${Math.min(maxPromptHeight, Math.max(68, preferredSize.height - chromeHeight))}px` : '';
+        }
         const scale = this.stage.scaleX() || 1;
         const left = containerRect.left + this.stage.x() + entry.group.x() * scale;
         const top = containerRect.top + this.stage.y() + entry.group.y() * scale;
@@ -10856,15 +10978,31 @@ export class CanvasManager {
             { width: window.innerWidth, height: window.innerHeight },
             { bounds }
         );
+        const origin = active.resizeOrigin || {
+            left: position.left + (active.positionOffset?.left || 0),
+            top: position.top + (active.positionOffset?.top || 0)
+        };
+        const positionedLeft = Math.max(bounds.left + 12, Math.min(origin.left, bounds.right - rect.width - 28));
+        const positionedTop = Math.max(bounds.top + 12, Math.min(origin.top, bounds.bottom - rect.height - 28));
+        if (active.resizeOrigin) {
+            active.positionOffset = { left: positionedLeft - position.left, top: positionedTop - position.top };
+        }
+        position.left = positionedLeft;
+        position.top = positionedTop;
         active.element.style.left = `${position.left}px`;
         active.element.style.top = `${position.top}px`;
         active.element.dataset.placement = position.placement;
+        if (active.resizeHandle) {
+            active.resizeHandle.style.left = `${position.left + rect.width - 8}px`;
+            active.resizeHandle.style.top = `${position.top + rect.height - 8}px`;
+        }
         this._positionGenerationComposerPopover(active);
     }
 
     _closeGenerationComposer({ commit = true, keepReferencePick = false } = {}) {
         const active = this._generationComposer;
         if (!active) return;
+        active.finishResize?.();
         // 以 items 里的当前对象为准：activeData 是打开时刻捕获的引用，
         // 撤销/重做或切换文件夹组之后可能已经游离，往它上面写会丢输入。
         const activeData = this.items.get(active.nodeId)?.data || active.data;
@@ -10878,6 +11016,7 @@ export class CanvasManager {
         active.closeOutsideTimer = null;
         document.removeEventListener('pointerdown', active.closeOutside, true);
         document.removeEventListener('keydown', active.closeOnKey, true);
+        active.resizeHandle?.remove();
         active.element?.remove();
         const draftEntry = this.items.get(active.nodeId);
         if (draftEntry?.data?.composerDraft) {

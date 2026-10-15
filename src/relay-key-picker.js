@@ -26,7 +26,13 @@ export function createRelayKeyPicker() {
                 const masked = document.createElement('code'); masked.textContent = token.maskedKey || `Key ${token.id}`;
                 const state = document.createElement('small'); state.textContent = token.reason || (token.imported ? '已添加' : '可用');
                 row.dataset.disabled = String(checkbox.disabled);
-                copy.append(name, masked); row.append(checkbox, copy, state); list.append(row);
+                copy.append(name, masked);
+                if (token.group) {
+                    const group = document.createElement('small');
+                    group.textContent = `分组：${token.group}`;
+                    copy.append(group);
+                }
+                row.append(checkbox, copy, state); list.append(row);
             }
             dialog.querySelector('[data-empty]').hidden = tokens.length > 0;
             const all = dialog.querySelector('[data-all]');

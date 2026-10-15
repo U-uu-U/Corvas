@@ -50,7 +50,7 @@ import { describeVideoModelProfile, resolveVideoProfileParameters } from '../sha
 import { isVideoGenerationAvailable } from '../shared/video-generation-availability.mjs';
 import { getModelPresentation, describeModelPresentation, formatModelSalePrice, formatModelSalePriceDetails } from '../shared/model-presentation.mjs';
 import { modelConfigStore } from './model-config.js';
-import { catalogProviderKinds, expandCatalogProviders, getCatalogProviderEntries, isCatalogManaged, isRemoteCatalog, resolveCatalogDefaultProvider } from '../shared/model-catalog.mjs';
+import { catalogProviderKinds, expandCatalogProviders, getCatalogProviderEntries, isCatalogManaged, isRemoteCatalog, providerAllowsModel, resolveCatalogDefaultProvider } from '../shared/model-catalog.mjs';
 import {
     mergeImageProfile,
     resolveVideoModelProfile,
@@ -391,7 +391,11 @@ export class AgentSidebar {
         } });
         this._bindAgentSidebarResize();
         this._syncHudState();
-        this.siteLogin = createSiteLogin({ getProviders: () => this.providers });
+        this.siteLogin = createSiteLogin({ getProviders: () => this.providers, onManualSetup: () => {
+            this.setMode('settings', 'api');
+            this._showForm();
+            this.apiForm?.scrollIntoView({ block: 'nearest' });
+        } });
 
         // 渲染 UI
         this._renderProviderList();
@@ -404,7 +408,7 @@ export class AgentSidebar {
         this._setSettingsTab(this.activeSettingsTab);
         this._renderGenerationTasks();
         this.apiConfigReady = this._restoreDurableApiConfig();
-        void this.apiConfigReady.then(() => this.siteLogin?.start());
+        void this.apiConfigReady.then(result => this.siteLogin?.start({ configReady: result?.success === true }));
         this.relayAccountSync = Promise.resolve();
         this.relayKeyPicker = createRelayKeyPicker();
         window.flowCanvas?.apiConfig?.onRelayAccountSelection?.(catalog => this.relayKeyPicker.select(catalog));
@@ -4115,6 +4119,7 @@ export class AgentSidebar {
     }
 
     async _connectRelayAccount(account) {
+        const verificationDeadline = Date.now() + 25000;
         const accounts = Array.isArray(account) ? account : [account];
         account = accounts[0];
         await this.apiConfigReady;
@@ -4123,8 +4128,32 @@ export class AgentSidebar {
         if (!catalogProviderKinds(modelConfigStore.getConfig(), `https://${account.site}.ravenhash.org/v1`).length) {
             await modelConfigStore.refresh({ force: true, reason: 'relay-account' });
         }
+        const validated = mergeRelayAccounts({ providers: [], globalConfig: {} }, modelConfigStore.getConfig(),
+            accounts.map(account => ({ ...account, modelAvailability: undefined })));
+        if (!window.flowCanvas?.ai?.fetchModels) throw new Error('无法核验 API Key 的模型权限，请重启画布后重试');
+        const checkedAccounts = [];
+        for (const selected of accounts) {
+            const provider = validated.providers.find(provider => provider.relayAccount?.site === selected.site
+                && provider.relayAccount?.userId === selected.userId && provider.relayAccount?.tokenId === selected.tokenId);
+            const remaining = verificationDeadline - Date.now();
+            const timeoutError = () => new Error('API Key 模型权限核验超时，请稍后重试或减少一次导入的 Key 数量');
+            if (remaining <= 0) throw timeoutError();
+            let timer;
+            let result;
+            try {
+                result = await Promise.race([
+                    window.flowCanvas.ai.fetchModels({ type: 'openai', endpoint: provider.endpoint, apiKey: selected.apiKey }),
+                    new Promise((_, reject) => { timer = setTimeout(() => reject(timeoutError()), remaining); })
+                ]);
+            } finally { clearTimeout(timer); }
+            if (!result?.success || !Array.isArray(result.models)) throw new Error('API Key 模型权限核验失败，请重试导入');
+            checkedAccounts.push({ ...selected, modelAvailability: {
+                models: [...new Set(result.models.filter(model => typeof model === 'string' && model.trim()).map(model => model.trim()))],
+                checkedAt: new Date().toISOString()
+            } });
+        }
         const previous = this._apiConfigSnapshot();
-        const next = mergeRelayAccounts(previous, modelConfigStore.getConfig(), accounts);
+        const next = mergeRelayAccounts(previous, modelConfigStore.getConfig(), checkedAccounts);
         clearTimeout(this.apiConfigSaveTimer);
         this.providers = next.providers;
         this.globalConfig = next.globalConfig;
@@ -4319,11 +4348,13 @@ export class AgentSidebar {
         const sourceId = binding?.sourceProviderId || selected?.sourceProviderId || selected?.id || binding?.providerId;
         const source = this.providers.find(provider => provider.id === sourceId) || selected;
         if (!source) return null;
+        const model = binding.model || selected?.model || source.model;
+        if (!providerAllowsModel(source, model)) return null;
         return {
             ...source,
             id: binding.providerId || selected?.id || source.id,
             sourceProviderId: source.id,
-            model: binding.model || selected?.model || source.model
+            model
         };
     }
 
@@ -4371,7 +4402,7 @@ export class AgentSidebar {
 
     getImageProviderConfig(binding = null) {
         const provider = this._getBoundProvider(binding, this._getImageProvider());
-        return provider ? { ...provider } : null;
+        return this._isImageProvider(provider) ? { ...provider } : null;
     }
 
     getImageGenerationPreferences(binding = null) {
@@ -4615,6 +4646,10 @@ export class AgentSidebar {
             const models = this._providerModels(provider);
             this.formModel.value = provider.model || models[0] || '';
             this._resetModelSlots(models.slice(1));
+            if (Array.isArray(provider.modelAvailability?.models)) {
+                this.formModelAvailability = { version: this.modelFormRequestVersion,
+                    models: new Set(provider.modelAvailability.models), checkedAt: provider.modelAvailability.checkedAt };
+            }
         } else {
             this.editingProviderId = null;
             this.apiFormTitle.textContent = '添加 API';
@@ -4712,7 +4747,7 @@ export class AgentSidebar {
         const binding = `${provider.endpoint}\n${provider.capability}`;
         const changed = this.formCatalogBinding !== null && this.formCatalogBinding !== undefined && this.formCatalogBinding !== binding;
         this.formCatalogBinding = binding;
-        if (this.fetchModelsBtn) this.fetchModelsBtn.hidden = managed;
+        if (this.fetchModelsBtn) this.fetchModelsBtn.hidden = false;
         if (this.addModelSlotBtn) this.addModelSlotBtn.hidden = managed;
         if (this.additionalModelsEl) this.additionalModelsEl.hidden = managed;
         if (!managed) {
@@ -4724,10 +4759,17 @@ export class AgentSidebar {
 
         const current = changed ? '' : this.formModel.value.trim();
         const models = entries.map(entry => entry.catalog.model);
+        const availability = this.formModelAvailability?.version === this.modelFormRequestVersion
+            ? this.formModelAvailability.models : null;
         this._renderFetchedModelOptions(models);
         for (const option of this.fetchedModelSelect.options) {
             const entry = entries.find(entry => entry.catalog.model === option.value);
-            if (entry) option.textContent = entry.presentation?.routeLabel || entry.presentation?.label || entry.label || option.value;
+            if (entry) {
+                const unavailable = availability && !availability.has(option.value);
+                option.textContent = (entry.presentation?.routeLabel || entry.presentation?.label || entry.label || option.value)
+                    + (unavailable ? '（当前 Key 不可用）' : '');
+                option.disabled = Boolean(unavailable);
+            }
         }
         let selected = current;
         if (!models.includes(selected)) {
@@ -4834,10 +4876,8 @@ export class AgentSidebar {
     }
 
     async _fetchModelsForForm() {
-        if (this._formCatalogState().managed) {
-            this._syncFormCatalog();
-            return;
-        }
+        if (this.fetchModelsBtn?.disabled) return;
+        const managed = this._formCatalogState().managed;
         const requestVersion = this.modelFormRequestVersion;
         const type = this.formType?.value?.trim() || 'openai';
         const endpoint = normalizeRavenHashEndpoint(this.formEndpoint?.value);
@@ -4858,12 +4898,12 @@ export class AgentSidebar {
             return;
         }
 
-        const previousText = this.fetchModelsBtn?.textContent;
+        const label = this.fetchModelsBtn?.querySelector?.('[data-fetch-models-label]') || this.fetchModelsBtn;
         if (this.fetchModelsBtn) {
             this.fetchModelsBtn.disabled = true;
-            this.fetchModelsBtn.textContent = '拉取中...';
+            label.textContent = '拉取中...';
         }
-        this._resetFetchedModels(false);
+        if (this.formSaveBtn) this.formSaveBtn.disabled = true;
         this._setModelFetchStatus('loading', '正在拉取模型列表...');
 
         try {
@@ -4874,8 +4914,17 @@ export class AgentSidebar {
             }
 
             const models = Array.isArray(result.models)
-                ? result.models.map(model => String(model).trim()).filter(Boolean)
+                ? [...new Set(result.models.map(model => String(model).trim()).filter(Boolean))]
                 : [];
+            if (managed) {
+                this.formModelAvailability = { version: requestVersion, models: new Set(models), checkedAt: new Date().toISOString() };
+                this._syncFormCatalog();
+                const availableCount = this._formCatalogState().entries.filter(entry => this.formModelAvailability.models.has(entry.catalog.model)).length;
+                this._setModelFetchStatus(availableCount ? 'success' : 'error', availableCount
+                    ? `已拉取 ${models.length} 个模型，当前目录可用 ${availableCount} 个`
+                    : '当前 Key 在已发布目录中没有可用模型，请检查 Key 的分组权限');
+                return;
+            }
             if (models.length === 0) {
                 throw new Error('没有拉取到可用模型');
             }
@@ -4884,17 +4933,21 @@ export class AgentSidebar {
             this._setModelFetchStatus('success', `已拉取 ${models.length} 个模型，请从下拉框选择`);
         } catch (err) {
             if (requestVersion !== this.modelFormRequestVersion) return;
-            this._resetFetchedModels(false);
             this._setModelFetchStatus('error', `拉取失败：${err.message || err}`);
         } finally {
+            if (this.formSaveBtn) this.formSaveBtn.disabled = false;
             if (this.fetchModelsBtn) {
                 this.fetchModelsBtn.disabled = false;
-                this.fetchModelsBtn.textContent = previousText || '拉取模型';
+                label.textContent = '拉取模型';
             }
         }
     }
 
     _saveForm() {
+        if (this.fetchModelsBtn?.disabled) {
+            this._setModelFetchStatus('loading', '正在拉取模型列表，请稍候');
+            return;
+        }
         const catalog = this._formCatalogState();
         const capability = this.formCapability?.value?.trim() || 'text';
         const type = this.formType.value.trim();
@@ -4924,17 +4977,29 @@ export class AgentSidebar {
             this._setModelFetchStatus('error', '当前模型已停用或移除，请选择可用模型');
             return;
         }
+        if (catalog.managed && this.formModelAvailability?.version === this.modelFormRequestVersion
+            && !this.formModelAvailability.models.has(model)) {
+            this._setModelFetchStatus('error', '当前 Key 不支持所选模型，请选择可用模型或检查 Key 的分组权限');
+            return;
+        }
         const modelCatalog = catalog.managed ? 'remote' : undefined;
+        const previous = this.providers.find(provider => provider.id === this.editingProviderId);
+        const sameCredentials = previous?.apiKey === apiKey && previous?.type === type
+            && normalizeRavenHashEndpoint(previous?.endpoint) === endpoint;
+        const availability = this.formModelAvailability?.version === this.modelFormRequestVersion
+            ? { models: [...this.formModelAvailability.models], checkedAt: this.formModelAvailability.checkedAt }
+            : sameCredentials ? previous.modelAvailability : undefined;
 
         if (this.editingProviderId) {
             const idx = this.providers.findIndex(p => p.id === this.editingProviderId);
             if (idx !== -1) {
-                this.providers[idx] = { ...this.providers[idx], id: this.editingProviderId, name, capability, type, endpoint, apiKey, model, models, modelCatalog };
+                this.providers[idx] = { ...this.providers[idx], id: this.editingProviderId, name, capability, type, endpoint, apiKey, model, models, modelCatalog,
+                    modelAvailability: availability };
             }
         } else {
             const newProvider = {
                 id: 'api_' + Date.now() + Math.random().toString(36).substr(2, 5),
-                name, capability, type, endpoint, apiKey, model, models, modelCatalog
+                name, capability, type, endpoint, apiKey, model, models, modelCatalog, modelAvailability: availability
             };
             this.providers.push(newProvider);
             if (this._isTextProvider(newProvider)) {

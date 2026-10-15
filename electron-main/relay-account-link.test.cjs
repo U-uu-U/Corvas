@@ -71,9 +71,12 @@ test('New API fetches full secrets only for selected keys and does not call key 
             if (url.endsWith('/user/self')) return Response.json({ success: true, data: { id: 7, username: 'Image', status: 1 } });
             if (url.endsWith('/token/2/key')) return Response.json({ success: true, data: { key: 'selectedFixture123' } });
             assert.equal(init.method, 'GET');
-            return Response.json({ success: true, data: { items: [1, 2].map(id => ({ id, user_id: 7, name: `Image ${id}`, status: 1, expired_time: -1, key: 'masked***' })), total: 2 } });
+            assert.equal(new URL(url).searchParams.get('page_size'), '100');
+            return Response.json({ success: true, data: { items: [1, 2].map(id => ({ id, user_id: 7, name: `Image ${id}`,
+                group: id === 1 ? 'text' : 'image', status: 1, expired_time: -1, key: 'masked***' })), total: 2 } });
         } } };
     const listed = await listRelayAccounts(options);
+    assert.deepEqual(listed.tokens.map(item => item.group), ['text', 'image']);
     assert.equal(calls.some(call => call.method === 'POST'), false);
     const selected = await resolveRelayAccounts(options, { userId: listed.userId, tokenIds: ['2'] });
     assert.equal(selected[0].apiKey, 'sk-selectedFixture123');

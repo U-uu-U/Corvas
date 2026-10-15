@@ -812,6 +812,7 @@ async function fetchModelList(config = {}) {
         const response = await net.fetch(url, {
             method: 'GET',
             headers,
+            signal: AbortSignal.timeout(15000),
             redirect: 'follow'
         });
         const text = await response.text();
@@ -828,7 +829,8 @@ async function fetchModelList(config = {}) {
         }
 
         const models = extractModelIds(payload, providerType);
-        if (models.length === 0) {
+        const explicitEmptyList = [payload, payload?.data, payload?.models].some(value => Array.isArray(value) && value.length === 0);
+        if (models.length === 0 && !explicitEmptyList) {
             return { success: false, error: '接口响应中没有可用模型列表' };
         }
 

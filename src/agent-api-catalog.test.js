@@ -61,11 +61,79 @@ test('relay connection is not acknowledged when encrypted API persistence fails'
     sidebar.apiConfigRevision = 4;
     sidebar.apiConfigUpdatedAt = '2026-10-09T00:00:00Z';
     globalThis.window.flowCanvas.apiConfig = { save: async () => ({ success: false }) };
+    globalThis.window.flowCanvas.ai.fetchModels = async () => ({ success: true, models: ['first'] });
     await assert.rejects(sidebar._connectRelayAccount({ site: 'art', userId: 'user1', username: 'Fixture',
         tokenId: '10', apiKey: 'sk-fixtureOnly123' }), /could not be saved/);
     assert.deepEqual(sidebar.providers, [original]);
     assert.deepEqual(sidebar.globalConfig, { videoProviderId: 'existing' });
     assert.equal(sidebar.apiConfigRevision, 4);
+});
+
+test('relay import verifies each selected key and never saves unsupported catalog roles', async t => {
+    const image = entry('nano', 'image', { catalog: { model: 'nano', hosts: ['ai.ravenhash.org'] } });
+    const text = entry('chat', 'text', { catalog: { model: 'chat', hosts: ['ai.ravenhash.org'] } });
+    const { sidebar } = harness(t, { catalogMode: 'remote', models: [image, text] });
+    sidebar.apiConfigReady = Promise.resolve({ success: true });
+    sidebar.apiConfigRevision = 1;
+    sidebar._clearMigratedLocalApiConfig = () => {};
+    sidebar._writeLocalApiConfig = () => {};
+    let saved;
+    globalThis.window.flowCanvas.apiConfig = { save: async config => { saved = config; return { success: true }; } };
+    globalThis.window.flowCanvas.ai.fetchModels = async request => {
+        assert.equal(request.endpoint, 'https://ai.ravenhash.org/v1');
+        return { success: true, models: ['nano'] };
+    };
+    await sidebar._connectRelayAccount({ site: 'ai', userId: '1', tokenId: '2', apiKey: 'sk-fixtureNanoOnly' });
+    assert.equal(saved.providers.length, 1);
+    assert.equal(saved.providers[0].capability, 'image');
+    assert.deepEqual(saved.providers[0].modelAvailability.models, ['nano']);
+    assert.equal(saved.globalConfig.textProviderId, undefined);
+    const before = structuredClone(sidebar.providers);
+    globalThis.window.flowCanvas.ai.fetchModels = async () => ({ success: false });
+    await assert.rejects(sidebar._connectRelayAccount({ site: 'ai', userId: '1', tokenId: '3', apiKey: 'sk-fixtureOtherKey' }), /核验失败/);
+    assert.deepEqual(sidebar.providers, before);
+});
+
+test('a timed-out account verification cannot save later when its request finishes', async t => {
+    const { sidebar } = harness(t);
+    sidebar.apiConfigReady = Promise.resolve({ success: true });
+    sidebar.apiConfigRevision = 1;
+    let finish, saves = 0;
+    globalThis.window.flowCanvas.apiConfig = { save: async () => { saves++; return { success: true }; } };
+    globalThis.window.flowCanvas.ai.fetchModels = () => new Promise(resolve => { finish = resolve; });
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const pending = sidebar._connectRelayAccount({ site: 'art', userId: '1', tokenId: '2', apiKey: 'sk-fixtureOnly123' });
+    await Promise.resolve();
+    const rejected = assert.rejects(pending, /核验超时/);
+    t.mock.timers.tick(25001);
+    await rejected;
+    finish({ success: true, models: ['first'] });
+    await Promise.resolve();
+    assert.equal(saves, 0);
+    assert.deepEqual(sidebar.providers, []);
+});
+
+test('manual model verification persists per account and is discarded when credentials change', async t => {
+    const { sidebar } = harness(t);
+    sidebar.formCapability.value = 'video';
+    sidebar.formName.value = 'Verified';
+    sidebar._syncFormCatalog();
+    globalThis.window.flowCanvas.ai.fetchModels = async () => ({ success: true, models: ['second'] });
+    await sidebar._fetchModelsForForm();
+    sidebar.formModel.value = 'second';
+    sidebar._saveForm();
+    const saved = sidebar.providers[0];
+    assert.deepEqual(saved.modelAvailability.models, ['second']);
+    assert.deepEqual(sidebar._providerVariants().map(provider => provider.model), ['second']);
+    sidebar.editingProviderId = saved.id;
+    sidebar.formModelAvailability = null;
+    sidebar.formName.value = 'Renamed';
+    sidebar._saveForm();
+    assert.deepEqual(sidebar.providers[0].modelAvailability.models, ['second']);
+    sidebar.editingProviderId = saved.id;
+    sidebar.formKey.value = 'a-different-key';
+    sidebar._saveForm();
+    assert.equal(sidebar.providers[0].modelAvailability, undefined);
 });
 
 test('remote video default applies to new nodes while explicit node and personal selections stay fixed', t => {
@@ -103,11 +171,10 @@ for (const host of ['art.ravenhash.org', 'cart.ravenhash.org']) {
         assert.equal(sidebar.formCapability.value, 'video');
         assert.deepEqual(sidebar.fetchedModels, ['first', 'second']);
         assert.equal(sidebar.formModel.value, 'first');
-        assert.equal(sidebar.fetchModelsBtn.hidden, true);
+        assert.equal(sidebar.fetchModelsBtn.hidden, false);
         assert.equal(sidebar.addModelSlotBtn.hidden, true);
         assert.equal(sidebar.formModel.hidden, true);
         assert.equal(sidebar.fetchedModelSelect.hidden, false);
-        await sidebar._fetchModelsForForm();
         assert.equal(state.fetches, 0);
 
         sidebar._saveForm();
@@ -123,6 +190,71 @@ for (const host of ['art.ravenhash.org', 'cart.ravenhash.org']) {
         assert.equal(sidebar._getVideoProvider().model, 'first');
     });
 }
+
+test('manual fetch checks key availability without replacing CONFIG or silently changing the model', async t => {
+    const { sidebar, state } = harness(t);
+    sidebar._syncFormCatalog({ autoCapability: true });
+    window.flowCanvas.ai.fetchModels = async request => {
+        state.fetches++;
+        assert.equal(request.endpoint, 'https://art.ravenhash.org/v1');
+        assert.equal(request.apiKey, 'fixture-key');
+        return { success: true, models: ['second', 'upstream-only'] };
+    };
+    await sidebar._fetchModelsForForm();
+    assert.equal(state.fetches, 1);
+    assert.deepEqual(sidebar.fetchedModels, ['first', 'second']);
+    assert.equal(sidebar.formModel.value, 'first');
+    assert.equal(sidebar.fetchedModelSelect.options.find(option => option.value === 'first').disabled, true);
+    assert.equal(sidebar.fetchedModelSelect.options.find(option => option.value === 'second').disabled, false);
+    sidebar._saveForm();
+    assert.equal(state.saved, 0);
+    assert.match(sidebar.modelFetchStatus.textContent, /分组权限/);
+    sidebar.formModel.value = 'second';
+    sidebar._saveForm();
+    assert.equal(state.saved, 1);
+    assert.equal(sidebar.providers[0].modelCatalog, 'remote');
+    assert.deepEqual(sidebar.providers[0].models, []);
+    assert.equal(sidebar.providers[0].model, 'second');
+});
+
+test('an empty key model list disables catalog choices until the credentials change', async t => {
+    const { sidebar, state } = harness(t);
+    sidebar._syncFormCatalog({ autoCapability: true });
+    window.flowCanvas.ai.fetchModels = async () => ({ success: true, models: [] });
+    await sidebar._fetchModelsForForm();
+    assert.equal(sidebar.fetchedModelSelect.options.filter(option => option.value && !option.disabled).length, 0);
+    assert.deepEqual(sidebar.fetchedModels, ['first', 'second']);
+    assert.match(sidebar.modelFetchStatus.textContent, /没有可用模型/);
+    sidebar._saveForm();
+    assert.equal(state.saved, 0);
+    sidebar.formKey.value = 'new-fixture-key';
+    sidebar.modelFormRequestVersion++;
+    sidebar._syncFormCatalog();
+    assert.equal(sidebar.fetchedModelSelect.options.filter(option => option.value && !option.disabled).length, 2);
+});
+
+test('failed and stale manual model fetches preserve the current form choices', async t => {
+    const { sidebar } = harness(t);
+    sidebar._syncFormCatalog({ autoCapability: true });
+    sidebar.formModel.value = 'second';
+    window.flowCanvas.ai.fetchModels = async () => ({ success: false, error: 'fixture timeout' });
+    await sidebar._fetchModelsForForm();
+    assert.deepEqual(sidebar.fetchedModels, ['first', 'second']);
+    assert.equal(sidebar.formModel.value, 'second');
+    assert.equal(sidebar.fetchModelsBtn.disabled, false);
+    assert.match(sidebar.modelFetchStatus.textContent, /fixture timeout/);
+    let complete;
+    window.flowCanvas.ai.fetchModels = () => new Promise(resolve => { complete = resolve; });
+    const pending = sidebar._fetchModelsForForm();
+    sidebar.formKey.value = 'another-key';
+    sidebar.modelFormRequestVersion++;
+    sidebar._syncFormCatalog();
+    complete({ success: true, models: [] });
+    await pending;
+    assert.deepEqual(sidebar.fetchedModels, ['first', 'second']);
+    assert.equal(sidebar.formModel.value, 'second');
+    assert.equal(sidebar.formModelAvailability, undefined);
+});
 
 test('new image accounts use exact remote entries outside the legacy video scope', t => {
     const config = catalog(entry('gpt-image-2', 'image', {
@@ -217,7 +349,7 @@ test('CONFIG refresh updates an open form without changing its saved model bindi
     assert.deepEqual(sidebar.fetchedModels, []);
     assert.equal(sidebar.formModel.value, 'second');
     assert.equal(sidebar.fetchedModelSelect.disabled, true);
-    assert.equal(sidebar.fetchModelsBtn.hidden, true);
+    assert.equal(sidebar.fetchModelsBtn.hidden, false);
     assert.equal(sidebar.providers[0].model, 'second');
 });
 

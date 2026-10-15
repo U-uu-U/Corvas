@@ -3,6 +3,19 @@ import assert from 'node:assert/strict';
 import { NODE_TYPES, expandGenerationPrompts } from './node-types.js';
 import { getGenerationReuseConfig } from './generation-record.js';
 
+test('missing image account gives an actionable local error before any upload or submission', async () => {
+    await assert.rejects(NODE_TYPES.image.execute({}, { prompt: 'fixture', model: 'gpt-image-2', providerId: 'removed' }, {
+        getImageProvider: () => null,
+        prepareImageReferences: () => assert.fail('must not upload without an account')
+    }), error => {
+        assert.equal(error.code, 'RH_IMAGE_PROVIDER_UNAVAILABLE');
+        assert.equal(error.submissionState, 'not_submitted');
+        assert.match(error.message, /重新选择模型和账号/);
+        assert.doesNotMatch(error.message, /请求未能完成|服务暂时不可用/);
+        return true;
+    });
+});
+
 for (const kind of ['image', 'video']) {
     test(`${kind}: repeated reuse keeps one guide, stable citations, and one upload per asset`, async t => {
         const previousWindow = global.window;

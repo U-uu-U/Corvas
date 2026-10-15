@@ -501,7 +501,8 @@ NODE_TYPES['image'] = {
         }
         if (!prompts.length) throw new Error('请填写提示词或连接上游文本');
 
-        if (!provider?.apiKey) throw new Error('请先在 AI 助手设置中配置图像模型');
+        if (!provider?.apiKey) throw generationFailureError({ protocolVersion: 2, code: 'RH_IMAGE_PROVIDER_UNAVAILABLE',
+            category: 'auth', stage: 'validate', submissionState: 'not_submitted', action: 'check_account', retryable: false });
         if (!window.flowCanvas?.mcp?.generateImage) throw new Error('本地生图接口不可用');
 
         // 统一输入口按素材类型自动分流；自身素材仍作为首张参考图。
@@ -615,7 +616,7 @@ NODE_TYPES['image'] = {
                 imageOrder: sourceReferences.map(reference => reference.filePath),
                 filePath: filePaths[0] || null,
                 filePaths,
-                requestedSize: `${config.width || 1024}x${config.height || 1024}`,
+                requestedSize: imageGenerationRequestParams(config, provider?.model || config.model).size,
                 actualSize: result?.actualSize || null
             }, intentOutcome);
             return imageUrls.map((imageUrl, index) => ({

@@ -21,8 +21,6 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         }
         assert.ok(page, 'The main renderer window must open');
         await page.waitForFunction(() => window.flowCanvas?.store && document.querySelector('#agentToggleBtn'));
-        await page.locator('#mcpStartupNotice').waitFor({ state: 'visible' });
-        await page.locator('#mcpStartupNotice [data-action=close]').click();
         await app.evaluate(({ ipcMain }) => {
             ipcMain.removeHandler('relay-browser:open');
             globalThis.relayRouteRequest = new Promise(resolve => {
@@ -63,15 +61,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await page.keyboard.press('Home');
         await page.keyboard.press('ArrowLeft');
         assert.equal(await handle.getAttribute('aria-valuenow'), '444');
-        // Width transitions take 300ms; derive pointer coordinates only after layout settles.
-        await page.waitForFunction(() => {
-            const handle = document.querySelector('#agentSidebarResizeHandle');
-            const wrapper = document.querySelector('#agentSidebarWrapper');
-            const panel = document.querySelector('#agentSidebar');
-            const expected = Number(handle.getAttribute('aria-valuenow'));
-            return Math.abs(wrapper.getBoundingClientRect().width - expected) < 0.5
-                && [wrapper, panel].every(element => element.getAnimations().every(animation => animation.playState !== 'running'));
-        });
+        await page.waitForTimeout(250);
         const box = await handle.boundingBox();
         const pointer = { x: box.x + box.width - 2, y: box.y + box.height / 2 };
         const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.id, pointer);

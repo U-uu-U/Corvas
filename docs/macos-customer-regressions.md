@@ -1,5 +1,11 @@
 # macOS 客户反馈排查（2026-10-01）
 
+## 2026-10-04 补充定位
+
+在压缩构建的真实视频生成落图测试中复现了 `ReferenceError: s is not defined`。实际堆栈位于 `CanvasManager._layoutVideoControlGroup`，由 `_addGeneratorVideoControls` / `_drawGeneratorPlaceholder` / `_landResult` 调用，发生在视频已下载之后。
+
+源码默认参数 `stageScale = this.stage?.scaleX?.()` 被当前构建工具降低语法后生成嵌套函数，内层临时变量 `s` 却被外层 `r.call(s)` 引用，造成打包代码作用域错误。已在源码将默认值求值移入函数体，避免该转换。增加了 esbuild 压缩/降级后的方法回归测试，完整 Electron 视频落图测试也通过。该修复尚未打包，此前的 beta.14 不包含；仍不能据此断言客户所有图片失败都只有这一个原因。以下为 10 月 1 日当时的排查记录。
+
 客户反馈删除后重启恢复、图片生成后画布落地出现 `s is not defined`，以及 2026-09-26 的 `fse_instance_destroy -> napi_release_threadsafe_function -> uv_mutex_lock -> abort` 崩溃。客户安装包使用 `index-B47ZC7wG.js`，具体版本尚未确认；当前源码不能仅凭压缩变量名定位该 ReferenceError。未取得客户的 board.json、app.asar 或原始崩溃报告，反馈中的分析不是已复现的源码根因。
 
 ## 本次修改
