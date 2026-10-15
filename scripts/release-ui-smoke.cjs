@@ -21,6 +21,12 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         }
         assert.ok(page, 'The main renderer window must open');
         await page.waitForFunction(() => window.flowCanvas?.store && document.querySelector('#agentToggleBtn'));
+        const dismissOnboarding = async () => {
+            const onboarding = page.locator('#siteLoginDialog[open]');
+            await page.waitForTimeout(400);
+            if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
+        };
+        await dismissOnboarding();
         await app.evaluate(({ ipcMain }) => {
             ipcMain.removeHandler('relay-browser:open');
             globalThis.relayRouteRequest = new Promise(resolve => {
@@ -90,6 +96,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await page.screenshot({ path: path.join(output, 'release-ui-compact.png') });
         await page.reload();
         await page.waitForFunction(() => window.flowCanvas?.store && document.querySelector('#agentToggleBtn'));
+        await dismissOnboarding();
         await (await app.browserWindow(page)).evaluate(window => window.setSize(1300, 900));
         await page.locator('#agentToggleBtn').click();
         await page.waitForFunction(() => document.body.classList.contains('agent-open'));
