@@ -45,10 +45,14 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         page.on('pageerror', error => errors.push(error.stack));
         await page.waitForFunction(() => window.Konva?.stages?.length && window.flowCanvas?.store);
         await page.waitForSelector('.folder-group-item');
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         return page;
     };
     try {
         await fs.mkdir(path.dirname(boardPath), { recursive: true });
+        await fs.writeFile(path.join(profile, 'data', 'relay-browser.json'), JSON.stringify({ onboardingSkipped: true }));
         await fs.writeFile(filePath, png);
         const items = [
             { id: 'deleted', kind: 'media', mediaType: 'image', filePath, x: 40, y: 40, width: 100, height: 100 },
