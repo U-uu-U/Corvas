@@ -43,9 +43,21 @@ async function submitStudioGeometry(payload) {
     try {
         response = await client.postRaw('/game3d/geometry_generation/views2geometry', {
             modelVersion: payload.modelVersion, viewsImage, faceCount: Number(payload.faceCount) });
-    } catch (_) {
-        // The request may have reached the server; the caller must not retry blindly.
-        return result('混元生成请求未返回结果，可能已提交，请在作品列表核对', 'unknown');
+    } catch (error) {
+        // An HTTP response with an error body is a definite refusal (for example a full task
+        // queue). Only a missing response (network/timeout) leaves the outcome unknown.
+        const data = error?.response?.data;
+        const status = Number(error?.response?.status) || 0;
+        if (status && data && typeof data === 'object' && typeof data.errNo === 'number' && data.errNo !== 0) {
+            return result(`混元拒绝了生成请求（${data.errNo}）：${String(data.errMsg || data.message || '').slice(0, 120)}`, false,
+                { httpStatus: status, errNo: data.errNo });
+        }
+        if (status >= 400 && status < 500 && status !== 408) {
+            return result(`混元拒绝了生成请求（HTTP ${status}）：${String(data?.errMsg || data?.message || '').slice(0, 120)}`, false,
+                { httpStatus: status });
+        }
+        return result(`混元生成请求未返回结果${status ? `（HTTP ${status}）` : ''}，可能已提交，请在作品列表核对`, 'unknown',
+            { httpStatus: status || undefined });
     }
     const worksId = String(response?.worksId || response?.data?.worksId || '');
     if (!worksId) {
