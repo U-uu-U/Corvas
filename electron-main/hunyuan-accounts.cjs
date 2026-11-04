@@ -139,9 +139,17 @@ class HunyuanAccounts {
                 }
                 return;
             }
+            if (message?.type === 'geometry-submitted') {
+                const pending = this.downloadRequests.get(message.requestId);
+                if (!pending || pending.kind !== 'submit' || pending.child !== child) return;
+                clearTimeout(pending.timer); this.downloadRequests.delete(message.requestId);
+                pending.resolve(message.result && typeof message.result === 'object' ? message.result
+                    : { submitted: false, error: '混元窗口未返回提交结果' });
+                return;
+            }
             if (message?.type === 'model-downloaded') {
                 const pending = this.downloadRequests.get(message.requestId);
-                if (!pending || pending.kind === 'current' || pending.accountId !== id) return;
+                if (!pending || pending.kind || pending.accountId !== id) return;
                 clearTimeout(pending.timer); this.downloadRequests.delete(message.requestId);
                 if (message.error) pending.reject(new Error(message.error));
                 else {
@@ -192,6 +200,25 @@ class HunyuanAccounts {
             const timer = setTimeout(() => { this.downloadRequests.delete(requestId); reject(new Error('读取当前模型超时，请保持混元窗口打开')); }, 15000);
             this.downloadRequests.set(requestId, { kind: 'current', accountId, child, resolve, reject, timer });
             this.send(accountId, { type: 'describe-current-model', requestId });
+        });
+    }
+
+    // Uploads prepared view images through the account's logged-in page and submits one
+    // views2geometry job. A timeout is reported as unknown: the job may already exist.
+    submitGeometry(accountId, payload) {
+        this.account(accountId);
+        const child = this.windows.get(accountId)?.child;
+        if (!child?.connected) throw new Error('请先打开对应混元账号窗口并登录');
+        const requestId = crypto.randomUUID();
+        return new Promise(resolve => {
+            const timer = setTimeout(() => {
+                this.downloadRequests.delete(requestId);
+                resolve({ submitted: 'unknown', error: '混元提交等待超时，可能已提交，请在作品列表核对' });
+            }, 180000);
+            // A window that closes mid-submit may already have created the job.
+            const reject = error => resolve({ submitted: 'unknown', error: `${error?.message || '混元窗口已关闭'}；可能已提交，请在作品列表核对` });
+            this.downloadRequests.set(requestId, { kind: 'submit', accountId, child, resolve, reject, timer });
+            this.send(accountId, { type: 'submit-geometry', requestId, payload });
         });
     }
 

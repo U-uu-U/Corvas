@@ -195,6 +195,8 @@ test('stdio MCP exposes workflows and forwards them directly to workflow routes'
             requestId: 'request-1', source: { accountId: 'account-1', generationId: 'a'.repeat(32) } },
         status: { projectId: null, jobId: 'b'.repeat(32) },
         history: { projectId: null, limit: 20 },
+        generate: { accountId: 'account-1', requestId: 'generate-1', label: 'Fixture',
+            views: { front: '/front.png', left: '/left.png' } },
         confirm: { projectId: null, jobId: 'b'.repeat(32) },
         resume: { projectId: null, jobId: 'b'.repeat(32) },
         cancel: { projectId: null, jobId: 'b'.repeat(32) }

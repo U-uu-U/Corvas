@@ -701,6 +701,24 @@ async function initServices() {
     const workflows = new WorkflowService({ directory: path.join(app.getPath('userData'), 'data'),
         getAccounts: getHunyuanAccounts, getWorkflow: () => { getHunyuanAccounts(); return hunyuanRhinoWorkflow; },
         getRuntime: () => agentServices.runtime });
+    // Hunyuan's uploader accepts 128–4096 px images up to 10 MB; normalize views to PNG within that.
+    workflows.prepareGenerationViews = async views => {
+        const sharp = require('sharp');
+        const prepared = [];
+        for (const [key, filePath] of Object.entries(views)) {
+            let resolved;
+            try { resolved = await mediaAccess.resolve(filePath, { purpose: 'asset' }); }
+            catch { throw Object.assign(new Error(`视图 ${key} 不是已授权的画布素材，请先把图片加入画布`), { code: 'INVALID_ARGUMENTS', status: 400 }); }
+            const image = sharp(resolved.filePath, { failOn: 'error' });
+            const meta = await image.metadata();
+            if (!meta.width || !meta.height) throw Object.assign(new Error(`视图 ${key} 无法读取为图片`), { code: 'INVALID_ARGUMENTS', status: 400 });
+            if (Math.min(meta.width, meta.height) < 128) throw Object.assign(new Error(`视图 ${key} 分辨率过低，至少 128 像素`), { code: 'INVALID_ARGUMENTS', status: 400 });
+            let data = await image.rotate().resize({ width: 4096, height: 4096, fit: 'inside', withoutEnlargement: true }).png().toBuffer();
+            if (data.length > 10 * 1024 * 1024) data = await sharp(data).resize({ width: 2048, height: 2048, fit: 'inside' }).png().toBuffer();
+            prepared.push({ key, fileName: `${key}-${path.parse(resolved.filePath).name}.png`.slice(0, 120), mimeType: 'image/png', data: data.toString('base64') });
+        }
+        return prepared;
+    };
     flowCanvasBridge.workflowExecutor = (name, input) => workflows.execute(name, input);
     if (readMcpServerEnabled()) flowCanvasBridge.start({ ...mcpConfig, enabled: true });
     else flowCanvasBridge.port = Number(mcpConfig.port) || DEFAULT_MCP_CONFIG.port;

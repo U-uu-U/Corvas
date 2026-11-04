@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const { HUNYUAN_URL, partitionFor } = require('./hunyuan-accounts.cjs');
 const { HunyuanModelWatcher } = require('./hunyuan-model-watcher.cjs');
 const { readCurrentStudioModel } = require('./hunyuan-current-model.cjs');
+const { submitStudioGeometry } = require('./hunyuan-geometry-submit.cjs');
 
 const argument = key => process.argv[process.argv.indexOf(key) + 1];
 const id = argument('--account-id');
@@ -177,6 +178,17 @@ process.on('message', message => {
             if (process.connected) process.send({ type: 'model-downloaded', requestId: message.requestId,
                 error: '模型下载未完成，请保持混元窗口登录并稍后重试' });
         });
+    }
+    if (message?.type === 'submit-geometry' && typeof message.requestId === 'string') {
+        const reply = body => { if (process.connected) process.send({ type: 'geometry-submitted', requestId: message.requestId, ...body }); };
+        void Promise.resolve().then(async () => {
+            if (!mainWindow || mainWindow.isDestroyed()) throw new Error('混元窗口尚未就绪');
+            if (!mainWindow.webContents.getURL().startsWith('https://3d.hunyuan.tencent.com/studio/')) {
+                throw new Error('请先在混元窗口登录并打开 3D Studio');
+            }
+            return mainWindow.webContents.executeJavaScript(`(${submitStudioGeometry.toString()})(${JSON.stringify(message.payload)})`);
+        }).then(result => reply({ result })).catch(error => reply({ result: {
+            submitted: false, error: error.message?.match(/^(请|混元)/) ? error.message : '混元页面执行提交失败，请等待页面加载后重试' } }));
     }
     if (message?.type === 'describe-current-model' && typeof message.requestId === 'string') {
         void readCurrentModel().then(selection => {

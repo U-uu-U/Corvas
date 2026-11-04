@@ -318,3 +318,31 @@ test('status and history identify a cross-project interrupted blocker and cancel
     await h.workflow().drain();
     assert.deepEqual(h.calls, ['download', 'open']);
 });
+
+test('workflow.generate submits once per requestId, records unknown outcomes and validates views', async t => {
+    const h = setup(t);
+    const accountId = h.request.source.accountId;
+    const submissions = [];
+    let outcome = { submitted: true, worksId: 'works-1', views: ['front', 'left'] };
+    h.accounts.submitGeometry = async (id, payload) => { submissions.push({ id, payload }); return outcome; };
+    h.service.prepareGenerationViews = async views => Object.keys(views).map(key => ({ key, fileName: `${key}.png`, mimeType: 'image/png', data: 'AA==' }));
+    const input = { accountId, requestId: 'gen-a', label: 'Drone body', views: { front: '/a.png', left: '/b.png' } };
+    const first = await h.call('generate', input);
+    assert.equal(first.submitted, true); assert.equal(first.worksId, 'works-1'); assert.equal(first.reused, false);
+    assert.equal(submissions.length, 1);
+    assert.deepEqual(submissions[0].payload.views.map(view => view.key), ['front', 'left']);
+    assert.equal(submissions[0].payload.modelVersion, 'v3.1');
+    const again = await h.call('generate', input);
+    assert.equal(again.reused, true); assert.equal(again.worksId, 'works-1'); assert.equal(submissions.length, 1);
+    await assert.rejects(h.call('generate', { ...input, views: { front: '/a.png', right: '/c.png' } }), /requestId/);
+    outcome = { submitted: 'unknown', error: '混元提交等待超时' };
+    const unknown = await h.call('generate', { ...input, requestId: 'gen-b' });
+    assert.equal(unknown.submitted, 'unknown');
+    assert.equal((await h.call('generate', { ...input, requestId: 'gen-b' })).submitted, 'unknown');
+    assert.equal(submissions.length, 2, 'An unknown outcome is never resubmitted under the same requestId');
+    await assert.rejects(h.call('generate', { ...input, requestId: 'gen-c', views: { front: '/a.png' } }), /两张/);
+    await assert.rejects(h.call('generate', { ...input, requestId: 'gen-d', modelVersion: 'v3.0', views: { front: '/a.png', top: '/t.png' } }), /前、后、左、右/);
+    // Schema validation happens synchronously in execute(), before any submission.
+    assert.throws(() => h.call('generate', { ...input, requestId: 'gen-e', views: { left: '/b.png' } }), /参数无效/);
+    assert.equal(submissions.length, 2);
+});

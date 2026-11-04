@@ -59,6 +59,45 @@ class WorkflowService {
         return { accounts: candidates.map(({ id, name, windowOpen, status }) => ({ id, name, windowOpen, status })),
             sources: [...sources.values()], errors };
     }
+    // Paid Hunyuan submission. The receipt is written before the browser call so a lost
+    // response or crash is reported as unknown instead of submitting a second job.
+    async generate(input) {
+        const accounts = this.getAccounts();
+        accounts.account(input.accountId);
+        const views = Object.entries(input.views);
+        if (views.length < 2) throw fail('INVALID_ARGUMENTS', '混元多视图生成至少需要两张视图（含正视图）');
+        const modelVersion = input.modelVersion || 'v3.1';
+        if (!['v3.1', 'v3.6'].includes(modelVersion) && (input.views.top || input.views.bottom)) {
+            throw fail('INVALID_ARGUMENTS', '该模型版本只接受前、后、左、右视图');
+        }
+        const fingerprint = JSON.stringify({ accountId: input.accountId, views: input.views, modelVersion,
+            faceCount: input.faceCount || 500000 });
+        const file = path.join(this.directory, 'hunyuan-generate-receipts.json');
+        const receipts = read(file) || {};
+        const previous = receipts[input.requestId];
+        if (previous) {
+            if (previous.fingerprint !== fingerprint) throw fail('IDEMPOTENCY_CONFLICT', '同一 requestId 已用于不同输入，请勿修改后重发');
+            return { ...previous.result, reused: true };
+        }
+        if (!this.prepareGenerationViews) throw fail('WORKFLOW_UNAVAILABLE', '混元图片读取服务尚未就绪');
+        const prepared = await this.prepareGenerationViews(input.views);
+        const save = result => {
+            receipts[input.requestId] = { fingerprint, result, label: input.label, updatedAt: Date.now() };
+            fs.mkdirSync(this.directory, { recursive: true });
+            fs.writeFileSync(`${file}.tmp`, JSON.stringify(receipts));
+            fs.renameSync(`${file}.tmp`, file);
+        };
+        save({ submitted: 'unknown', error: '提交进行中或进程中断，请在混元作品列表核对', label: input.label });
+        const outcome = await accounts.submitGeometry(input.accountId, {
+            modelVersion, faceCount: input.faceCount || 500000, views: prepared });
+        const result = outcome?.submitted === true
+            ? { submitted: true, worksId: String(outcome.worksId), label: input.label, views: outcome.views,
+                next: '生成完成后在混元窗口选中该模型，用 workflow.sources 读取，再用 workflow.run 导入 Rhino' }
+            : { submitted: outcome?.submitted === 'unknown' ? 'unknown' : false,
+                error: String(outcome?.error || '混元提交失败').slice(0, 200), label: input.label };
+        save(result);
+        return { ...result, reused: false };
+    }
     run(input) {
         this.get({ workflowId: input.workflowId });
         if (input.version !== HUNYUAN_RHINO_WORKFLOW.version) throw fail('WORKFLOW_VERSION_CHANGED', '工作流版本已变化，请重新读取定义');
