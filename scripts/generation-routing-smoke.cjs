@@ -35,7 +35,13 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         const env = { ...process.env, FLOW_CANVAS_SMOKE_PROFILE: profile, FLOW_CANVAS_SMOKE_LIVE: '0' };
         delete env.ELECTRON_RUN_AS_NODE;
         app = await electron.launch({ executablePath: require('electron'), args: [path.join(__dirname, 'agent-smoke-entry.cjs')], env });
-        const page = await app.firstWindow();
+        // The first window can be the splash screen, which closes once the canvas is ready.
+        let page;
+        for (let attempt = 0; attempt < 150 && !page; attempt++) {
+            page = app.windows().find(window => /dist[/\\]index\.html|^http:\/\/127\.0\.0\.1:15321\//.test(window.url()));
+            if (!page) await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        assert.ok(page, 'The main window must open');
         page.on('console', message => { if (['warning', 'error'].includes(message.type())) console.error(message.text()); });
         await page.waitForFunction(() => document.querySelector('[data-group-id="other"] .group-header'));
         await page.evaluate(() => document.dispatchEvent(new CustomEvent('context-run-node', { detail: { nodeId: 'generate' } })));
