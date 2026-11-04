@@ -89,6 +89,11 @@ const WORKFLOW_TOOL_DEFINITIONS = [
         annotations: { readOnlyHint: true }
     },
     {
+        name: 'flow_canvas.workflow.open_account',
+        description: 'Open (or bring forward) the isolated Hunyuan browser window for one account listed by workflow.sources, so its logged-in session can serve workflow.generate and model reading. Opening is free and submits nothing. Returns the account status; if the session has expired the user must log in once in that window.',
+        inputSchema: object({ accountId: string }, ['accountId'])
+    },
+    {
         name: 'flow_canvas.workflow.generate',
         description: 'Submit one paid Hunyuan 3D multi-view geometry generation (views2geometry) through an open, logged-in Hunyuan account window. Uploads local view images (front required; at least two views; top/bottom only for v3.1/v3.6) from Corvas-authorized media paths, then returns the Hunyuan worksId. Each call consumes generation quota of that account. The same requestId returns the first receipt and never submits twice; an unknown outcome must be checked in the works list, not retried with a new requestId. When the model finishes it appears in workflow.sources for workflow.run.',
         inputSchema: generateInput

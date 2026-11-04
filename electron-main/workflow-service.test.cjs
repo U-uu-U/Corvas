@@ -345,4 +345,16 @@ test('workflow.generate submits once per requestId, records unknown outcomes and
     // Schema validation happens synchronously in execute(), before any submission.
     assert.throws(() => h.call('generate', { ...input, requestId: 'gen-e', views: { left: '/b.png' } }), /参数无效/);
     assert.equal(submissions.length, 2);
+    // A definite refusal (for example an expired login) creates no job, so the same requestId may retry.
+    outcome = { submitted: false, error: '请先在混元窗口登录并打开 3D Studio' };
+    const refused = await h.call('generate', { ...input, requestId: 'gen-f' });
+    assert.equal(refused.submitted, false); assert.match(refused.error, /登录/);
+    outcome = { submitted: true, worksId: 'works-2', views: ['front', 'left'] };
+    const retried = await h.call('generate', { ...input, requestId: 'gen-f' });
+    assert.equal(retried.submitted, true); assert.equal(retried.worksId, 'works-2'); assert.equal(retried.reused, false);
+    // A window that closed before sending throws; the requestId stays retryable as well.
+    h.accounts.submitGeometry = async () => { throw new Error('请先打开对应混元账号窗口并登录'); };
+    await assert.rejects(h.call('generate', { ...input, requestId: 'gen-g' }), /登录/);
+    h.accounts.submitGeometry = async () => ({ submitted: true, worksId: 'works-3' });
+    assert.equal((await h.call('generate', { ...input, requestId: 'gen-g' })).worksId, 'works-3');
 });

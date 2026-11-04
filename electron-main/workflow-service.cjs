@@ -59,6 +59,21 @@ class WorkflowService {
         return { accounts: candidates.map(({ id, name, windowOpen, status }) => ({ id, name, windowOpen, status })),
             sources: [...sources.values()], errors };
     }
+    async open_account({ accountId }) {
+        const accounts = this.getAccounts();
+        accounts.account(accountId);
+        accounts.open({ id: accountId });
+        const deadline = Date.now() + 60000;
+        let entry;
+        do {
+            entry = accounts.list().accounts.find(account => account.id === accountId);
+            if (entry?.status === 'open' || entry?.status === 'error') break;
+            await new Promise(resolve => setTimeout(resolve, 500));
+        } while (Date.now() < deadline);
+        return { accountId, name: entry?.name, windowOpen: Boolean(entry?.windowOpen), status: entry?.status || 'unknown',
+            next: entry?.status === 'open' ? '窗口已打开；用 workflow.sources 检查当前模型，或 workflow.generate 提交生成'
+                : '窗口仍在加载或需要登录；请稍后用 workflow.sources 查看状态' };
+    }
     // Paid Hunyuan submission. The receipt is written before the browser call so a lost
     // response or crash is reported as unknown instead of submitting a second job.
     async generate(input) {
@@ -87,9 +102,27 @@ class WorkflowService {
             fs.writeFileSync(`${file}.tmp`, JSON.stringify(receipts));
             fs.renameSync(`${file}.tmp`, file);
         };
+        const forget = () => {
+            delete receipts[input.requestId];
+            fs.writeFileSync(`${file}.tmp`, JSON.stringify(receipts));
+            fs.renameSync(`${file}.tmp`, file);
+        };
         save({ submitted: 'unknown', error: '提交进行中或进程中断，请在混元作品列表核对', label: input.label });
-        const outcome = await accounts.submitGeometry(input.accountId, {
-            modelVersion, faceCount: input.faceCount || 500000, views: prepared });
+        let outcome;
+        try {
+            outcome = await accounts.submitGeometry(input.accountId, {
+                modelVersion, faceCount: input.faceCount || 500000, views: prepared });
+        } catch (error) {
+            // submitGeometry throws only before anything is sent (window closed or not logged in).
+            forget();
+            throw fail('SOURCE_UNAVAILABLE', error.message);
+        }
+        if (outcome?.submitted === false) {
+            // A definite refusal (not logged in, page not ready, upload rejected) created no job,
+            // so the same requestId may be retried after the user fixes it.
+            forget();
+            return { submitted: false, error: String(outcome.error || '混元提交失败').slice(0, 200), label: input.label, reused: false };
+        }
         const result = outcome?.submitted === true
             ? { submitted: true, worksId: String(outcome.worksId), label: input.label, views: outcome.views,
                 next: '生成完成后在混元窗口选中该模型，用 workflow.sources 读取，再用 workflow.run 导入 Rhino' }
