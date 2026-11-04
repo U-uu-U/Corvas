@@ -1,0 +1,147 @@
+{
+  "layer": "Corvas Assembly::Drone",
+  "note": "Units follow the Rhino document. Hunyuan meshes are Y-up; rotate [x,90] turns Y-up into Z-up. Sizes set the longest edge of each part. Rerunning replaces the copies on this layer.",
+  "parts": [
+    {
+      "name": "body",
+      "job": "675330faef266633bc4287199330ac30",
+      "size": 1000,
+      "rotate": [
+        [
+          "x",
+          90
+        ]
+      ],
+      "instances": [
+        {
+          "name": "Drone body",
+          "position": [
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "arm",
+      "job": "72c5277bd31f5f472c2914e4e051d5ef",
+      "size": 520,
+      "rotate": [
+        [
+          "z",
+          90
+        ]
+      ],
+      "instances": [
+        {
+          "name": "Arm front-right",
+          "position": [
+            560,
+            400,
+            20
+          ],
+          "rotateZ": 35
+        },
+        {
+          "name": "Arm front-left",
+          "position": [
+            -560,
+            400,
+            20
+          ],
+          "rotateZ": -35
+        },
+        {
+          "name": "Arm rear-right",
+          "position": [
+            560,
+            -400,
+            20
+          ],
+          "rotateZ": -35
+        },
+        {
+          "name": "Arm rear-left",
+          "position": [
+            -560,
+            -400,
+            20
+          ],
+          "rotateZ": 35
+        }
+      ]
+    },
+    {
+      "name": "pod",
+      "job": "ec855d2ec8d89a98bd27e3be08138248",
+      "size": 560,
+      "rotate": [
+        [
+          "x",
+          90
+        ],
+        [
+          "x",
+          90
+        ]
+      ],
+      "instances": [
+        {
+          "name": "Rotor pod front-right",
+          "position": [
+            760,
+            560,
+            20
+          ]
+        },
+        {
+          "name": "Rotor pod front-left",
+          "position": [
+            -760,
+            560,
+            20
+          ]
+        },
+        {
+          "name": "Rotor pod rear-right",
+          "position": [
+            760,
+            -560,
+            20
+          ]
+        },
+        {
+          "name": "Rotor pod rear-left",
+          "position": [
+            -760,
+            -560,
+            20
+          ]
+        }
+      ]
+    },
+    {
+      "name": "gimbal",
+      "job": "eaf8a3f4a1fb22bf36f04e0e3d4ff240",
+      "size": 260,
+      "rotate": [
+        [
+          "x",
+          90
+        ]
+      ],
+      "instances": [
+        {
+          "name": "Sensor gimbal",
+          "position": [
+            0,
+            240,
+            -150
+          ],
+          "anchor": "top"
+        }
+      ]
+    }
+  ]
+}
