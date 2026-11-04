@@ -12,7 +12,7 @@ const Watcher = require('./watcher');
 const Thumbnailer = require('./thumbnailer');
 const FlowCanvasBridge = require('./mcp-bridge');
 const BrowserSyncService = require('./browser-sync');
-const { handleLocalResourceRequest } = require('./local-resource');
+const { handleLocalResourceRequest, handleLocalMediaRequest } = require('./local-resource');
 const { MediaAccessPolicy, collectBoardMediaScope } = require('./media-access.cjs');
 const { MediaProcessor, mediaToolPaths } = require('./media-processor.cjs');
 const { fetchPublicMedia } = require('./public-media-download.cjs');
@@ -229,7 +229,9 @@ function installSafeConsole() {
 
 // 注册私有协议权限
 protocol.registerSchemesAsPrivileged([
-    { scheme: 'local-res', privileges: { supportFetchAPI: true, stream: true, secure: true, corsEnabled: true } }
+    { scheme: 'local-res', privileges: { supportFetchAPI: true, stream: true, secure: true, corsEnabled: true } },
+    // Standard so Chromium's media pipeline can issue ranged seeks (see electron-main/local-resource.js).
+    { scheme: 'local-media', privileges: { standard: true, supportFetchAPI: true, stream: true, secure: true, corsEnabled: true } }
 ]);
 
 // ── 窗口创建 ───────────────────────────────────────────
@@ -2059,7 +2061,11 @@ ipcMain.handle('thumb:preview', async (event, filePath, maxDim, preferOriginal) 
     try {
         const resolved = await mediaAccess.resolve(filePath);
         return thumbnailer.getPreview(resolved.filePath, maxDim, preferOriginal === true);
-    } catch { return { success: false, error: { code: 'FILE_UNAVAILABLE', message: '素材不存在或尚未授权，请重新添加' } }; }
+    } catch (error) {
+        // A deleted or moved file fails at realpath before authorization; report it as missing so the card can offer relinking.
+        if (['ENOENT', 'ENOTDIR'].includes(error?.code)) return { success: false, error: { code: 'FILE_MISSING', message: '文件失联' } };
+        return { success: false, error: { code: 'FILE_UNAVAILABLE', message: '素材不存在或尚未授权，请重新添加' } };
+    }
 });
 
 function psQuoted(value) {
@@ -3711,9 +3717,11 @@ function startApplication() {
         await app.whenReady();
 
         // 监听本地文件加载
-        protocol.handle('local-res', request => handleLocalResourceRequest(request, {
+        const localResourceOptions = () => ({
             accessPolicy: mediaAccess, allowedOrigins: isDev ? ['null', 'file://', DEV_RENDERER_ORIGIN] : ['null', 'file://']
-        }));
+        });
+        protocol.handle('local-res', request => handleLocalResourceRequest(request, localResourceOptions()));
+        protocol.handle('local-media', request => handleLocalMediaRequest(request, localResourceOptions()));
         createSplashWindow();
         await initServices();
 

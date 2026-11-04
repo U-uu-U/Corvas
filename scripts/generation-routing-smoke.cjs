@@ -8,6 +8,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
 
 (async () => {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-routing-smoke-'));
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-routing-output-'));
     let app;
     const pending = [];
     const server = http.createServer(async (req, res) => {
@@ -16,9 +17,9 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
     });
     try {
         await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-        const targetDir = path.join(profile, 'output');
+        // Generated media must be saved outside userData: the media access policy refuses app config paths.
+        const targetDir = outputDir;
         await fs.mkdir(path.join(profile, 'data'), { recursive: true });
-        await fs.mkdir(targetDir);
         const items = [{ id: 'generate', kind: 'op', nodeType: 'image', x: 100, y: 100, width: 264, height: 264,
             config: { providerId: 'image', model: 'gpt-image-2', prompt: 'fixture', count: 2,
                 concurrency: 2, size: '1024x1024', resolutionTier: '1K', ratio: '1:1', stream: false } }];
@@ -77,5 +78,6 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         server.closeAllConnections();
         await new Promise(resolve => server.close(resolve));
         await fs.rm(profile, { recursive: true, force: true });
+        await fs.rm(outputDir, { recursive: true, force: true });
     }
 })().catch(error => { console.error(error); process.exitCode = 1; });

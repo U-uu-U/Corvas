@@ -49,7 +49,8 @@ export function createAudioPlayer(manager, item) {
         audio.muted = item.audioMuted === true;
         for (const event of ['play', 'pause', 'ended', 'timeupdate', 'loadedmetadata', 'volumechange']) audio.addEventListener(event, refresh);
         audio.addEventListener('error', fail);
-        audio.src = product.filePath ? `local-res://${encodeURIComponent(product.filePath)}` : product.url;
+        if (product.filePath) audio.crossOrigin = 'anonymous';
+        audio.src = product.filePath ? `local-media://file/${encodeURIComponent(product.filePath)}` : product.url;
         document.body.append(audio);
         return audio;
     };

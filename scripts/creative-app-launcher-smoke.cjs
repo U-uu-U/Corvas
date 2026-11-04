@@ -26,6 +26,10 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         await page.waitForFunction(() => document.querySelector('#corvasAppLauncher'));
+        await page.waitForFunction(() => window.Konva?.stages?.length);
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         const menu = page.locator('#corvasAppLauncher');
         const openMenu = async () => {
             await page.bringToFront();
@@ -36,7 +40,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await openMenu();
         assert.deepEqual(await menu.locator('[role="group"]').evaluateAll(groups => groups.map(group => ({
             name: group.getAttribute('aria-label'), apps: [...group.querySelectorAll('[data-app]')].map(button => button.dataset.app)
-        }))), [{ name: 'AI 助手', apps: ['agent'] }, { name: '网页创作', apps: ['tripo', 'hunyuan', 'jimeng'] },
+        }))), [{ name: 'AI 助手', apps: ['agent', 'settings'] }, { name: '网页创作', apps: ['relay', 'tripo', 'hunyuan', 'jimeng'] },
             { name: '本地软件', apps: ['rhino', 'blender'] }]);
         await page.waitForFunction(() => [...document.querySelectorAll('#corvasAppLauncher img')].every(image => image.complete && image.naturalWidth > 1));
         assert.equal(await menu.locator('img').count(), 5);
@@ -56,7 +60,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         }
         await menu.locator('[data-app="agent"]').focus();
         await page.keyboard.press('ArrowDown');
-        assert.equal(await page.evaluate(() => document.activeElement.dataset.app), 'tripo');
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.app), 'settings');
         await page.keyboard.press('End');
         assert.equal(await page.evaluate(() => document.activeElement.dataset.app), 'blender');
         await page.keyboard.press('Escape');

@@ -8,6 +8,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
 
 (async () => {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-recovery-ui-'));
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-recovery-output-'));
     const png = await sharp({ create: { width: 128, height: 96, channels: 3, background: '#62aa8a' } }).png().toBuffer();
     const requests = [];
     let downloads = 0;
@@ -25,9 +26,9 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     try {
-        const targetDir = path.join(profile, 'outputs');
+        // Generated media must be saved outside userData: the media access policy refuses app config paths.
+        const targetDir = outputDir;
         await fs.mkdir(path.join(profile, 'data'));
-        await fs.mkdir(targetDir);
         const node = { id: 'image-node', kind: 'op', nodeType: 'image', config: { prompt: 'recover me' }, x: 10, y: 10, width: 400, height: 300, runStatus: 'canceled' };
         await fs.writeFile(path.join(profile, 'data/board.json'), JSON.stringify({ version: 1, activeGroupId: 'other', items: [], connections: [],
             folderGroups: [{ id: 'original', name: 'Original', savedItems: [node], connections: [], folders: [], boardRevision: 0 },
@@ -36,7 +37,13 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         const env = { ...process.env, FLOW_MCP_SMOKE_PROFILE: profile };
         delete env.ELECTRON_RUN_AS_NODE;
         app = await electron.launch({ executablePath: require('electron'), args: [path.join(__dirname, 'mcp-client-smoke-entry.cjs')], env });
-        const page = await app.firstWindow();
+        // The first window is the splash screen, which closes once the canvas is ready.
+        let page;
+        for (let attempt = 0; attempt < 100 && !page; attempt++) {
+            page = app.windows().find(window => /dist[/\\]index\.html/.test(window.url()));
+            if (!page) await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        assert.ok(page, 'The main window must open');
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         await page.waitForSelector('#agentTaskHistoryBtn', { state: 'attached' });
@@ -60,7 +67,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         assert.equal(await history.locator('.agent-task-prompt').innerText(), 'recover me');
         await history.locator('[data-copy-task-prompt]:not([data-copy-task-request])').click();
         assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), 'recover me');
-        await history.locator('.agent-task-request summary').click();
+        await history.locator('.agent-task-request', { has: page.locator('[data-copy-task-request]') }).locator('summary').click();
         await history.locator('[data-copy-task-request]').click();
         assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), 'reference mapping\nrecover me');
         const recover = page.locator('[data-recover-task="local-image"]:not([data-edit-task-id])');
@@ -74,12 +81,16 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         assert.equal(state.activeGroupId, 'other');
         assert.equal(state.items.length, 0);
         let restored = state.folderGroups.find(g => g.id === 'original').savedItems[0];
-        assert.equal(restored.width, 400); assert.equal(restored.height, 300);
+        // Recovery sizes the node from the downloaded 128x96 image (image long edge 264), as in generation-recovery-board.test.mjs.
+        assert.equal(restored.width, 264); assert.equal(restored.height, 198);
         assert.equal(restored.runStatus, 'done');
         assert.equal(restored.generation.promptDraftConfig.prompt, 'recover me');
         assert.equal(restored.generation.requestPrompt, 'reference mapping\nrecover me');
         await fs.access(restored.filePath);
         const count = requests.length;
+        // Successful tasks fold their recovery controls into the collapsed advanced-recovery panel.
+        const advanced = page.locator('[data-task-recovery-id="local-image"]');
+        if (!await advanced.evaluate(element => element.open)) await advanced.locator('> summary').click();
         await recover.click();
         await page.waitForFunction(() => JSON.parse(localStorage.getItem('flow-canvas-generation-tasks')).find(t => t.id === 'local-image').status === 'success');
         assert.equal(requests.length, count, 'cached recovery must not request server again');
@@ -96,7 +107,11 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await page.evaluate(() => localStorage.removeItem('flow-canvas-generation-tasks'));
         await page.reload();
         await page.locator('#agentTaskHistoryBtn').click();
-        await page.waitForSelector('[data-recover-task="local-image"]');
+        // The restored success task keeps its recovery buttons inside the collapsed advanced-recovery panel.
+        await page.waitForSelector('[data-recover-task="local-image"]', { state: 'attached' });
+        const reloadedAdvanced = page.locator('[data-task-recovery-id="local-image"]');
+        if (!await reloadedAdvanced.evaluate(element => element.open)) await reloadedAdvanced.locator('> summary').click();
+        await page.locator('[data-recover-task="local-image"]:not([data-edit-task-id])').waitFor({ state: 'visible' });
         state = await page.evaluate(() => window.flowCanvas.store.load());
         restored = state.folderGroups.find(g => g.id === 'original').savedItems[0];
         assert.equal(restored.resultEntries.length, 1);
@@ -109,5 +124,6 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         server.closeAllConnections();
         await new Promise(resolve => server.close(resolve));
         await fs.rm(profile, { recursive: true, force: true });
+        await fs.rm(outputDir, { recursive: true, force: true });
     }
 })().catch(error => { console.error(error); process.exitCode = 1; });

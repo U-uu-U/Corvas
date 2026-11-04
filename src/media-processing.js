@@ -246,7 +246,8 @@ export class MediaProcessingPanel {
         const host = this.el.querySelector('[data-preview-host]');
         host.querySelector('video, audio')?.pause();
         const element = document.createElement(info.kind === 'image' ? 'img' : info.kind);
-        element.src = `local-res://${encodeURIComponent(info.filePath)}`;
+        if (info.kind !== 'image') element.crossOrigin = 'anonymous';
+        element.src = `${info.kind === 'image' ? 'local-res://' : 'local-media://file/'}${encodeURIComponent(info.filePath)}`;
         if (info.kind === 'image') element.alt = info.name;
         else { element.controls = true; element.preload = 'metadata'; }
         host.replaceChildren(element);

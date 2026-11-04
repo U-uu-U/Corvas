@@ -25,6 +25,10 @@ const { _electron: electron, chromium } = require(process.env.PLAYWRIGHT_MODULE 
         }
         assert.ok(page, 'Main window opens');
         await page.waitForFunction(() => document.querySelector('#hunyuanAccountsPanel'));
+        await page.waitForFunction(() => window.Konva?.stages?.length > 0);
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
     };
     const panel = () => page.locator('#hunyuanAccountsPanel');
     const openPanel = async () => {

@@ -20,10 +20,19 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         }
         assert.ok(page, 'The renderer window must open');
         await page.waitForFunction(() => window.flowCanvas?.store);
+        await page.waitForFunction(() => window.Konva?.stages?.length);
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
+        const healthBundle = await require('esbuild').build({
+            entryPoints: [path.join(__dirname, '../src/generation-health-indicator.js')], bundle: true,
+            format: 'iife', globalName: 'GenerationHealthSmoke', write: false
+        });
+        await page.addScriptTag({ content: healthBundle.outputFiles[0].text });
         const source = await fs.readFile(path.join(__dirname, '../src/canvas.js'), 'utf8');
         const methods = source.slice(source.indexOf('    _showGenerationComposerModelMenu('), source.indexOf('    _showGenerationComposerPromptPresets('));
         await page.evaluate(methods => {
-            const Fixture = new Function(`return class { ${methods} }`)();
+            const Fixture = new Function('appendGenerationHealth', `return class { ${methods} }`)(window.GenerationHealthSmoke.appendGenerationHealth);
             const fixture = new Fixture();
             const data = { nodeType: 'video', config: {} };
             const providers = [

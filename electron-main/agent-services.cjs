@@ -46,7 +46,7 @@ async function createAgentServices({ store, bridge, apiConfigStore, dataDir, get
             const abort = () => { if (!current.isDestroyed()) current.destroy(); };
             signal?.addEventListener('abort', abort, { once: true });
             try {
-                return await current.webContents.executeJavaScript(`window.readAgentFrames(${JSON.stringify('local-res://' + encodeURIComponent(filePath))}, ${JSON.stringify(time ?? null)})`);
+                return await current.webContents.executeJavaScript(`window.readAgentFrames(${JSON.stringify('local-media://file/' + encodeURIComponent(filePath))}, ${JSON.stringify(time ?? null)})`);
             } finally {
                 signal?.removeEventListener('abort', abort);
                 if (!current.isDestroyed()) current.destroy();

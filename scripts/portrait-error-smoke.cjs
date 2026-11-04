@@ -7,8 +7,8 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
 
 (async () => {
     const scenarios = {
-        portrait: { reason: 'For 肖像保护, Dreamina Seedance 2.5 只支持生成包含您自己的视频. 请换一张参考图, or create a video from text。', code: 'RH_PORTRAIT_SELF_REQUIRED', text: '本人肖像', label: '肖像保护限制' },
-        copyright: { reason: '素材图片包含版权内容，审核未通过', code: 'RH_REFERENCE_COPYRIGHT', text: '版权保护', label: '参考素材版权限制' },
+        portrait: { reason: 'For 肖像保护, Dreamina Seedance 2.5 只支持生成包含您自己的视频. 请换一张参考图, or create a video from text。', code: 'RH_PORTRAIT_SELF_REQUIRED', text: '肖像保护', label: '肖像保护限制' },
+        copyright: { reason: '素材图片包含版权内容，审核未通过', code: 'RH_REFERENCE_COPYRIGHT', text: '版权内容', label: '参考素材版权限制' },
         content: { reason: '内容审核未通过，请修改后重试', code: 'RH_CONTENT_REJECTED', text: '内容审核未通过', label: '内容审核未通过' }
     };
     const scenarioName = process.env.FLOW_ERROR_SCENARIO || 'portrait';

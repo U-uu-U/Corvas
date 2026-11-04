@@ -8,6 +8,8 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
 
 (async () => {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'corvas-routing-'));
+    // User media lives outside userData; the media policy rejects files at the profile root.
+    const mediaDir = await fs.mkdtemp(path.join(os.tmpdir(), 'corvas-routing-media-'));
     const requests = [];
     const png = await sharp({ create: { width: 512, height: 512, channels: 3, background: '#879aa6' } }).png().toBuffer();
     const server = http.createServer(async (req, res) => {
@@ -26,7 +28,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         const endpoint = `http://127.0.0.1:${server.address().port}/v1`;
         await fs.mkdir(path.join(profile, 'data'));
         await fs.writeFile(path.join(profile, 'data/board.json'), JSON.stringify({ version: 1, items: [], folderGroups: [], mcp: { enabled: false } }));
-        const filePath = path.join(profile, 'reference.png');
+        const filePath = path.join(mediaDir, 'reference.png');
         await fs.writeFile(filePath, png);
         const env = { ...process.env, FLOW_MCP_SMOKE_PROFILE: profile };
         delete env.ELECTRON_RUN_AS_NODE;
@@ -52,15 +54,15 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         }, { endpoint, filePath });
         assert.equal(requests.length, 0, 'All mismatched text calls must stop before network access');
         assert.ok(blocked.every(result => result.success === false && result.code === 'TEXT_PROVIDER_REQUIRED'));
-        const results = await page.evaluate(async ({ endpoint, filePath, profile }) => {
+        const results = await page.evaluate(async ({ endpoint, filePath, mediaDir }) => {
             const provider = { capability: 'text', endpoint, apiKey: 'fixture-key', model: 'gpt-5.5', type: 'openai' };
             const text = await window.flowCanvas.ai.generateText({ provider, prompt: 'test' });
             const image = await window.flowCanvas.mcp.generateImage({ provider: 'openai',
                 providerConfig: { ...provider, capability: 'image', model: 'gpt-image-2' },
                 prompt: 'test image', size: '512x512', quality: 'high', stream: false,
-                sourceReferences: [{ filePath }], targetDir: profile, addToCanvas: false });
+                sourceReferences: [{ filePath }], targetDir: mediaDir, addToCanvas: false });
             return { text, image: { success: image.success, error: image.error, filePath: image.filePath } };
-        }, { endpoint, filePath, profile });
+        }, { endpoint, filePath, mediaDir });
         assert.equal(results.text.success, true, results.text.error);
         assert.equal(results.image.success, true, results.image.error);
         assert.ok(results.image.filePath);
@@ -74,5 +76,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         assert.equal(path.dirname(profile), path.resolve(os.tmpdir()));
         assert.ok(path.basename(profile).startsWith('corvas-routing-'));
         await fs.rm(profile, { recursive: true, force: true });
+        assert.ok(path.basename(mediaDir).startsWith('corvas-routing-media-'));
+        await fs.rm(mediaDir, { recursive: true, force: true });
     }
 })().catch(error => { console.error(error); process.exitCode = 1; });
