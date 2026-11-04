@@ -142,6 +142,40 @@
           "anchor": "top"
         }
       ]
+    },
+    {
+      "name": "leg",
+      "job": "4d76322dd81a04169c67937d8b778fad",
+      "size": 330,
+      "rotate": [
+        [
+          "x",
+          90
+        ]
+      ],
+      "instances": [
+        {
+          "name": "Landing leg right",
+          "position": [
+            230,
+            0,
+            -170
+          ],
+          "anchor": "top",
+          "rotateZ": 90
+        },
+        {
+          "name": "Landing leg left",
+          "position": [
+            -230,
+            0,
+            -170
+          ],
+          "anchor": "top",
+          "rotateZ": 90,
+          "mirrorX": true
+        }
+      ]
     }
   ]
 }
