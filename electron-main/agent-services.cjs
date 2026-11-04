@@ -139,6 +139,13 @@ async function createAgentServices({ store, bridge, apiConfigStore, dataDir, get
             const action = name.slice('flow_canvas.agent.'.length);
             if (action === 'confirm') throw new Error('请在 Corvas 任务卡中确认计划');
             if (!['start', 'get', 'list', 'cancel', 'resume', 'revise', 'retry'].includes(action)) throw new Error('Unknown runtime action');
+            if (action === 'start' && !input.provider) {
+                // The sidebar resolves its text model in the renderer; external callers name one by
+                // providerId/model or use the saved default, resolved against the effective CONFIG.
+                const modelConfig = await readModelConfig();
+                const provider = generation.resolveProvider({ id: input.providerId, model: input.model }, 'text', modelConfig);
+                return runtime.start({ ...input, provider, projectId, conversationId: input.conversationId || 'external-harness' });
+            }
             return runtime[action]({ ...input, projectId, conversationId: input.conversationId || 'external-harness' });
         }
         if (['flow_canvas.graph.run', 'flow_canvas.memory.propose'].includes(name)) {return runtime.propose({ projectId,
