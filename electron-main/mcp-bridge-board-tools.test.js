@@ -374,3 +374,23 @@ function waitForListening(server) {
         server.once('error', reject);
     });
 }
+
+test('external image/video calls resolve accounts by providerId and never fall back to a placeholder', async () => {
+    const { bridge } = createBridge();
+    const seen = [];
+    bridge.generateImageFromRenderer = async body => { seen.push(['image', body]); return { success: true }; };
+    bridge.generateVideoFromRenderer = async body => { seen.push(['video', body]); return { success: true }; };
+    await assert.rejects(bridge._generateImage({ prompt: 'x' }), error => error.code === 'INVALID_ARGUMENTS' && /providerId/.test(error.message));
+    await assert.rejects(bridge._generateImage({ prompt: 'x', providerConfig: { apiKey: 'leak' } }), error => error.code === 'INVALID_ARGUMENTS');
+    await assert.rejects(bridge._generateImage({ prompt: 'x', providerId: 'p1' }), error => error.code === 'TOOL_UNAVAILABLE');
+    bridge.externalProviderResolver = async (id, kind) => (id === 'p1' && kind === 'image')
+        ? { id: 'p1', model: 'gpt-image-2', apiKey: 'local-only' } : null;
+    await assert.rejects(bridge._generateVideo({ prompt: 'x', providerId: 'p1' }), error => error.code === 'INVALID_ARGUMENTS');
+    await bridge._generateImage({ prompt: 'x', providerId: 'p1' });
+    assert.equal(seen.length, 1);
+    assert.deepEqual(seen[0][1], { prompt: 'x', provider: 'auto', model: 'gpt-image-2',
+        providerConfig: { id: 'p1', model: 'gpt-image-2', apiKey: 'local-only' } });
+    await bridge._generateImage({ prompt: 'x', provider: 'builtin' });
+    assert.equal(seen[1][1].provider, 'builtin');
+    assert.equal(seen[1][1].providerConfig, undefined);
+});

@@ -125,6 +125,13 @@ async function createAgentServices({ store, bridge, apiConfigStore, dataDir, get
         if (name.endsWith('.undo')) return board.undo(projectId, input.undoToken);
         throw new Error('Unknown board tool');
     };
+    // External image/video MCP calls name a model by its flow_canvas.model.list id; only
+    // models that list exposes (visible, enabled, matching kind) resolve to an account.
+    bridge.externalProviderResolver = async (providerId, kind) => {
+        const modelConfig = await readModelConfig();
+        if (!generation.listModels(modelConfig).some(entry => entry.id === providerId && entry.kind === kind)) return null;
+        return generation.providers(modelConfig).find(provider => provider.id === providerId) || null;
+    };
     bridge.agentExecutor = async (name, input = {}) => {
         const projectId = input.projectId ?? store.load().activeGroupId;
         if (name.startsWith('flow_canvas.agent.')) {
