@@ -3602,9 +3602,10 @@ export class CanvasManager {
                 }));
             let imageUrls = collectDroppedImageUrls(e.dataTransfer);
             const files = Array.from(e.dataTransfer.files || []);
+            const filePathOf = file => file.path || window.flowCanvas?.getPathForFile?.(file) || '';
             const dropPosition = { offsetX: e.offsetX, offsetY: e.offsetY };
             const inMemoryFiles = files
-                .filter(file => !file.path && file.size > 0 && /^image\//i.test(file.type))
+                .filter(file => !filePathOf(file) && file.size > 0 && /^image\//i.test(file.type))
                 .map(file => ({
                     name: file.name,
                     type: file.type,
@@ -3639,14 +3640,15 @@ export class CanvasManager {
             if (files.length > 0) {
                 for (let i = 0; i < files.length; i++) {
                     const file = files[i];
-                    if (file.path) {
-                        const result = await this._archiveLocalDroppedFile(file.path, targetDir);
+                    const localPath = filePathOf(file);
+                    if (localPath) {
+                        const result = await this._archiveLocalDroppedFile(localPath, targetDir);
                         if (result?.success) {
                             this._addCapturedFile(result.filePath, dropPosition);
                             importedFileCount += 1;
                         } else {
                             console.error('[Canvas] 归档本地文件失败:', result?.error);
-                            this._addCapturedFile(file.path, dropPosition);
+                            this._addCapturedFile(localPath, dropPosition);
                             importedFileCount += 1;
                         }
                     }

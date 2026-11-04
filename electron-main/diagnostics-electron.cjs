@@ -33,8 +33,8 @@ function installDiagnostics({ getWindow, getTasks, getSecrets, getConfigStatus }
     app.on('before-quit', () => { log.record('info', 'app.quit'); log.flush(); });
     app.on('will-quit', () => log.flush());
     app.on('web-contents-created', (_event, web) => {
-        web.on('console-message', (_e, level, message, line, source) => {
-            if (level >= 2) log.record(level === 2 ? 'warn' : 'error', 'renderer.console', { webContentsId: web.id, message, line, source });
+        web.on('console-message', ({ level, message, lineNumber: line, sourceId: source }) => {
+            if (level === 'warning' || level === 'error') log.record(level === 'warning' ? 'warn' : 'error', 'renderer.console', { webContentsId: web.id, message, line, source });
         });
         web.on('render-process-gone', (_e, details) => { log.record('error', 'renderer.gone', { webContentsId: web.id, ...details }); log.flush(); });
         web.on('unresponsive', () => log.record('error', 'renderer.unresponsive', { webContentsId: web.id }));
@@ -126,10 +126,10 @@ function installDiagnostics({ getWindow, getTasks, getSecrets, getConfigStatus }
         log.record('info', 'diagnostics.submitted', { reportId: receipt.reportId, requestId: input?.requestId });
         return receipt;
     });
-    ipcMain.handle('diagnostics:copy', event => {
+    ipcMain.handle('diagnostics:copy', async event => {
         if (!trusted(event)) throw new Error('Invalid sender');
         const data = report();
-        clipboard.writeText(JSON.stringify({ ...data, events: data.events.slice(-150) }, null, 2));
+        await clipboard.writeText(JSON.stringify({ ...data, events: data.events.slice(-150) }, null, 2));
         return { success: true };
     });
     ipcMain.handle('diagnostics:export', async event => {

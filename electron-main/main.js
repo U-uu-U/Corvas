@@ -1624,7 +1624,7 @@ for (const action of ['status', 'start', 'stop', 'copy', 'copy-url']) {
             await operation;
         } else if (action === 'copy' || action === 'copy-url') {
             const status = mcpServerStatus();
-            clipboard.writeText(action === 'copy-url' ? status.url : mcpServerConnectionInfo(status.url));
+            await clipboard.writeText(action === 'copy-url' ? status.url : mcpServerConnectionInfo(status.url));
             return { ...status, copied: true };
         }
         return mcpServerStatus();
@@ -1649,7 +1649,7 @@ for (const action of ['create', 'list', 'get', 'copy', 'open', 'cancel']) {
         if (action === 'copy') {
             const task = agentServices.handoff.get(request || {});
             const input = JSON.stringify({ projectId: task.projectId, taskId: task.id });
-            clipboard.writeText(`请接手 Corvas 的 ${task.target === 'blender' ? 'Blender' : 'Rhino'} 任务。\n`
+            await clipboard.writeText(`请接手 Corvas 的 ${task.target === 'blender' ? 'Blender' : 'Rhino'} 任务。\n`
                 + `先调用 flow_canvas.handoff.get，参数 ${input}；核对原项目、任务要求和 referenceIssues。\n`
                 + '已有 owner 时沿用 task.owner.clientId 接续原任务；尚未接手时使用当前对话的稳定 clientId 调用 handoff.claim。'
                 + '可在 claim 中附上当前 codex://threads/ 对话链接，便于返回对话；再用 handoff.tools 读取真实工具 schema。'
@@ -1733,7 +1733,7 @@ for (const action of ['status', 'save', 'open', 'choose', 'copyCommand']) {
             return result.canceled ? rhinoWorkbench.status() : rhinoWorkbench.save({ executablePath: result.filePaths[0] });
         }
         if (action === 'copyCommand') {
-            clipboard.writeText(rhinoWorkbench.connectionCommand());
+            await clipboard.writeText(rhinoWorkbench.connectionCommand());
             return { success: true };
         }
         return rhinoWorkbench[action](request || {});
@@ -2105,8 +2105,8 @@ function writeTextWithPowerShell(text) {
 async function writePlainTextToClipboard(text) {
     const value = String(text || '');
     try {
-        clipboard.writeText(value, 'clipboard');
-        if (clipboard.readText('clipboard') === value) {
+        await clipboard.writeText(value);
+        if (await clipboard.readText() === value) {
             return { success: true, type: 'text', method: 'electron', verified: true };
         }
     } catch (err) {
@@ -2856,16 +2856,25 @@ ipcMain.handle('image:crop', async (_, body = {}) => {
 // 从剪贴板读取图片并保存
 ipcMain.handle('image:pasteFromClipboard', async (_, targetDir) => {
     try {
-        const img = clipboard.readImage();
+        // Electron 44+ clipboard API: read() resolves to W3C-style ClipboardItem[].
+        const items = await clipboard.read();
+        const readType = async (type, asText) => {
+            const item = items.find(entry => entry.types.includes(type));
+            if (!item) return null;
+            const blob = await item.getType(type);
+            return asText ? blob.text() : Buffer.from(await blob.arrayBuffer());
+        };
+        const png = await readType('image/png', false);
+        const img = png ? nativeImage.createFromBuffer(png) : nativeImage.createEmpty();
         if (img.isEmpty()) {
             // 尝试读取剪贴板中的 HTML
-            const html = clipboard.readHTML();
+            const html = await readType('text/html', true);
             const match = html && html.match(/src=["']([^"']+)["']/);
             if (match && match[1] && /^https?:\/\//i.test(match[1])) {
                 // 复用 downloadFromUrl 逻辑（手动内联以避免 ipcMain.handle 递归问题）
                 return await downloadImageFromUrl(match[1], targetDir);
             }
-            const text = clipboard.readText();
+            const text = await clipboard.readText();
             if (text && /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|bmp)/i.test(text)) {
                 return await downloadImageFromUrl(text, targetDir);
             }
