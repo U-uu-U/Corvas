@@ -19,7 +19,7 @@ function setup(t) {
     } }, cancel: ({ runId }) => { runtime.runs.get(runId).status = 'canceled'; },
     resume: ({ runId }) => { calls.push('resume'); const run = runtime.runs.get(runId); run.status = 'running'; return run; } };
     const accounts = { account: id => { assert.equal(id, accountId); },
-        list: () => ({ accounts: [{ id: accountId, name: 'fixture', windowOpen: true }] }),
+        list: () => ({ accounts: [{ id: accountId, name: 'fixture', windowOpen: true, status: 'open' }] }),
         currentModel: async id => { assert.equal(id, accountId); return source; },
         modelSource: (id, generation) => { assert.equal(id, accountId); assert.equal(generation, generationId); return source; },
         downloadModel: async () => { calls.push('download'); if (downloadGate) await downloadGate; return path.join(directory, 'model.fbx'); } };
@@ -357,4 +357,12 @@ test('workflow.generate submits once per requestId, records unknown outcomes and
     await assert.rejects(h.call('generate', { ...input, requestId: 'gen-g' }), /登录/);
     h.accounts.submitGeometry = async () => ({ submitted: true, worksId: 'works-3' });
     assert.equal((await h.call('generate', { ...input, requestId: 'gen-g' })).worksId, 'works-3');
+    // A confirmation after a restart finds the window closed; generate reopens it first.
+    let windowOpen = false; const opened = [];
+    const list = h.accounts.list;
+    h.accounts.list = () => ({ accounts: [{ ...list().accounts[0], windowOpen, status: windowOpen ? 'open' : 'closed' }] });
+    h.accounts.open = ({ id }) => { opened.push(id); windowOpen = true; };
+    h.accounts.submitGeometry = async () => ({ submitted: true, worksId: 'works-4' });
+    assert.equal((await h.call('generate', { ...input, requestId: 'gen-h' })).worksId, 'works-4');
+    assert.deepEqual(opened, [accountId]);
 });

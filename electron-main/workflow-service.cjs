@@ -95,6 +95,13 @@ class WorkflowService {
             return { ...previous.result, reused: true };
         }
         if (!this.prepareGenerationViews) throw fail('WORKFLOW_UNAVAILABLE', '混元图片读取服务尚未就绪');
+        // A confirmation can arrive after a restart closed the account window. Opening it is
+        // free and submits nothing, so reopen it before sending.
+        const listed = accounts.list().accounts.find(account => account.id === input.accountId);
+        if (!listed?.windowOpen || listed.status !== 'open') {
+            const opened = await this.open_account({ accountId: input.accountId });
+            if (opened.status !== 'open') throw fail('SOURCE_UNAVAILABLE', '混元窗口未能打开或需要登录，请在该窗口登录后重试');
+        }
         const prepared = await this.prepareGenerationViews(input.views);
         const save = result => {
             receipts[input.requestId] = { fingerprint, result, label: input.label, updatedAt: Date.now() };
