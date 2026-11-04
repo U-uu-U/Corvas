@@ -63,6 +63,7 @@ async function createAgentServices({ store, bridge, apiConfigStore, dataDir, get
     bridge.projectItemAdder = async (projectId, add) => (await board.updateProject(projectId, add)).value;
     const runtime = new AgentRuntime({ runStore: new AgentRunStore(path.join(dataDir, 'agent-runs')), board,
         boardDefinitions: BOARD_TOOL_DEFINITIONS,
+        workflowDefinitions: require('../shared/workflow-tools.cjs').WORKFLOW_TOOL_DEFINITIONS,
         resolveProvider: (binding, kind) => generation.resolveProvider(binding, kind),
         callProvider: request => callAgentProvider({ ...request, fetchImpl: (...args) => net.fetch(...args) }),
         listModels: async () => generation.listModels(await readModelConfig()), readMedia: (...args) => media.read(...args),

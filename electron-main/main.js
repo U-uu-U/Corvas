@@ -720,6 +720,8 @@ async function initServices() {
         return prepared;
     };
     flowCanvasBridge.workflowExecutor = (name, input) => workflows.execute(name, input);
+    // The canvas Agent drives the same fixed Hunyuan -> Rhino workflow as external MCP.
+    agentServices.runtime.workflowExecutor = (name, input) => workflows.execute(name, input);
     if (readMcpServerEnabled()) flowCanvasBridge.start({ ...mcpConfig, enabled: true });
     else flowCanvasBridge.port = Number(mcpConfig.port) || DEFAULT_MCP_CONFIG.port;
 
