@@ -20,7 +20,7 @@ async function createAgentServices({ store, bridge, apiConfigStore, dataDir, get
             projectIds: change.projectIds, data: store.load() }));}
     } });
     const readModelConfig = createEffectiveModelConfigReader({ getMainWindow });
-    const generation = new AgentGeneration({ board, bridge, loadConfig: () => apiConfigStore.load().config || {},
+    const generation = new AgentGeneration({ board, bridge, loadConfig: () => (apiConfigStore.cached ? apiConfigStore.cached() : apiConfigStore.load()).config || {},
         loadModelConfig: () => { throw Object.assign(new Error('请先读取已生效 CONFIG 快照'), { code: 'MODEL_CONFIG_UNAVAILABLE' }); },
         refreshModelConfig: readModelConfig, fallbackDir: getSaveDir() });
     const { installGenerationRecoveryBoard } = await import('./generation-recovery-board.mjs');
@@ -57,6 +57,7 @@ async function createAgentServices({ store, bridge, apiConfigStore, dataDir, get
     } });
     const { McpClientManager } = require('./mcp-client.cjs');
     const mcpClient = new McpClientManager({ directory: dataDir, safeStorage });
+    await mcpClient.load();
     const handoff = new ExternalHandoffService({ directory: dataDir, board, mcpClient });
     bridge.handoffExecutor = (name, input) => handoff.execute(name, input);
     bridge.projectItemAdder = async (projectId, add) => (await board.updateProject(projectId, add)).value;

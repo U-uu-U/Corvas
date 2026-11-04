@@ -143,7 +143,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await reopened.locator('#connect[data-state="connected"]').waitFor();
         assert.equal(accountKeys.ai.length, 3, 'Saved image login is reused after closing the browser');
         assert.equal(Object.values(accountKeys).reduce((count, keys) => count + keys.length, 0), 9);
-        const linked = await app.evaluate(() => global.relayAccountStore.load().config.providers);
+        const linked = await app.evaluate(async () => (await global.relayAccountStore.load()).config.providers);
         assert.equal(linked.length, 6);
         assert.equal(linked[0].endpoint, 'https://ai.ravenhash.org/v1');
         assert.equal(linked[0].capability, 'image');

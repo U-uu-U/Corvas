@@ -78,21 +78,29 @@ class McpClientManager {
         this.epoch = new Map();
         this.closed = false;
         this.loadError = '';
-        try {
-            const payload = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-            const configs = JSON.parse(safeStorage.decryptString(Buffer.from(payload.encrypted, 'base64')));
-            if (!Array.isArray(configs) || configs.some(c => !c || typeof c.id !== 'string' || !c.id)
-                || new Set(configs.map(c => c.id)).size !== configs.length) throw new Error('Invalid MCP configuration');
-            this.configs = configs.map(c => normalize(c, c));
-        } catch (error) {
-            if (error.code !== 'ENOENT') this.loadError = 'MCP 配置无法解密或已损坏，原文件已保留';
-        }
+        this.loaded = null;
     }
-    persist() {
+    // Decrypts the saved configuration once; every public entry point awaits it.
+    load() {
+        this.loaded ||= (async () => {
+            try {
+                const payload = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+                const decrypted = await this.safeStorage.decryptStringAsync(Buffer.from(payload.encrypted, 'base64'));
+                const configs = JSON.parse(decrypted.result);
+                if (!Array.isArray(configs) || configs.some(c => !c || typeof c.id !== 'string' || !c.id)
+                    || new Set(configs.map(c => c.id)).size !== configs.length) throw new Error('Invalid MCP configuration');
+                this.configs = configs.map(c => normalize(c, c));
+            } catch (error) {
+                if (error.code !== 'ENOENT') this.loadError = 'MCP 配置无法解密或已损坏，原文件已保留';
+            }
+        })();
+        return this.loaded;
+    }
+    async persist() {
         if (this.loadError) throw new Error(this.loadError);
-        if (!this.safeStorage?.isEncryptionAvailable()) throw new Error('系统凭据加密不可用，未保存 MCP 配置');
+        if (!await this.safeStorage?.isAsyncEncryptionAvailable?.()) throw new Error('系统凭据加密不可用，未保存 MCP 配置');
         fs.mkdirSync(path.dirname(this.file), { recursive: true });
-        const encrypted = this.safeStorage.encryptString(JSON.stringify(this.configs)).toString('base64');
+        const encrypted = (await this.safeStorage.encryptStringAsync(JSON.stringify(this.configs))).toString('base64');
         fs.writeFileSync(`${this.file}.tmp`, JSON.stringify({ version: 1, encrypted }), { mode: 0o600 });
         fs.renameSync(`${this.file}.tmp`, this.file);
     }
@@ -114,21 +122,29 @@ class McpClientManager {
                     .map(t => ({ name: t.remoteName, description: t.description, inputSchema: t.inputSchema, readOnly: t.readOnly })) };
         }) };
     }
-    async save(input) {
+    // Async encryption must not let two edits read the same previous list.
+    mutate(work) {
+        const run = (this.writes || Promise.resolve()).then(async () => { await this.load(); return work(); });
+        this.writes = run.catch(() => {});
+        return run;
+    }
+    save(input) { return this.mutate(() => this.saveNow(input)); }
+    async saveNow(input) {
         const index = this.configs.findIndex(c => c.id === input.id);
         if (input.id && index < 0) throw new Error('MCP 配置不存在');
         const config = normalize(input, index < 0 ? {} : this.configs[index]);
         const previous = this.configs;
         this.configs = index < 0 ? [...previous, config] : previous.map(c => c.id === config.id ? config : c);
-        try { this.persist(); } catch (error) { this.configs = previous; throw error; }
+        try { await this.persist(); } catch (error) { this.configs = previous; throw error; }
         await this.disconnect(config.id);
         this.errors.delete(config.id);
         return this.list();
     }
-    async remove({ id }) {
+    remove(input) { return this.mutate(() => this.removeNow(input)); }
+    async removeNow({ id }) {
         const previous = this.configs;
         this.configs = previous.filter(c => c.id !== id);
-        try { this.persist(); } catch (error) { this.configs = previous; throw error; }
+        try { await this.persist(); } catch (error) { this.configs = previous; throw error; }
         await this.disconnect(id);
         return this.list();
     }

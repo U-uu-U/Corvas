@@ -2,7 +2,7 @@
 // Corvas — Electron Main Process
 // ============================================================
 
-const { app, BrowserWindow, BrowserView, ipcMain, shell, clipboard, nativeImage, dialog, protocol, net, Menu, screen, safeStorage, session } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, nativeImage, dialog, protocol, net, Menu, screen, safeStorage, session } = require('electron');
 const path = require('path');
 require('./app-identity.cjs').configureAppIdentity(app);
 const util = require('util');
@@ -163,7 +163,7 @@ require('./diagnostics-electron.cjs').installDiagnostics({
     getTasks: () => flowCanvasBridge?.recoveryStore.list() || [],
     getConfigStatus: async () => (await flowCanvasBridge?._modelConfig(false))?.status || {},
     getSecrets: () => {
-        const keys = (apiConfigStore?.load()?.config?.providers || []).map(provider => provider.apiKey).filter(Boolean);
+        const keys = (apiConfigStore?.cached()?.config?.providers || []).map(provider => provider.apiKey).filter(Boolean);
         try { keys.push(...(agentServices?.runtime?.getSecrets?.() || [])); } catch { /* Runtime may still be initializing. */ }
         return keys;
     }
@@ -630,13 +630,15 @@ async function initServices() {
         grantFile: file => mediaAccess.grant(file)
     });
     apiConfigStore = new ApiConfigStore(app.getPath('userData'), {
-        protect: value => safeStorage.isEncryptionAvailable()
-            ? safeStorage.encryptString(value)
+        protect: async value => await safeStorage.isAsyncEncryptionAvailable()
+            ? safeStorage.encryptStringAsync(value)
             : null,
-        unprotect: value => safeStorage.isEncryptionAvailable()
-            ? safeStorage.decryptString(value)
+        unprotect: async value => await safeStorage.isAsyncEncryptionAvailable()
+            ? (await safeStorage.decryptStringAsync(value)).result
             : null
     });
+    // Synchronous readers (Agent providers, diagnostics redaction) use the loaded snapshot.
+    await apiConfigStore.load();
     browserSyncService = new BrowserSyncService(store);
     thumbnailer = new Thumbnailer();
     watcher = new Watcher(store, (event, filePath) => {
@@ -1674,7 +1676,7 @@ function getHunyuanAccounts() {
     hunyuanRhinoWorkflow ||= new HunyuanRhinoWorkflow({ directory: path.join(app.getPath('userData'), 'data'),
         getAccounts: () => hunyuanAccounts, getRhino: getRhinoWorkbench, getRuntime: () => agentServices.runtime,
         getProjectId: () => store.load().activeGroupId,
-        readMode: () => apiConfigStore.load().config?.globalConfig?.agentExecutionMode,
+        readMode: () => apiConfigStore.cached().config?.globalConfig?.agentExecutionMode,
         onChange: state => {
             hunyuanAccounts?.syncWorkflow();
             if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hunyuan:workflow-changed', state);
@@ -1777,16 +1779,16 @@ ipcMain.on('mcp:board-tool-response', (event, payload) => {
     flowCanvasBridge?.handleBoardToolResponse(payload || {});
 });
 
-ipcMain.handle('api-config:load', () => {
+ipcMain.handle('api-config:load', async () => {
     if (!apiConfigStore) return { success: false, error: 'API 配置仓库尚未初始化' };
-    const result = apiConfigStore.load();
+    const result = await apiConfigStore.load();
     if (result.recoveredFromBackup) {
         console.warn('[API Config] 主配置损坏，已从加密备份恢复');
     }
     return result;
 });
 
-ipcMain.handle('api-config:save', (_, config) => {
+ipcMain.handle('api-config:save', async (_, config) => {
     if (!apiConfigStore) return { success: false, error: 'API 配置仓库尚未初始化' };
     return apiConfigStore.save(config || {});
 });
@@ -2299,7 +2301,7 @@ ipcMain.handle('creative-web:open', async (event, platform) => {
 });
 
 function getRelayBrowser() {
-    relayBrowser ||= new RelayBrowser({ BrowserWindow, BrowserView, session, shell, safeStorage,
+    relayBrowser ||= new RelayBrowser({ BrowserWindow, WebContentsView, session, shell, safeStorage,
         directory: path.join(app.getPath('userData'), 'data'),
         onAccount: account => relayAccountDelivery.send(mainWindow?.webContents, account),
         onSelectAccounts: catalog => {
@@ -2309,8 +2311,8 @@ function getRelayBrowser() {
         onState: state => {
             if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('relay-browser:accounts', state);
         },
-        getLinkedAccounts: (site, userId) => {
-            const loaded = apiConfigStore.load();
+        getLinkedAccounts: async (site, userId) => {
+            const loaded = await apiConfigStore.load();
             if (!loaded.success) throw new Error('API config unavailable');
             return (loaded.config?.providers || []).filter(provider => provider.relayAccount?.site === site
                 && provider.relayAccount?.userId === userId).map(provider => provider.relayAccount);
@@ -2329,7 +2331,7 @@ ipcMain.handle('relay-browser:open', async (event, options = {}) => {
     if (!site && options.nodeId) {
         const node = store.load().items?.find(item => item.id === options.nodeId);
         const providerId = node?.generation?.sourceProviderId || node?.generation?.providerId || node?.config?.providerId;
-        const providers = apiConfigStore.load()?.config?.providers || [];
+        const providers = (await apiConfigStore.load())?.config?.providers || [];
         const provider = providers.find(provider => provider.id === String(providerId || '').split('::model:')[0]);
         site = node?.generation?.relaySite || relaySite(provider?.endpoint);
         taskId ||= node?.generation?.taskId;
@@ -2861,11 +2863,19 @@ ipcMain.handle('image:pasteFromClipboard', async (_, targetDir) => {
         const readType = async (type, asText) => {
             const item = items.find(entry => entry.types.includes(type));
             if (!item) return null;
-            const blob = await item.getType(type);
-            return asText ? blob.text() : Buffer.from(await blob.arrayBuffer());
+            try {
+                const blob = await item.getType(type);
+                return asText ? blob.text() : Buffer.from(await blob.arrayBuffer());
+            } catch (_) { return null; } // A listed type can still fail to deliver; fall back below.
         };
-        const png = await readType('image/png', false);
-        const img = png ? nativeImage.createFromBuffer(png) : nativeImage.createEmpty();
+        let img = nativeImage.createEmpty();
+        const imageTypes = ['image/png', ...new Set(items.flatMap(entry => entry.types)
+            .filter(type => /^image\//i.test(type) && type !== 'image/png'))];
+        for (const type of imageTypes) {
+            const bytes = await readType(type, false);
+            const candidate = bytes ? nativeImage.createFromBuffer(bytes) : null;
+            if (candidate && !candidate.isEmpty()) { img = candidate; break; }
+        }
         if (img.isEmpty()) {
             // 尝试读取剪贴板中的 HTML
             const html = await readType('text/html', true);

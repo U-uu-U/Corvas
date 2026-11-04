@@ -66,9 +66,9 @@ if (REMOTE_CATALOG_SMOKE) {
 
 app.setPath('userData', profile);
 Object.defineProperty(app, 'isPackaged', { value: true });
-app.whenReady().then(() => {
-    const seeded = new ApiConfigStore(profile, { protect: value => safeStorage.encryptString(value),
-        unprotect: value => safeStorage.decryptString(value) }).save(seedConfig);
+app.whenReady().then(async () => {
+    const seeded = await new ApiConfigStore(profile, { protect: value => safeStorage.encryptStringAsync(value),
+        unprotect: async value => (await safeStorage.decryptStringAsync(value)).result }).save(seedConfig);
     if (seeded.success !== true) finish(1, `无法写入烟测 profile：${seeded.error}`);
 });
 

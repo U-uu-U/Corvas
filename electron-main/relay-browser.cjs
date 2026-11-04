@@ -19,8 +19,8 @@ async function bounded(work, milliseconds = 10000) {
 }
 
 class RelayBrowser {
-    constructor({ BrowserWindow, BrowserView, session, shell, directory, importer, sites = SITES, onAccount, onSelectAccounts, getLinkedAccounts, onState, safeStorage }) {
-        Object.assign(this, { BrowserWindow, BrowserView, session, shell, directory, importer, sites, onAccount, onSelectAccounts, getLinkedAccounts, onState });
+    constructor({ BrowserWindow, WebContentsView, session, shell, directory, importer, sites = SITES, onAccount, onSelectAccounts, getLinkedAccounts, onState, safeStorage }) {
+        Object.assign(this, { BrowserWindow, WebContentsView, session, shell, directory, importer, sites, onAccount, onSelectAccounts, getLinkedAccounts, onState });
         this.sessionStore = new RelaySessionStore({ directory, safeStorage });
         this.restoringSites = new Set();
         this.loggedOutSites = new Set();
@@ -122,7 +122,10 @@ class RelayBrowser {
     layout() {
         if (!this.window || this.window.isDestroyed()) return;
         const view = this.views.get(this.site);
-        this.window.setBrowserView(view || null);
+        // WebContentsView replacement for setBrowserView: show only the current site's view.
+        const content = this.window.contentView;
+        for (const child of [...content.children]) if (child !== view && [...this.views.values()].includes(child)) content.removeChildView(child);
+        if (view && !content.children.includes(view)) content.addChildView(view);
         if (view) {
             const [width, height] = this.window.getContentSize();
             view.setBounds({ x: 0, y: 56, width, height: Math.max(1, height - 56) });
@@ -141,8 +144,10 @@ class RelayBrowser {
         if (!this.views.has(site)) {
             const browserSession = this.session.fromPartition(`persist:corvas-relay-${site}`);
             this.restoringSites.add(site);
-            const view = new this.BrowserView({ webPreferences: { session: browserSession,
+            const view = new this.WebContentsView({ webPreferences: { session: browserSession,
                 sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true } });
+            // BrowserView was transparent; WebContentsView defaults to white. Match the window chrome.
+            view.setBackgroundColor('#191b1e');
             this.views.set(site, view);
             const web = view.webContents;
             web.on('will-attach-webview', event => event.preventDefault());
@@ -174,7 +179,7 @@ class RelayBrowser {
             this.layout();
             let saved;
             try {
-                saved = this.sessionStore.get(site, this.sites[site].origin);
+                saved = await this.sessionStore.get(site, this.sites[site].origin);
                 await restoreSessionCookies(browserSession, saved, this.sites[site].origin);
             } catch { this.sessionErrors.set(site, '登录状态未能恢复，请检查系统凭据服务'); }
             try {
@@ -209,7 +214,7 @@ class RelayBrowser {
         try {
             const auth = await this.readAccountAuth(site, web);
             if (!auth) {
-                if (this.accountAuth.has(site)) this.forgetSession(site);
+                if (this.accountAuth.has(site)) await this.forgetSession(site);
                 this.accountAuth.delete(site);
                 this.accountStates.set(site, { state: 'signed-out', message: '请先登录站点' });
                 if (site === this.site) this.send();
@@ -226,7 +231,7 @@ class RelayBrowser {
                 && !web.isDestroyed() && await this.readAccountAuth(site, web) === auth;
             const options = { site, origin: this.sites[site].origin, session: web.session, auth, stillCurrent };
             const catalog = await listRelayAccounts(options);
-            const previous = this.getLinkedAccounts?.(site, catalog.userId) || [];
+            const previous = await this.getLinkedAccounts?.(site, catalog.userId) || [];
             const linked = new Set(previous.map(account => account.tokenId));
             const alreadySeen = this.preferences.keyPickerSeen?.[site] === catalog.userId;
             if (manual || (!alreadySeen && !linked.size)) {
@@ -248,7 +253,7 @@ class RelayBrowser {
                 message: linked.size ? `已导入 ${linked.size} 个 API Key` : '已登录，尚未导入 API Key' });
             await this.saveSession(site);
         } catch (error) {
-            if (error.code === 'RELAY_AUTH_EXPIRED') this.forgetSession(site);
+            if (error.code === 'RELAY_AUTH_EXPIRED') await this.forgetSession(site);
             this.accountStates.set(site, { state: 'error', message: error.publicMessage || '连接未完成，请点击连接画布重试' });
         } finally {
             this.accountChecks.delete(site);
@@ -263,8 +268,8 @@ class RelayBrowser {
         this.loggedOutSites.add(site);
         const auth = this.capturedAuth.get(site);
         if (auth) this.logoutAuth.set(site, crypto.createHash('sha256').update(auth).digest('hex'));
-        try { this.sessionStore.clear(site); }
-        catch { this.sessionErrors.set(site, '登录状态未能清除，请检查系统凭据服务'); }
+        return this.sessionStore.clear(site)
+            .catch(() => { this.sessionErrors.set(site, '登录状态未能清除，请检查系统凭据服务'); });
     }
 
     async saveSession(site) {
@@ -275,10 +280,10 @@ class RelayBrowser {
         const work = (async () => {
             const storage = await bounded(web.executeJavaScript(sessionStorageScript(this.sites[site].origin)));
             if (!storage || web.isDestroyed() || !this.sameOrigin(site, web.getURL()) || this.loggedOutSites.has(site)) return;
-            if (site !== 'ai' && !await this.readAccountAuth(site, web)) { this.forgetSession(site); return; }
+            if (site !== 'ai' && !await this.readAccountAuth(site, web)) { await this.forgetSession(site); return; }
             const cookies = await web.session.cookies.get({ url: this.sites[site].origin });
             if (this.loggedOutSites.has(site)) return;
-            this.sessionStore.save(site, this.sites[site].origin, { storage, cookies });
+            await this.sessionStore.save(site, this.sites[site].origin, { storage, cookies });
             web.session.flushStorageData();
             await web.session.cookies.flushStore();
             this.sessionErrors.delete(site);
@@ -292,6 +297,8 @@ class RelayBrowser {
         // A close must capture the final storage state, not reuse a pre-logout snapshot.
         await Promise.allSettled([...this.sessionSaves.values()]);
         await Promise.allSettled([...this.views.keys()].map(site => this.saveSession(site)));
+        // Logout clears are queued asynchronously; finish them so a quit cannot restore the old login.
+        await this.sessionStore.idle();
         await Promise.allSettled([...this.sessions.values()].map(async ({ browserSession }) => {
             browserSession.flushStorageData();
             await browserSession.cookies.flushStore();
