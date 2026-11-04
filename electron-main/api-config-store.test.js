@@ -112,3 +112,25 @@ test('missing stores remain a valid first start while damaged existing stores fa
     assert.equal((await store.save({ providers: [] })).success, false);
     assert.equal(fs.readFileSync(store.filePath, 'utf8'), '{broken');
 });
+
+test('a rotated safeStorage key re-encrypts the primary config on load and keeps it readable', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-canvas-api-rekey-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    let key = 0x11;
+    const store = new ApiConfigStore(root, {
+        protect: async value => Buffer.from(value, 'utf8').map(byte => byte ^ key),
+        unprotect: async value => {
+            for (const candidate of [0x22, 0x11]) {
+                const text = Buffer.from(value).map(byte => byte ^ candidate).toString('utf8');
+                if (text.startsWith('{')) return { result: text, shouldReEncrypt: candidate !== key };
+            }
+            return null;
+        }
+    });
+    await store.save({ revision: 1, providers: [{ apiKey: 'rotate-secret' }] });
+    const before = fs.readFileSync(store.filePath, 'utf8');
+    key = 0x22;
+    assert.equal((await store.load()).config.providers[0].apiKey, 'rotate-secret');
+    assert.notEqual(fs.readFileSync(store.filePath, 'utf8'), before);
+    assert.equal((await store.load()).config.providers[0].apiKey, 'rotate-secret');
+});

@@ -90,6 +90,7 @@ class McpClientManager {
                 if (!Array.isArray(configs) || configs.some(c => !c || typeof c.id !== 'string' || !c.id)
                     || new Set(configs.map(c => c.id)).size !== configs.length) throw new Error('Invalid MCP configuration');
                 this.configs = configs.map(c => normalize(c, c));
+                if (decrypted.shouldReEncrypt) await this.persist().catch(() => {});
             } catch (error) {
                 if (error.code !== 'ENOENT') this.loadError = 'MCP 配置无法解密或已损坏，原文件已保留';
             }

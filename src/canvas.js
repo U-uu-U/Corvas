@@ -3673,7 +3673,7 @@ export class CanvasManager {
                 return;
             }
             const typeHint = dropTypes.length > 0 ? `（${dropTypes.join(', ')}）` : '';
-            this._showCanvasStatus(`网页图片导入失败${lastRemoteError ? `：${lastRemoteError}` : `：拖拽数据中没有可用图片${typeHint}`}`, 0, 'error');
+            this._showCanvasStatus(`网页图片导入失败${lastRemoteError ? `：${lastRemoteError}` : `：拖拽数据中没有可用图片${typeHint}`}`, 0, 'error', !lastRemoteError);
         });
     }
 

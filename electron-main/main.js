@@ -634,7 +634,7 @@ async function initServices() {
             ? safeStorage.encryptStringAsync(value)
             : null,
         unprotect: async value => await safeStorage.isAsyncEncryptionAvailable()
-            ? (await safeStorage.decryptStringAsync(value)).result
+            ? safeStorage.decryptStringAsync(value)
             : null
     });
     // Synchronous readers (Agent providers, diagnostics redaction) use the loaded snapshot.

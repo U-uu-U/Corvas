@@ -435,8 +435,8 @@ class RelayBrowser {
                 case 'choose': await this.selectSite(value.site); break;
                 case 'switch': this.site = null; this.focus = null; this.layout(); this.send(''); break;
                 case 'clear-task': this.focus = null; this.send(''); web?.reload(); break;
-                case 'back': if (web?.canGoBack()) web.goBack(); break;
-                case 'forward': if (web?.canGoForward()) web.goForward(); break;
+                case 'back': if (web?.navigationHistory.canGoBack()) web.navigationHistory.goBack(); break;
+                case 'forward': if (web?.navigationHistory.canGoForward()) web.navigationHistory.goForward(); break;
                 case 'reload': web?.reload(); break;
                 case 'home': this.focus = null; void this.navigate(this.sites[this.site].homePath || '/dashboard'); this.send(); break;
                 case 'logs': void this.navigate(this.sites[this.site].logsPath || '/task-logs'); break;

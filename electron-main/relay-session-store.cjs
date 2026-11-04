@@ -29,6 +29,7 @@ class RelaySessionStore {
         const decrypted = await this.safeStorage.decryptStringAsync(Buffer.from(envelope.encrypted, 'base64'));
         const value = JSON.parse(decrypted.result);
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw unavailable();
+        if (decrypted.shouldReEncrypt) { this.lastSaved = null; await this.write(value).catch(() => {}); }
         return value;
     }
 

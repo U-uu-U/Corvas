@@ -72,8 +72,13 @@ class ApiConfigStore {
     async _load() {
         const candidates = [this.filePath, ...this._backupFiles()];
         for (const candidate of candidates) {
+            this.reEncryptPending = false;
             const config = await this._readConfig(candidate);
             if (!config) continue;
+            if (this.reEncryptPending && candidate === this.filePath) {
+                this.reEncryptPending = false;
+                await this._reEncrypt(config);
+            }
             return {
                 success: true,
                 config,
@@ -119,6 +124,16 @@ class ApiConfigStore {
         }
     }
 
+    // Same bytes on disk, new key; a failure keeps the readable original.
+    async _reEncrypt(config) {
+        try {
+            const envelope = await this._encode(config);
+            const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
+            fs.writeFileSync(tempPath, JSON.stringify(envelope, null, 2), { encoding: 'utf8', mode: 0o600 });
+            fs.renameSync(tempPath, this.filePath);
+        } catch (_) { /* Retry on the next load. */ }
+    }
+
     async _encode(config) {
         const raw = JSON.stringify(config);
         if (this.protect) {
@@ -143,7 +158,12 @@ class ApiConfigStore {
         let raw = '';
         if (envelope.format === 'safe-storage') {
             if (!this.unprotect || typeof envelope.payload !== 'string') return null;
-            raw = await this.unprotect(Buffer.from(envelope.payload, 'base64'));
+            const decrypted = await this.unprotect(Buffer.from(envelope.payload, 'base64'));
+            // Electron's decryptStringAsync shape: rewrite with the current key when it rotated.
+            if (decrypted && typeof decrypted === 'object' && !Buffer.isBuffer(decrypted)) {
+                raw = decrypted.result;
+                if (decrypted.shouldReEncrypt === true) this.reEncryptPending = true;
+            } else raw = decrypted;
         } else if (envelope.format === 'plain-json') {
             raw = envelope.payload;
         } else if (Array.isArray(envelope.providers)) {
