@@ -71,14 +71,13 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         assert.ok(page);
         await page.waitForFunction(() => window.Konva?.stages[0]?.findOne('#original')?.findOne('.displayNode'));
         const originalBefore = (await readBoard()).items.find(item => item.id === 'original');
-        const start = await point('original');
-        await page.mouse.move(start.x, start.y); await page.keyboard.down('Control'); await page.mouse.down();
-        await page.mouse.move(start.x + 220, start.y + 20, { steps: 25 }); await page.mouse.up(); await page.keyboard.up('Control');
+        // Ctrl-drag now exports a file copy to upload fields (docs/hunyuan-accounts.md); duplicate via the copy action.
+        await page.evaluate(() => document.dispatchEvent(new CustomEvent('context-duplicate-node', { detail: { itemIds: ['original'] } })));
         let board = await pollBoard(board => board.items.length === 5);
         const copy = board.items.find(item => !items.some(original => original.id === item.id));
         assert.ok(copy && copy.id !== 'original');
-        assert.equal(board.items.find(item => item.id === 'original').x, originalBefore.x, 'Ctrl-drag must leave the original identity in place');
-        assert.ok(copy.x > originalBefore.x + 150, 'The fresh copy follows the pointer');
+        assert.equal(board.items.find(item => item.id === 'original').x, originalBefore.x, 'Duplicating must leave the original identity in place');
+        assert.ok(copy.x > originalBefore.x, 'The fresh copy is placed beside the original');
         assert.equal(copy.referenceAnnotation, '产品');
         await page.evaluate(id => document.dispatchEvent(new CustomEvent('context-remove', { detail: { itemIds: [id] } })), copy.id);
         board = await pollBoard(board => !board.items.some(item => item.id === copy.id));
@@ -130,7 +129,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await page.locator('#agentInput').fill('描述所选素材'); await page.locator('#agentSendBtn').click();
         await page.waitForFunction(() => document.querySelectorAll('#agentAttachmentList .agent-attachment-item').length === 0);
         assert.equal(requests.length, 2);
-        console.log('Agent materials smoke passed: real Ctrl-drag copy/delete, persistent Agent source, manual reference wiring, mixed media selection/remove/re-add, wheel isolation, reload and send.');
+        console.log('Agent materials smoke passed: duplicate/delete, persistent Agent source, manual reference wiring, mixed media selection/remove/re-add, wheel isolation, reload and send.');
     } catch (error) {
         await page?.screenshot({ path: path.join(screenshots, 'agent-materials-failure.png') }).catch(() => {});
         throw error;
