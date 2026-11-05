@@ -63,6 +63,7 @@ async function createAgentServices({ store, bridge, apiConfigStore, dataDir, get
     bridge.projectItemAdder = async (projectId, add) => (await board.updateProject(projectId, add)).value;
     const runtime = new AgentRuntime({ runStore: new AgentRunStore(path.join(dataDir, 'agent-runs')), board,
         boardDefinitions: BOARD_TOOL_DEFINITIONS,
+        workflowDefinitions: require('../shared/workflow-tools.cjs').WORKFLOW_TOOL_DEFINITIONS,
         resolveProvider: (binding, kind) => generation.resolveProvider(binding, kind),
         callProvider: request => callAgentProvider({ ...request, fetchImpl: (...args) => net.fetch(...args) }),
         listModels: async () => generation.listModels(await readModelConfig()), readMedia: (...args) => media.read(...args),
@@ -125,12 +126,26 @@ async function createAgentServices({ store, bridge, apiConfigStore, dataDir, get
         if (name.endsWith('.undo')) return board.undo(projectId, input.undoToken);
         throw new Error('Unknown board tool');
     };
+    // External image/video MCP calls name a model by its flow_canvas.model.list id; only
+    // models that list exposes (visible, enabled, matching kind) resolve to an account.
+    bridge.externalProviderResolver = async (providerId, kind) => {
+        const modelConfig = await readModelConfig();
+        if (!generation.listModels(modelConfig).some(entry => entry.id === providerId && entry.kind === kind)) return null;
+        return generation.providers(modelConfig).find(provider => provider.id === providerId) || null;
+    };
     bridge.agentExecutor = async (name, input = {}) => {
         const projectId = input.projectId ?? store.load().activeGroupId;
         if (name.startsWith('flow_canvas.agent.')) {
             const action = name.slice('flow_canvas.agent.'.length);
             if (action === 'confirm') throw new Error('请在 Corvas 任务卡中确认计划');
             if (!['start', 'get', 'list', 'cancel', 'resume', 'revise', 'retry'].includes(action)) throw new Error('Unknown runtime action');
+            if (action === 'start' && !input.provider) {
+                // The sidebar resolves its text model in the renderer; external callers name one by
+                // providerId/model or use the saved default, resolved against the effective CONFIG.
+                const modelConfig = await readModelConfig();
+                const provider = generation.resolveProvider({ id: input.providerId, model: input.model }, 'text', modelConfig);
+                return runtime.start({ ...input, provider, projectId, conversationId: input.conversationId || 'external-harness' });
+            }
             return runtime[action]({ ...input, projectId, conversationId: input.conversationId || 'external-harness' });
         }
         if (['flow_canvas.graph.run', 'flow_canvas.memory.propose'].includes(name)) {return runtime.propose({ projectId,

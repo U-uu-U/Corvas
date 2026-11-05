@@ -18,7 +18,7 @@ const { AGENT_TOOL_DEFINITIONS, AGENT_RUN_TOOLS } = require('./agent-tools.cjs')
 const { WORKFLOW_TOOL_DEFINITIONS } = require('./workflow-tools.cjs');
 const { HANDOFF_TOOL_DEFINITIONS } = require('./handoff-tools.cjs');
 const MCP_BOARD_TOOLS_VERSION = 3;
-const MCP_WORKFLOW_TOOLS_VERSION = 3;
+const MCP_WORKFLOW_TOOLS_VERSION = 5;
 const MCP_HANDOFF_TOOLS_VERSION = 1;
 const MODEL_CONFIG_MCP_TOOLS = ['flow_canvas.model_config.get', 'flow_canvas.model_config.refresh'];
 const WORKFLOW_MCP_TOOLS = WORKFLOW_TOOL_DEFINITIONS.map(tool => tool.name);
@@ -83,7 +83,9 @@ function normalizeMcpConfig(config = {}) {
     const workflowToolAdditions = !Number.isInteger(currentWorkflowToolsVersion) || currentWorkflowToolsVersion < 1
         ? WORKFLOW_MCP_TOOLS : [
             ...(currentWorkflowToolsVersion < 2 ? ['flow_canvas.workflow.confirm'] : []),
-            ...(currentWorkflowToolsVersion < 3 ? ['flow_canvas.workflow.configure'] : [])
+            ...(currentWorkflowToolsVersion < 3 ? ['flow_canvas.workflow.configure'] : []),
+            ...(currentWorkflowToolsVersion < 4 ? ['flow_canvas.workflow.generate'] : []),
+            ...(currentWorkflowToolsVersion < 5 ? ['flow_canvas.workflow.open_account'] : [])
         ];
     return {
         ...DEFAULT_MCP_CONFIG,

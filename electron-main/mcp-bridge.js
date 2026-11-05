@@ -954,12 +954,33 @@ class FlowCanvasBridge {
         };
     }
 
+    // External MCP callers never hold API keys. They name a configured model by the id from
+    // flow_canvas.model.list, and Corvas resolves the account locally. Without one, a call
+    // fails instead of silently producing a builtin placeholder.
+    async _resolveExternalProvider(body, kind) {
+        if (body?.providerConfig) {
+            throw createBridgeError('INVALID_ARGUMENTS', '外部调用不接受 providerConfig，请传 providerId（取自 flow_canvas.model.list）', null, 400);
+        }
+        if (body?.provider === 'builtin') return body;
+        const providerId = String(body?.providerId || '').trim();
+        if (!providerId) {
+            throw createBridgeError('INVALID_ARGUMENTS', '请传 providerId（取自 flow_canvas.model.list）；只要本地预览图时传 provider: "builtin"', null, 400);
+        }
+        if (typeof this.externalProviderResolver !== 'function') {
+            throw createBridgeError('TOOL_UNAVAILABLE', 'Corvas 模型服务尚未就绪，请稍后重试', null, 503);
+        }
+        const providerConfig = await this.externalProviderResolver(providerId, kind);
+        if (!providerConfig) throw createBridgeError('INVALID_ARGUMENTS', `未找到可用的${kind === 'video' ? '视频' : '图片'}模型：${providerId}`, null, 400);
+        const { providerId: _omit, ...rest } = body;
+        return { ...rest, provider: 'auto', providerConfig, model: providerConfig.model };
+    }
+
     async _generateImage(body) {
-        return this.generateImageFromRenderer(body);
+        return this.generateImageFromRenderer(await this._resolveExternalProvider(body, 'image'));
     }
 
     async _generateVideo(body) {
-        return this.generateVideoFromRenderer(body);
+        return this.generateVideoFromRenderer(await this._resolveExternalProvider(body, 'video'));
     }
 
     async generateImageFromRenderer(body) {

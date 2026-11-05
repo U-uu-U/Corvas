@@ -959,3 +959,34 @@ test('run store rejects path traversal and ignores corrupt or temporary records 
     assert.deepEqual(h.runStore.loadAll().map(run => run.id), [seed.id]);
     assert.equal(fs.existsSync(path.join(h.directory, `${seed.id}.json.tmp`)), false);
 });
+
+test('canvas Agent drives the fixed Hunyuan workflow only when wired, and pauses paid generation for confirmation', async t => {
+    const { WORKFLOW_TOOL_DEFINITIONS } = require('../shared/workflow-tools.cjs');
+    const workflowCalls = [];
+    const h = harness(t, { script: [
+        reply('', [tool('sources', 'workflow.sources', {})]),
+        reply('', [tool('gen', 'workflow.generate', { accountId: 'acc', requestId: 'body', label: 'Body',
+            views: { front: '/f.png', left: '/l.png' } })]),
+        reply('Submitted')
+    ] });
+    // Not wired: workflow tools are neither offered nor callable.
+    const plain = harness(t);
+    await plain.idle(plain.start());
+    assert.ok(plain.requests[0].tools.every(entry => !entry.function.name.startsWith('flow_canvas.workflow.')));
+    h.runtime.workflowDefinitions = WORKFLOW_TOOL_DEFINITIONS.filter(entry => entry.name !== 'flow_canvas.workflow.configure');
+    for (const definition of h.runtime.workflowDefinitions) h.runtime.validators.set(definition.name, () => true);
+    h.runtime.workflowExecutor = async (name, input) => { workflowCalls.push({ name, input }); return { ok: true, name }; };
+    const id = h.start();
+    const paused = await h.idle(id);
+    const offered = h.requests[0].tools.map(entry => entry.function.name);
+    assert.ok(offered.includes('flow_canvas.workflow.generate') && offered.includes('flow_canvas.workflow.run'));
+    assert.ok(!offered.includes('flow_canvas.workflow.configure'), 'Delivery mode stays a user setting');
+    assert.equal(paused.status, 'awaiting_confirmation');
+    assert.deepEqual(workflowCalls.map(call => call.name), ['flow_canvas.workflow.sources'], 'Paid submission waits for the user');
+    h.confirm(id);
+    const done = await h.idle(id);
+    assert.equal(done.status, 'completed');
+    const generate = workflowCalls.find(call => call.name === 'flow_canvas.workflow.generate');
+    assert.equal(generate.input.requestId, `${id}:body`, 'Receipts are scoped to the run');
+    assert.equal(generate.input.label, 'Body');
+});

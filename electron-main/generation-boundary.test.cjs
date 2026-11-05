@@ -66,7 +66,8 @@ test('ordinary video generation downloads privately and returns local products t
     const bridge = new Bridge({ store: { load: () => ({ activeGroupId: 'project', items: [] }) },
         recoveryDirectory: path.join(profile, 'records'), notifyTaskCompleted: event => completed.push(event) });
     bridge._loadWithPlanService = () => ({ data: { items: [] }, planService: {} });
-    const result = await bridge._generateVideo({ prompt: 'fixture', clientTaskId: 'client', kind: 'video',
+    // Renderer-side generation carries a resolved providerConfig; external MCP calls resolve it from providerId first.
+    const result = await bridge.generateVideoFromRenderer({ prompt: 'fixture', clientTaskId: 'client', kind: 'video',
         targetDir: profile, addToCanvas: false, duration: 4, ratio: '16:9', resolution: '720p',
         providerConfig: { id: 'api', endpoint: 'https://relay-fixture.test/v1', model: 'seedance_v2.5', apiKey: 'fixture-only' } });
     assert.equal(fs.readFileSync(result.filePath, 'utf8'), 'downloaded-video');

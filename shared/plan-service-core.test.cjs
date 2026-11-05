@@ -71,9 +71,10 @@ test('older workflow config adds new tools without restoring disabled tools', ()
         handoffToolsVersion: MCP_HANDOFF_TOOLS_VERSION,
         allowedTools: ['flow_canvas.workflow.status', 'flow_canvas.plan.list']
     });
-    assert.equal(configured.workflowToolsVersion, 3);
+    assert.equal(configured.workflowToolsVersion, 5);
     assert.deepEqual(configured.allowedTools, ['flow_canvas.workflow.status', 'flow_canvas.plan.list',
-        'flow_canvas.workflow.confirm', 'flow_canvas.workflow.configure']);
+        'flow_canvas.workflow.confirm', 'flow_canvas.workflow.configure', 'flow_canvas.workflow.generate',
+        'flow_canvas.workflow.open_account']);
     assert.deepEqual(normalizeMcpConfig(configured), configured);
     assert.deepEqual(normalizeMcpConfig({ ...configured, allowedTools: [] }).allowedTools, []);
 });

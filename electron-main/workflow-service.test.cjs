@@ -19,7 +19,7 @@ function setup(t) {
     } }, cancel: ({ runId }) => { runtime.runs.get(runId).status = 'canceled'; },
     resume: ({ runId }) => { calls.push('resume'); const run = runtime.runs.get(runId); run.status = 'running'; return run; } };
     const accounts = { account: id => { assert.equal(id, accountId); },
-        list: () => ({ accounts: [{ id: accountId, name: 'fixture', windowOpen: true }] }),
+        list: () => ({ accounts: [{ id: accountId, name: 'fixture', windowOpen: true, status: 'open' }] }),
         currentModel: async id => { assert.equal(id, accountId); return source; },
         modelSource: (id, generation) => { assert.equal(id, accountId); assert.equal(generation, generationId); return source; },
         downloadModel: async () => { calls.push('download'); if (downloadGate) await downloadGate; return path.join(directory, 'model.fbx'); } };
@@ -317,4 +317,52 @@ test('status and history identify a cross-project interrupted blocker and cancel
     assert.equal(unblocked.nextAction, 'poll');
     await h.workflow().drain();
     assert.deepEqual(h.calls, ['download', 'open']);
+});
+
+test('workflow.generate submits once per requestId, records unknown outcomes and validates views', async t => {
+    const h = setup(t);
+    const accountId = h.request.source.accountId;
+    const submissions = [];
+    let outcome = { submitted: true, worksId: 'works-1', views: ['front', 'left'] };
+    h.accounts.submitGeometry = async (id, payload) => { submissions.push({ id, payload }); return outcome; };
+    h.service.prepareGenerationViews = async views => Object.keys(views).map(key => ({ key, fileName: `${key}.png`, mimeType: 'image/png', data: 'AA==' }));
+    const input = { accountId, requestId: 'gen-a', label: 'Drone body', views: { front: '/a.png', left: '/b.png' } };
+    const first = await h.call('generate', input);
+    assert.equal(first.submitted, true); assert.equal(first.worksId, 'works-1'); assert.equal(first.reused, false);
+    assert.equal(submissions.length, 1);
+    assert.deepEqual(submissions[0].payload.views.map(view => view.key), ['front', 'left']);
+    assert.equal(submissions[0].payload.modelVersion, 'v3.1');
+    const again = await h.call('generate', input);
+    assert.equal(again.reused, true); assert.equal(again.worksId, 'works-1'); assert.equal(submissions.length, 1);
+    await assert.rejects(h.call('generate', { ...input, views: { front: '/a.png', right: '/c.png' } }), /requestId/);
+    outcome = { submitted: 'unknown', error: '混元提交等待超时' };
+    const unknown = await h.call('generate', { ...input, requestId: 'gen-b' });
+    assert.equal(unknown.submitted, 'unknown');
+    assert.equal((await h.call('generate', { ...input, requestId: 'gen-b' })).submitted, 'unknown');
+    assert.equal(submissions.length, 2, 'An unknown outcome is never resubmitted under the same requestId');
+    await assert.rejects(h.call('generate', { ...input, requestId: 'gen-c', views: { front: '/a.png' } }), /两张/);
+    await assert.rejects(h.call('generate', { ...input, requestId: 'gen-d', modelVersion: 'v3.0', views: { front: '/a.png', top: '/t.png' } }), /前、后、左、右/);
+    // Schema validation happens synchronously in execute(), before any submission.
+    assert.throws(() => h.call('generate', { ...input, requestId: 'gen-e', views: { left: '/b.png' } }), /参数无效/);
+    assert.equal(submissions.length, 2);
+    // A definite refusal (for example an expired login) creates no job, so the same requestId may retry.
+    outcome = { submitted: false, error: '请先在混元窗口登录并打开 3D Studio' };
+    const refused = await h.call('generate', { ...input, requestId: 'gen-f' });
+    assert.equal(refused.submitted, false); assert.match(refused.error, /登录/);
+    outcome = { submitted: true, worksId: 'works-2', views: ['front', 'left'] };
+    const retried = await h.call('generate', { ...input, requestId: 'gen-f' });
+    assert.equal(retried.submitted, true); assert.equal(retried.worksId, 'works-2'); assert.equal(retried.reused, false);
+    // A window that closed before sending throws; the requestId stays retryable as well.
+    h.accounts.submitGeometry = async () => { throw new Error('请先打开对应混元账号窗口并登录'); };
+    await assert.rejects(h.call('generate', { ...input, requestId: 'gen-g' }), /登录/);
+    h.accounts.submitGeometry = async () => ({ submitted: true, worksId: 'works-3' });
+    assert.equal((await h.call('generate', { ...input, requestId: 'gen-g' })).worksId, 'works-3');
+    // A confirmation after a restart finds the window closed; generate reopens it first.
+    let windowOpen = false; const opened = [];
+    const list = h.accounts.list;
+    h.accounts.list = () => ({ accounts: [{ ...list().accounts[0], windowOpen, status: windowOpen ? 'open' : 'closed' }] });
+    h.accounts.open = ({ id }) => { opened.push(id); windowOpen = true; };
+    h.accounts.submitGeometry = async () => ({ submitted: true, worksId: 'works-4' });
+    assert.equal((await h.call('generate', { ...input, requestId: 'gen-h' })).worksId, 'works-4');
+    assert.deepEqual(opened, [accountId]);
 });

@@ -192,11 +192,12 @@ export const tools = [
     },
     {
         name: 'flow_canvas.image.generate',
-        description: 'Generate an image through the configured provider and add it to the Corvas board. Set provider=builtin explicitly for a local prompt preview; provider errors are never replaced by local output.',
+        description: 'Generate a paid image with a model configured in Corvas and add it to the board. Pass providerId from flow_canvas.model.list (kind image); Corvas uses that account locally and the API key never leaves the app. Set provider=builtin only for a free local prompt preview. Without providerId or builtin the call fails; provider errors are never replaced by local output.',
         inputSchema: {
             type: 'object',
             properties: {
                 prompt: { type: 'string' },
+                providerId: { type: 'string', description: 'Model id from flow_canvas.model.list.' },
                 provider: { type: 'string', enum: ['auto', 'builtin'] },
                 title: { type: 'string' },
                 planId: { type: 'string' },
@@ -238,10 +239,11 @@ export const tools = [
     },
     {
         name: 'flow_canvas.video.generate',
-        description: 'Generate a Seedance-compatible video, save the local file, and add it to the Corvas board. The configured provider must support POST /v1/video/generations and task polling.',
+        description: 'Generate a paid Seedance-compatible video with a model configured in Corvas, save the local file, and add it to the board. Pass providerId from flow_canvas.model.list (kind video); Corvas uses that account locally. The provider must support POST /v1/video/generations and task polling.',
         inputSchema: {
             type: 'object',
             properties: {
+                providerId: { type: 'string', description: 'Model id from flow_canvas.model.list.' },
                 prompt: { type: 'string' },
                 title: { type: 'string' },
                 planId: { type: 'string' },
@@ -368,12 +370,8 @@ export function createCorvasMcp({ baseUrl = DEFAULT_BRIDGE_URL, authorizeTool } 
         'flow_canvas.plan.delete': ({ planId }) => api('DELETE', `/plans/${encodeURIComponent(required(planId, 'planId'))}`),
         'flow_canvas.plan.export': ({ planId }) => api('POST', `/plans/${encodeURIComponent(required(planId, 'planId'))}/export`, {}),
         'flow_canvas.image.generate': (body = {}) => generateImageWithSources(body, api),
-        'flow_canvas.video.generate': (body = {}) => api('POST', '/videos/generate', {
-            ...body,
-            providerConfig: body.endpoint || body.apiKey || body.model
-                ? { endpoint: body.endpoint, apiKey: body.apiKey, model: body.model }
-                : undefined
-        }),
+        // Accounts are resolved inside Corvas from providerId; raw keys are not forwarded.
+        'flow_canvas.video.generate': ({ endpoint: _endpoint, apiKey: _apiKey, ...body } = {}) => api('POST', '/videos/generate', body),
         'flow_canvas.item.list': () => api('GET', '/items'),
         'flow_canvas.item.get': ({ itemId }) => api('GET', `/items/${encodeURIComponent(required(itemId, 'itemId'))}`),
         'flow_canvas.item.add': (body = {}) => api('POST', '/items/add', body),

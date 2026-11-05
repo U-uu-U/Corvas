@@ -329,7 +329,8 @@ test('unexpected tool calls on the fallback are never executable results', async
 test('malformed and non-object tool arguments fail for JSON and SSE in both protocols', async t => {
     for (const type of ['openai', 'anthropic']) {
         for (const streaming of [false, true]) {
-            for (const args of ['{', '[]', 'null', '42', '"text"', '']) {
+            // '' is accepted as {} (relays send it for argument-less calls); see the test below.
+            for (const args of ['{', '[]', 'null', '42', '"text"']) {
                 await t.test(`${type} stream=${streaming} args=${args}`, async () => {
                     const mock = recordFetch(request => {
                         const name = type === 'anthropic' ? request.body.tools[0].name : request.body.tools[0].function.name;
@@ -528,4 +529,17 @@ test('Google native requests and unsupported Anthropic content fail before netwo
             messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: 'YWJj', format: 'wav' } }] }],
             fetchImpl: () => assert.fail('must not fetch') }), /Unsupported Anthropic content part/);
     });
+});
+
+test('an empty OpenAI argument string is an argument-less call, not a malformed one', async () => {
+    for (const streaming of [false, true]) {
+        const mock = recordFetch(request => {
+            const name = request.body.tools[0].function.name;
+            if (!streaming) return jsonResponse(openaiJson('', [functionCall('empty', name, '')]));
+            return streamResponse(sse({ choices: [{ delta: { tool_calls: [{ index: 0, ...functionCall('empty', name, '') }] } }] })
+                + sse({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }) + sse('[DONE]'));
+        });
+        const result = await call({ tools, fetchImpl: mock.fetchImpl });
+        assert.deepEqual(result.toolCalls.map(entry => entry.arguments), [{}], `stream=${streaming}`);
+    }
 });

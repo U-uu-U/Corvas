@@ -16,20 +16,28 @@ const CANVAS_TOOLS = new Set([
     'flow_canvas.asset.search', 'flow_canvas.asset.read', 'flow_canvas.model.list', 'flow_canvas.graph.run',
     'flow_canvas.task.list', 'flow_canvas.task.get', 'flow_canvas.task.cancel', 'flow_canvas.memory.read', 'flow_canvas.memory.propose'
 ]);
+// Fixed Hunyuan -> Rhino workflow tools, served by the same WorkflowService as external MCP.
+// The canvas Agent may call them only when a workflowExecutor is wired; paid submission
+// (workflow.generate) pauses for user confirmation like graph.run.
+const WORKFLOW_AGENT_TOOLS = new Set(['flow_canvas.workflow.list', 'flow_canvas.workflow.sources', 'flow_canvas.workflow.open_account',
+    'flow_canvas.workflow.generate', 'flow_canvas.workflow.run', 'flow_canvas.workflow.status', 'flow_canvas.workflow.history',
+    'flow_canvas.workflow.resume', 'flow_canvas.workflow.cancel']);
+const PAID_WORKFLOW_TOOL = 'flow_canvas.workflow.generate';
 const isExternalTool = name => String(name || '').startsWith('external_mcp_') || name === RHINO_CLEANUP_TOOL;
 const externalAgentRequired = () => fail('EXTERNAL_AGENT_REQUIRED', '外部软件操作请在 ChatGPT/Codex 中继续；先检查已有场景和结果，画布 Agent 不会重放外部操作。');
 
 class AgentRuntime {
     constructor({ runStore, board, boardDefinitions, resolveProvider, callProvider, listModels,
-        readMedia, prepareGraph, executeStep, onEvent = () => {}, maxTurns = 20 }) {
+        readMedia, prepareGraph, executeStep, onEvent = () => {}, maxTurns = 20, workflowDefinitions = [] }) {
         Object.assign(this, { runStore, board, boardDefinitions, resolveProvider, callProvider, listModels,
             readMedia, prepareGraph, executeStep, onEvent, maxTurns });
+        this.workflowDefinitions = workflowDefinitions.filter(tool => WORKFLOW_AGENT_TOOLS.has(tool.name));
         this.runs = new Map();
         this.controllers = new Map();
         this.providerSessions = new Map();
         this.visuals = new Map();
         const validator = new Ajv({ allErrors: true });
-        this.validators = new Map([...boardDefinitions, ...AGENT_TOOL_DEFINITIONS]
+        this.validators = new Map([...boardDefinitions, ...AGENT_TOOL_DEFINITIONS, ...this.workflowDefinitions]
             .filter(tool => tool.inputSchema).map(tool => [tool.name, validator.compile(tool.inputSchema)]));
         for (const run of runStore.loadAll()) {
             if (RUNNING.has(run.status)) {
@@ -99,6 +107,7 @@ class AgentRuntime {
     _assertToolScope(run, name) {
         if (name === RHINO_CLEANUP_TOOL && this._isRhinoRun(run)) this._assertRhinoWorkflow(run);
         else if (isExternalTool(name)) throw externalAgentRequired();
+        else if (WORKFLOW_AGENT_TOOLS.has(name) && this.workflowExecutor && !this._isRhinoRun(run)) { /* fixed local workflow */ }
         else if (!CANVAS_TOOLS.has(name) || this._isRhinoRun(run)) throw fail('TOOL_NOT_FOUND', '画布 Agent 不支持该工具');
         if (run.toolAllowlist && !run.toolAllowlist.includes(name)) throw fail('TOOL_NOT_FOUND', '此任务只允许使用指定的画布工具');
     }
@@ -279,7 +288,9 @@ class AgentRuntime {
         return this.snapshot(run);
     }
     tools(run) {
-        return [...this.boardDefinitions, ...AGENT_TOOL_DEFINITIONS].filter(tool => CANVAS_TOOLS.has(tool.name))
+        const workflowTools = this.workflowExecutor && !this._isRhinoRun(run) ? this.workflowDefinitions : [];
+        return [...this.boardDefinitions, ...AGENT_TOOL_DEFINITIONS, ...workflowTools]
+            .filter(tool => CANVAS_TOOLS.has(tool.name) || workflowTools.includes(tool))
             .filter(tool => !run?.toolAllowlist || run.toolAllowlist.includes(tool.name)).map(tool => ({ type: 'function', function: {
             name: tool.name, description: tool.description, parameters: tool.inputSchema } }));
     }
@@ -296,7 +307,9 @@ class AgentRuntime {
             '付费生成由系统统一向用户确认。生成后系统检查结果，不能擅自再次生成；失败优先查 task.get，禁止重复提交。',
             '先 memory.read，只有用户明确确认才保存项目记忆。不要把模型推断当成用户要求。',
             '视频视觉检查只能判断所提供时间点的画面，不能声称听过音频或验证完整运动。',
-            '你的执行范围仅限当前项目的画布、素材、创作文档、生成任务和项目记忆。Rhino、Blender、浏览器及其他外部软件由 ChatGPT/Codex 通过 MCP 处理；遇到这类任务说明入口，不尝试调用外部工具或脚本。',
+            this.workflowExecutor
+                ? '你的执行范围是当前项目的画布、素材、创作文档、生成任务和项目记忆，以及 workflow 工具提供的固定混元 3D → Rhino 流程：workflow.sources 列出账号与模型，workflow.open_account 打开账号窗口，workflow.generate 用画布上的多视图图片提交混元生成（每个零件一次，requestId 用零件名，结果不明时禁止换 requestId 重发），模型就绪后 workflow.run 导入 Rhino 并整理，workflow.status 查看进度。只用这些固定工具操作 Rhino，不编写或运行任意脚本；Blender、浏览器及其他外部软件仍由 ChatGPT/Codex 处理。'
+                : '你的执行范围仅限当前项目的画布、素材、创作文档、生成任务和项目记忆。Rhino、Blender、浏览器及其他外部软件由 ChatGPT/Codex 通过 MCP 处理；遇到这类任务说明入口，不尝试调用外部工具或脚本。',
             run.contextSummary ? `早期对话摘要（供参考，用户最近指令优先）：${run.contextSummary}` : '',
             `任务项目 ID：${JSON.stringify(run.projectId)}。当前节点入口：${JSON.stringify(run.source)}。有序附件：${JSON.stringify(run.attachments)}。`,
             `可参考的工作流程：${JSON.stringify(AGENT_WORKFLOWS)}。`,
@@ -393,6 +406,14 @@ class AgentRuntime {
                     this._status(run, 'awaiting_confirmation');
                     return false;
                 }
+                if (call.name === PAID_WORKFLOW_TOOL) {
+                    this._check(run);
+                    run.plan = { kind: 'creative', version: crypto.randomUUID(), tool: call.name, proposed: call.arguments, steps: [],
+                        summary: `提交混元 3D 生成：${call.arguments.label || '模型'}（消耗混元账号次数）` };
+                    this._event(run, 'plan', run.plan);
+                    this._status(run, 'awaiting_confirmation');
+                    return false;
+                }
                 if (call.name === 'flow_canvas.memory.propose' || (call.name === 'flow_canvas.board.transaction.apply' && run.mode === 'ask')) {
                     if (call.name.endsWith('.apply')) await this.executeTool(run, 'flow_canvas.board.transaction.preview', call.arguments);
                     this._check(run);
@@ -427,6 +448,13 @@ class AgentRuntime {
         if (name === 'flow_canvas.rhino.cleanup') {
             if (!this.rhinoCleanup || !run.source?.hunyuanJobId) throw fail('TOOL_UNAVAILABLE', '此整理工具需要绑定已导入的混元模型');
             return this.rhinoCleanup(run, input);
+        }
+        if (WORKFLOW_AGENT_TOOLS.has(name)) {
+            // Jobs are scoped to this run's project; generate receipts are keyed per run.
+            const scoped = ['run', 'status', 'history', 'resume', 'cancel'].includes(name.split('.').pop())
+                ? { ...input, projectId: run.projectId } : input;
+            if (name === PAID_WORKFLOW_TOOL) scoped.requestId = `${run.id}:${String(input.requestId || '').slice(0, 100)}`;
+            return this.workflowExecutor(name, scoped);
         }
         if (['flow_canvas.board.transaction.preview', 'flow_canvas.board.transaction.apply'].includes(name) && !run.external) {
             const key = String(input.idempotencyKey || input.id || '');

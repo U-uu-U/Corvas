@@ -23,9 +23,12 @@ function endpointFor(provider, anthropic) {
 
 function objectArguments(value) {
     let parsed = value;
+    // Some OpenAI-compatible relays stream "" for a call without arguments. Treat it as {};
+    // the runtime still validates the tool schema, so missing required fields return a tool error.
+    if (typeof value === 'string' && !value.trim()) return {};
     if (typeof value === 'string') {
         try { parsed = JSON.parse(value); } catch {
-            throw new Error('Malformed tool arguments: expected a JSON object');
+            throw new Error(`Malformed tool arguments: expected a JSON object (received ${JSON.stringify(value.slice(0, 80))})`);
         }
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
