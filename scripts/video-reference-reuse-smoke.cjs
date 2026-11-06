@@ -52,7 +52,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             fixture._normalizeVideoConfigForProfile = () => ({});
             fixture._getVideoReferenceLimitsForConfig = () => ({ image: 30, video: 10, audio: 10 });
             fixture._getVideoReferenceOverflow = () => [];
-            for (const name of ['_syncGenerationComposerPromptMergeButton', '_positionGenerationComposer', '_cacheMediaGenerationPromptDraft', 'emit']) fixture[name] = () => {};
+            for (const name of ['_syncGenerationComposerPromptMergeButton', '_syncGenerationComposerSalePrice', '_positionGenerationComposer', '_cacheMediaGenerationPromptDraft', 'emit']) fixture[name] = () => {};
             const record = { references: [{ filePath: '/cache/compressed.jpg' }],
                 referenceBindings: sources.map((source, index) => ({ position: index + 1, sourceNodeId: source.id,
                     sourceNodeIds: [source.id], filePath: source.filePath, mediaType: source.mediaType })) };

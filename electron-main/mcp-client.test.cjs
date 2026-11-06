@@ -6,8 +6,9 @@ const path = require('node:path');
 const http = require('node:http');
 const { McpClientManager, normalize, toolId } = require('./mcp-client.cjs');
 
-const safeStorage = { isEncryptionAvailable: () => true,
-    encryptString: value => Buffer.from(value), decryptString: value => value.toString() };
+const safeStorage = { isEncryptionAvailable: () => true, isAsyncEncryptionAvailable: async () => true,
+    encryptString: value => Buffer.from(value), decryptString: value => value.toString(),
+    encryptStringAsync: async value => Buffer.from(value), decryptStringAsync: async value => ({ result: value.toString(), shouldReEncrypt: false }) };
 const definition = { name: 'scene.inspect', inputSchema: { type: 'object', properties: { count: { type: 'integer', minimum: 1 } }, required: ['count'] } };
 function setup(t, options = {}) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-mcp-client-'));
@@ -29,6 +30,7 @@ test('encrypted config survives reload without exposing env/headers in settings'
     assert.equal(fs.readFileSync(manager.file, 'utf8').includes('private-test-key'), false);
     await manager.save({ id, name: 'Renamed' });
     const restored = new McpClientManager({ directory, safeStorage });
+    await restored.load();
     assert.equal(restored.configs[0].env.TOKEN, 'private-test-key');
     assert.equal(restored.configs[0].name, 'Renamed');
     await restored.close();
@@ -37,7 +39,7 @@ test('encrypted config survives reload without exposing env/headers in settings'
 });
 
 test('failed encryption/corrupt data cannot overwrite original configuration', async t => {
-    const { manager, directory } = setup(t, { safeStorage: { ...safeStorage, isEncryptionAvailable: () => false } });
+    const { manager, directory } = setup(t, { safeStorage: { ...safeStorage, isEncryptionAvailable: () => false, isAsyncEncryptionAvailable: async () => false } });
     await assert.rejects(add(manager), /加密/);
     assert.equal(manager.configs.length, 0);
     fs.writeFileSync(manager.file, 'corrupt');

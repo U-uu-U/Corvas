@@ -1,4 +1,4 @@
-const { app, BrowserWindow, BrowserView, session, shell, ipcMain, safeStorage } = require('electron');
+const { app, BrowserWindow, WebContentsView, session, shell, ipcMain, safeStorage } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const profile = process.env.RELAY_SMOKE_PROFILE;
@@ -12,8 +12,8 @@ app.whenReady().then(async () => {
     const { installGenerationRecoveryBoard } = await import('../electron-main/generation-recovery-board.mjs');
     const { mergeRelayAccounts } = await import('../src/relay-account-config.js');
     const { ApiConfigStore } = require('../electron-main/api-config-store.js');
-    const accounts = new ApiConfigStore(profile, { protect: text => safeStorage.encryptString(text),
-        unprotect: bytes => safeStorage.decryptString(bytes) });
+    const accounts = new ApiConfigStore(profile, { protect: value => safeStorage.encryptStringAsync(value),
+        unprotect: async value => (await safeStorage.decryptStringAsync(value)).result });
     const catalog = { catalogMode: 'remote', models: [{ id: 'fixture', kind: 'video',
         catalog: { model: 'fixture', hosts: ['art.ravenhash.org', 'cart.ravenhash.org'] } },
     { id: 'image-fixture', kind: 'image', catalog: { model: 'image-fixture', hosts: ['ai.ravenhash.org'] } }] };
@@ -27,17 +27,17 @@ app.whenReady().then(async () => {
     installGenerationRecoveryBoard(bridge, board);
     global.relayRevealed = [];
     global.relaySelections = [];
-    global.relaySmoke = new RelayBrowser({ BrowserWindow, BrowserView, session, safeStorage,
+    global.relaySmoke = new RelayBrowser({ BrowserWindow, WebContentsView, session, safeStorage,
         shell: { ...shell, showItemInFolder: file => global.relayRevealed.push(file) }, directory: profile,
-        getLinkedAccounts: (site, userId) => (accounts.load().config?.providers || []).filter(provider =>
+        getLinkedAccounts: async (site, userId) => ((await accounts.load()).config?.providers || []).filter(provider =>
             provider.relayAccount?.site === site && provider.relayAccount?.userId === userId).map(provider => provider.relayAccount),
         onSelectAccounts: async catalog => {
             global.relaySelections.push(catalog);
             return catalog.tokens.filter(token => token.enabled && ['1', '2'].includes(token.id)).map(token => token.id);
         },
         onAccount: async selected => {
-            const config = mergeRelayAccounts(accounts.load().config || {}, catalog, selected);
-            const saved = accounts.save(config);
+            const config = mergeRelayAccounts((await accounts.load()).config || {}, catalog, selected);
+            const saved = await accounts.save(config);
             if (!saved.success) throw new Error('Fixture account save failed');
         },
         importer: createRelayImporter({ bridge, store, board, getSaveDir: () => path.join(profile, 'videos') }),

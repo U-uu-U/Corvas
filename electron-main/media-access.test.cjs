@@ -5,7 +5,7 @@ const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { MediaAccessPolicy, collectBoardMediaScope } = require('./media-access.cjs');
-const { handleLocalResourceRequest, decodeLocalResourcePath } = require('./local-resource');
+const { handleLocalResourceRequest, handleLocalMediaRequest, decodeLocalResourcePath } = require('./local-resource');
 
 async function fixture(t) {
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'corvas-media-access-'));
@@ -36,6 +36,19 @@ test('protocol streams authorized media, HEAD and byte ranges without wildcard C
     assert.equal(range.headers.has('access-control-allow-origin'), false);
     const head = await handleLocalResourceRequest(request(file, {}, 'HEAD'), { accessPolicy: policy });
     assert.equal(head.headers.get('content-length'), '10'); assert.equal(await head.text(), '');
+});
+
+test('local-media scheme serves the same ranges and enforces the same policy as local-res', async t => {
+    const { file, root, policy } = await fixture(t);
+    const media = (target, headers = {}) => ({ url: `local-media://file/${encodeURIComponent(target)}?v=1`, headers: new Headers(headers), method: 'GET' });
+    const range = await handleLocalMediaRequest(media(file, { range: 'bytes=2-5' }), { accessPolicy: policy });
+    assert.equal(range.status, 206); assert.equal(await range.text(), '2345');
+    assert.equal(range.headers.get('content-range'), 'bytes 2-5/10');
+    const outside = path.join(root, 'outside.png');
+    await fs.writeFile(outside, 'secret');
+    assert.equal((await handleLocalMediaRequest(media(outside), { accessPolicy: policy })).status, 404);
+    assert.equal((await handleLocalMediaRequest(media(file, { 'sec-fetch-dest': 'document' }), { accessPolicy: policy })).status, 403);
+    assert.equal((await handleLocalMediaRequest({ url: 'local-media://other/x', headers: new Headers(), method: 'GET' }, { accessPolicy: policy })).status, 400);
 });
 
 test('protocol rejects untrusted origins, navigation, missing policy and malformed paths', async t => {

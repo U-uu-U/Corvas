@@ -66,9 +66,9 @@ if (REMOTE_CATALOG_SMOKE) {
 
 app.setPath('userData', profile);
 Object.defineProperty(app, 'isPackaged', { value: true });
-app.whenReady().then(() => {
-    const seeded = new ApiConfigStore(profile, { protect: value => safeStorage.encryptString(value),
-        unprotect: value => safeStorage.decryptString(value) }).save(seedConfig);
+app.whenReady().then(async () => {
+    const seeded = await new ApiConfigStore(profile, { protect: value => safeStorage.encryptStringAsync(value),
+        unprotect: async value => (await safeStorage.decryptStringAsync(value)).result }).save(seedConfig);
     if (seeded.success !== true) finish(1, `无法写入烟测 profile：${seeded.error}`);
 });
 
@@ -226,8 +226,11 @@ async function adminPost(base, pathname, fields, cookie) {
 let reloaded = false;
 
 app.on('browser-window-created', (_event, win) => {
-    win.hide();
-    win.on('show', () => win.hide());
+    // Electron 45 never finishes a reload of a hidden window (did-finish-load does not fire),
+    // so keep the window shown but off-screen and out of the taskbar.
+    win.setSkipTaskbar(true);
+    win.setPosition(-3000, -3000);
+    win.on('show', () => win.setPosition(-3000, -3000));
     win.webContents.on('did-finish-load', async () => {
         if (!/index\.html/i.test(win.webContents.getURL())) return;
 

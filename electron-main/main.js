@@ -2,7 +2,7 @@
 // Corvas — Electron Main Process
 // ============================================================
 
-const { app, BrowserWindow, BrowserView, ipcMain, shell, clipboard, nativeImage, dialog, protocol, net, Menu, screen, safeStorage, session } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, nativeImage, dialog, protocol, net, Menu, screen, safeStorage, session } = require('electron');
 const path = require('path');
 require('./app-identity.cjs').configureAppIdentity(app);
 const util = require('util');
@@ -12,7 +12,7 @@ const Watcher = require('./watcher');
 const Thumbnailer = require('./thumbnailer');
 const FlowCanvasBridge = require('./mcp-bridge');
 const BrowserSyncService = require('./browser-sync');
-const { handleLocalResourceRequest } = require('./local-resource');
+const { handleLocalResourceRequest, handleLocalMediaRequest } = require('./local-resource');
 const { MediaAccessPolicy, collectBoardMediaScope } = require('./media-access.cjs');
 const { MediaProcessor, mediaToolPaths } = require('./media-processor.cjs');
 const { fetchPublicMedia } = require('./public-media-download.cjs');
@@ -163,7 +163,7 @@ require('./diagnostics-electron.cjs').installDiagnostics({
     getTasks: () => flowCanvasBridge?.recoveryStore.list() || [],
     getConfigStatus: async () => (await flowCanvasBridge?._modelConfig(false))?.status || {},
     getSecrets: () => {
-        const keys = (apiConfigStore?.load()?.config?.providers || []).map(provider => provider.apiKey).filter(Boolean);
+        const keys = (apiConfigStore?.cached()?.config?.providers || []).map(provider => provider.apiKey).filter(Boolean);
         try { keys.push(...(agentServices?.runtime?.getSecrets?.() || [])); } catch { /* Runtime may still be initializing. */ }
         return keys;
     }
@@ -229,7 +229,9 @@ function installSafeConsole() {
 
 // 注册私有协议权限
 protocol.registerSchemesAsPrivileged([
-    { scheme: 'local-res', privileges: { supportFetchAPI: true, stream: true, secure: true, corsEnabled: true } }
+    { scheme: 'local-res', privileges: { supportFetchAPI: true, stream: true, secure: true, corsEnabled: true } },
+    // Standard so Chromium's media pipeline can issue ranged seeks (see electron-main/local-resource.js).
+    { scheme: 'local-media', privileges: { standard: true, supportFetchAPI: true, stream: true, secure: true, corsEnabled: true } }
 ]);
 
 // ── 窗口创建 ───────────────────────────────────────────
@@ -630,13 +632,15 @@ async function initServices() {
         grantFile: file => mediaAccess.grant(file)
     });
     apiConfigStore = new ApiConfigStore(app.getPath('userData'), {
-        protect: value => safeStorage.isEncryptionAvailable()
-            ? safeStorage.encryptString(value)
+        protect: async value => await safeStorage.isAsyncEncryptionAvailable()
+            ? safeStorage.encryptStringAsync(value)
             : null,
-        unprotect: value => safeStorage.isEncryptionAvailable()
-            ? safeStorage.decryptString(value)
+        unprotect: async value => await safeStorage.isAsyncEncryptionAvailable()
+            ? safeStorage.decryptStringAsync(value)
             : null
     });
+    // Synchronous readers (Agent providers, diagnostics redaction) use the loaded snapshot.
+    await apiConfigStore.load();
     browserSyncService = new BrowserSyncService(store);
     thumbnailer = new Thumbnailer();
     watcher = new Watcher(store, (event, filePath) => {
@@ -1624,7 +1628,7 @@ for (const action of ['status', 'start', 'stop', 'copy', 'copy-url']) {
             await operation;
         } else if (action === 'copy' || action === 'copy-url') {
             const status = mcpServerStatus();
-            clipboard.writeText(action === 'copy-url' ? status.url : mcpServerConnectionInfo(status.url));
+            await clipboard.writeText(action === 'copy-url' ? status.url : mcpServerConnectionInfo(status.url));
             return { ...status, copied: true };
         }
         return mcpServerStatus();
@@ -1649,7 +1653,7 @@ for (const action of ['create', 'list', 'get', 'copy', 'open', 'cancel']) {
         if (action === 'copy') {
             const task = agentServices.handoff.get(request || {});
             const input = JSON.stringify({ projectId: task.projectId, taskId: task.id });
-            clipboard.writeText(`请接手 Corvas 的 ${task.target === 'blender' ? 'Blender' : 'Rhino'} 任务。\n`
+            await clipboard.writeText(`请接手 Corvas 的 ${task.target === 'blender' ? 'Blender' : 'Rhino'} 任务。\n`
                 + `先调用 flow_canvas.handoff.get，参数 ${input}；核对原项目、任务要求和 referenceIssues。\n`
                 + '已有 owner 时沿用 task.owner.clientId 接续原任务；尚未接手时使用当前对话的稳定 clientId 调用 handoff.claim。'
                 + '可在 claim 中附上当前 codex://threads/ 对话链接，便于返回对话；再用 handoff.tools 读取真实工具 schema。'
@@ -1674,7 +1678,7 @@ function getHunyuanAccounts() {
     hunyuanRhinoWorkflow ||= new HunyuanRhinoWorkflow({ directory: path.join(app.getPath('userData'), 'data'),
         getAccounts: () => hunyuanAccounts, getRhino: getRhinoWorkbench, getRuntime: () => agentServices.runtime,
         getProjectId: () => store.load().activeGroupId,
-        readMode: () => apiConfigStore.load().config?.globalConfig?.agentExecutionMode,
+        readMode: () => apiConfigStore.cached().config?.globalConfig?.agentExecutionMode,
         onChange: state => {
             hunyuanAccounts?.syncWorkflow();
             if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hunyuan:workflow-changed', state);
@@ -1733,7 +1737,7 @@ for (const action of ['status', 'save', 'open', 'choose', 'copyCommand']) {
             return result.canceled ? rhinoWorkbench.status() : rhinoWorkbench.save({ executablePath: result.filePaths[0] });
         }
         if (action === 'copyCommand') {
-            clipboard.writeText(rhinoWorkbench.connectionCommand());
+            await clipboard.writeText(rhinoWorkbench.connectionCommand());
             return { success: true };
         }
         return rhinoWorkbench[action](request || {});
@@ -1777,16 +1781,16 @@ ipcMain.on('mcp:board-tool-response', (event, payload) => {
     flowCanvasBridge?.handleBoardToolResponse(payload || {});
 });
 
-ipcMain.handle('api-config:load', () => {
+ipcMain.handle('api-config:load', async () => {
     if (!apiConfigStore) return { success: false, error: 'API 配置仓库尚未初始化' };
-    const result = apiConfigStore.load();
+    const result = await apiConfigStore.load();
     if (result.recoveredFromBackup) {
         console.warn('[API Config] 主配置损坏，已从加密备份恢复');
     }
     return result;
 });
 
-ipcMain.handle('api-config:save', (_, config) => {
+ipcMain.handle('api-config:save', async (_, config) => {
     if (!apiConfigStore) return { success: false, error: 'API 配置仓库尚未初始化' };
     return apiConfigStore.save(config || {});
 });
@@ -2057,7 +2061,11 @@ ipcMain.handle('thumb:preview', async (event, filePath, maxDim, preferOriginal) 
     try {
         const resolved = await mediaAccess.resolve(filePath);
         return thumbnailer.getPreview(resolved.filePath, maxDim, preferOriginal === true);
-    } catch { return { success: false, error: { code: 'FILE_UNAVAILABLE', message: '素材不存在或尚未授权，请重新添加' } }; }
+    } catch (error) {
+        // A deleted or moved file fails at realpath before authorization; report it as missing so the card can offer relinking.
+        if (['ENOENT', 'ENOTDIR'].includes(error?.code)) return { success: false, error: { code: 'FILE_MISSING', message: '文件失联' } };
+        return { success: false, error: { code: 'FILE_UNAVAILABLE', message: '素材不存在或尚未授权，请重新添加' } };
+    }
 });
 
 function psQuoted(value) {
@@ -2105,8 +2113,8 @@ function writeTextWithPowerShell(text) {
 async function writePlainTextToClipboard(text) {
     const value = String(text || '');
     try {
-        clipboard.writeText(value, 'clipboard');
-        if (clipboard.readText('clipboard') === value) {
+        await clipboard.writeText(value);
+        if (await clipboard.readText() === value) {
             return { success: true, type: 'text', method: 'electron', verified: true };
         }
     } catch (err) {
@@ -2299,7 +2307,7 @@ ipcMain.handle('creative-web:open', async (event, platform) => {
 });
 
 function getRelayBrowser() {
-    relayBrowser ||= new RelayBrowser({ BrowserWindow, BrowserView, session, shell, safeStorage,
+    relayBrowser ||= new RelayBrowser({ BrowserWindow, WebContentsView, session, shell, safeStorage,
         directory: path.join(app.getPath('userData'), 'data'),
         onAccount: account => relayAccountDelivery.send(mainWindow?.webContents, account),
         onSelectAccounts: catalog => {
@@ -2309,8 +2317,8 @@ function getRelayBrowser() {
         onState: state => {
             if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('relay-browser:accounts', state);
         },
-        getLinkedAccounts: (site, userId) => {
-            const loaded = apiConfigStore.load();
+        getLinkedAccounts: async (site, userId) => {
+            const loaded = await apiConfigStore.load();
             if (!loaded.success) throw new Error('API config unavailable');
             return (loaded.config?.providers || []).filter(provider => provider.relayAccount?.site === site
                 && provider.relayAccount?.userId === userId).map(provider => provider.relayAccount);
@@ -2329,7 +2337,7 @@ ipcMain.handle('relay-browser:open', async (event, options = {}) => {
     if (!site && options.nodeId) {
         const node = store.load().items?.find(item => item.id === options.nodeId);
         const providerId = node?.generation?.sourceProviderId || node?.generation?.providerId || node?.config?.providerId;
-        const providers = apiConfigStore.load()?.config?.providers || [];
+        const providers = (await apiConfigStore.load())?.config?.providers || [];
         const provider = providers.find(provider => provider.id === String(providerId || '').split('::model:')[0]);
         site = node?.generation?.relaySite || relaySite(provider?.endpoint);
         taskId ||= node?.generation?.taskId;
@@ -2856,16 +2864,33 @@ ipcMain.handle('image:crop', async (_, body = {}) => {
 // 从剪贴板读取图片并保存
 ipcMain.handle('image:pasteFromClipboard', async (_, targetDir) => {
     try {
-        const img = clipboard.readImage();
+        // Electron 44+ clipboard API: read() resolves to W3C-style ClipboardItem[].
+        const items = await clipboard.read();
+        const readType = async (type, asText) => {
+            const item = items.find(entry => entry.types.includes(type));
+            if (!item) return null;
+            try {
+                const blob = await item.getType(type);
+                return asText ? blob.text() : Buffer.from(await blob.arrayBuffer());
+            } catch (_) { return null; } // A listed type can still fail to deliver; fall back below.
+        };
+        let img = nativeImage.createEmpty();
+        const imageTypes = ['image/png', ...new Set(items.flatMap(entry => entry.types)
+            .filter(type => /^image\//i.test(type) && type !== 'image/png'))];
+        for (const type of imageTypes) {
+            const bytes = await readType(type, false);
+            const candidate = bytes ? nativeImage.createFromBuffer(bytes) : null;
+            if (candidate && !candidate.isEmpty()) { img = candidate; break; }
+        }
         if (img.isEmpty()) {
             // 尝试读取剪贴板中的 HTML
-            const html = clipboard.readHTML();
+            const html = await readType('text/html', true);
             const match = html && html.match(/src=["']([^"']+)["']/);
             if (match && match[1] && /^https?:\/\//i.test(match[1])) {
                 // 复用 downloadFromUrl 逻辑（手动内联以避免 ipcMain.handle 递归问题）
                 return await downloadImageFromUrl(match[1], targetDir);
             }
-            const text = clipboard.readText();
+            const text = await clipboard.readText();
             if (text && /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|bmp)/i.test(text)) {
                 return await downloadImageFromUrl(text, targetDir);
             }
@@ -3692,9 +3717,11 @@ function startApplication() {
         await app.whenReady();
 
         // 监听本地文件加载
-        protocol.handle('local-res', request => handleLocalResourceRequest(request, {
+        const localResourceOptions = () => ({
             accessPolicy: mediaAccess, allowedOrigins: isDev ? ['null', 'file://', DEV_RENDERER_ORIGIN] : ['null', 'file://']
-        }));
+        });
+        protocol.handle('local-res', request => handleLocalResourceRequest(request, localResourceOptions()));
+        protocol.handle('local-media', request => handleLocalMediaRequest(request, localResourceOptions()));
         createSplashWindow();
         await initServices();
 

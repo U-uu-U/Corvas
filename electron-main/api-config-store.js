@@ -3,6 +3,18 @@ const path = require('path');
 
 const STORE_VERSION = 1;
 const DEFAULT_BACKUP_LIMIT = 20;
+// Operations on one config file run in order across store instances, so async
+// encryption cannot interleave a load with a save or two saves with each other.
+// Shared per process so a smoke entry's seed and main.js's store (even from an ASAR copy) queue together.
+const fileQueues = globalThis[Symbol.for('corvas.apiConfigQueues')] ||= new Map();
+function serialized(filePath, work) {
+    const key = path.resolve(filePath).toLowerCase();
+    const run = (fileQueues.get(key) || Promise.resolve()).then(work);
+    const tail = run.catch(() => {});
+    fileQueues.set(key, tail);
+    void tail.then(() => { if (fileQueues.get(key) === tail) fileQueues.delete(key); });
+    return run;
+}
 
 function cloneJson(value, fallback) {
     try {
@@ -39,13 +51,34 @@ class ApiConfigStore {
         this.protect = typeof options.protect === 'function' ? options.protect : null;
         this.unprotect = typeof options.unprotect === 'function' ? options.unprotect : null;
         this.now = typeof options.now === 'function' ? options.now : () => new Date();
+        this.snapshot = null;
+    }
+
+    // Last result of load()/save(); for synchronous readers after startup has awaited load().
+    cached() {
+        return this.snapshot || { success: false, config: null, recoveredFromBackup: false, code: 'API_CONFIG_NOT_LOADED',
+            error: 'API 配置尚未加载' };
     }
 
     load() {
+        return serialized(this.filePath, async () => {
+            const result = await this._load();
+            // Keep the last good snapshot: a transient Keychain failure must not blank secret redaction.
+            if (result.success) this.snapshot = result;
+            return result;
+        });
+    }
+
+    async _load() {
         const candidates = [this.filePath, ...this._backupFiles()];
         for (const candidate of candidates) {
-            const config = this._readConfig(candidate);
+            this.reEncryptPending = false;
+            const config = await this._readConfig(candidate);
             if (!config) continue;
+            if (this.reEncryptPending && candidate === this.filePath) {
+                this.reEncryptPending = false;
+                await this._reEncrypt(config);
+            }
             return {
                 success: true,
                 config,
@@ -60,9 +93,13 @@ class ApiConfigStore {
     }
 
     save(config) {
+        return serialized(this.filePath, () => this._save(config));
+    }
+
+    async _save(config) {
         try {
             const normalized = normalizeConfig(config);
-            const current = this._readConfig(this.filePath);
+            const current = await this._readConfig(this.filePath);
             // A locked Keychain or damaged primary must never be treated as a fresh install.
             if (!current && fs.existsSync(this.filePath)) {
                 return { success: false, code: 'API_CONFIG_UNREADABLE',
@@ -73,23 +110,34 @@ class ApiConfigStore {
                 return { success: true, unchanged: true, revision: normalized.revision };
             }
 
-            const envelope = this._encode(normalized);
+            const envelope = await this._encode(normalized);
             fs.mkdirSync(this.dataDir, { recursive: true });
-            if (current && fs.existsSync(this.filePath)) this._backupPrimary(current);
+            if (current && fs.existsSync(this.filePath)) await this._backupPrimary(current);
             const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
             fs.writeFileSync(tempPath, JSON.stringify(envelope, null, 2), { encoding: 'utf8', mode: 0o600 });
             fs.renameSync(tempPath, this.filePath);
             this._pruneBackups();
+            this.snapshot = { success: true, config: normalized, recoveredFromBackup: false };
             return { success: true, unchanged: false, revision: normalized.revision };
         } catch (error) {
             return { success: false, error: error?.message || String(error) };
         }
     }
 
-    _encode(config) {
+    // Same bytes on disk, new key; a failure keeps the readable original.
+    async _reEncrypt(config) {
+        try {
+            const envelope = await this._encode(config);
+            const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
+            fs.writeFileSync(tempPath, JSON.stringify(envelope, null, 2), { encoding: 'utf8', mode: 0o600 });
+            fs.renameSync(tempPath, this.filePath);
+        } catch (_) { /* Retry on the next load. */ }
+    }
+
+    async _encode(config) {
         const raw = JSON.stringify(config);
         if (this.protect) {
-            const protectedValue = this.protect(raw);
+            const protectedValue = await this.protect(raw);
             if (protectedValue?.length) {
                 const buffer = Buffer.isBuffer(protectedValue)
                     ? protectedValue
@@ -105,12 +153,17 @@ class ApiConfigStore {
         throw new Error('系统凭据加密不可用，未保存 API 配置；原有配置已保留。请解锁系统钥匙串或凭据服务后重试。');
     }
 
-    _decode(envelope) {
+    async _decode(envelope) {
         if (!envelope || typeof envelope !== 'object') return null;
         let raw = '';
         if (envelope.format === 'safe-storage') {
             if (!this.unprotect || typeof envelope.payload !== 'string') return null;
-            raw = this.unprotect(Buffer.from(envelope.payload, 'base64'));
+            const decrypted = await this.unprotect(Buffer.from(envelope.payload, 'base64'));
+            // Electron's decryptStringAsync shape: rewrite with the current key when it rotated.
+            if (decrypted && typeof decrypted === 'object' && !Buffer.isBuffer(decrypted)) {
+                raw = decrypted.result;
+                if (decrypted.shouldReEncrypt === true) this.reEncryptPending = true;
+            } else raw = decrypted;
         } else if (envelope.format === 'plain-json') {
             raw = envelope.payload;
         } else if (Array.isArray(envelope.providers)) {
@@ -120,16 +173,16 @@ class ApiConfigStore {
         return normalizeConfig(JSON.parse(raw));
     }
 
-    _readConfig(filePath) {
+    async _readConfig(filePath) {
         try {
             if (!fs.existsSync(filePath)) return null;
-            return this._decode(JSON.parse(fs.readFileSync(filePath, 'utf8')));
+            return await this._decode(JSON.parse(fs.readFileSync(filePath, 'utf8')));
         } catch (_) {
             return null;
         }
     }
 
-    _backupPrimary(config) {
+    async _backupPrimary(config) {
         fs.mkdirSync(this.backupDir, { recursive: true });
         const stamp = this.now().toISOString().replace(/[:.]/g, '-');
         let backupPath = path.join(this.backupDir, `api-config-${stamp}.json`);
@@ -137,7 +190,7 @@ class ApiConfigStore {
         while (fs.existsSync(backupPath)) {
             backupPath = path.join(this.backupDir, `api-config-${stamp}-${suffix++}.json`);
         }
-        fs.writeFileSync(backupPath, JSON.stringify(this._encode(config), null, 2), { encoding: 'utf8', mode: 0o600 });
+        fs.writeFileSync(backupPath, JSON.stringify(await this._encode(config), null, 2), { encoding: 'utf8', mode: 0o600 });
     }
 
     _backupFiles() {

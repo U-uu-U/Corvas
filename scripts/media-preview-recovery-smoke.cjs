@@ -24,6 +24,8 @@ function makeBmp(width, height) {
 
 async function verify(resourceSaver) {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-preview-recovery-'));
+    // Media lives outside userData: the media access policy refuses userData files outside its managed roots.
+    const mediaDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-preview-recovery-media-'));
     let app;
     try {
         await fs.mkdir(path.join(profile, 'data'));
@@ -34,10 +36,10 @@ async function verify(resourceSaver) {
             corrupt: Buffer.from('invalid bitmap'), html: Buffer.from('<!DOCTYPE html><html></html>') };
         const files = {};
         for (const [id, bytes] of Object.entries(fixtures)) {
-            files[id] = path.join(profile, `${id}.${id === 'bmp' ? 'bmp' : 'png'}`);
+            files[id] = path.join(mediaDir, `${id}.${id === 'bmp' ? 'bmp' : 'png'}`);
             await fs.writeFile(files[id], bytes);
         }
-        files.missing = path.join(profile, 'missing.png');
+        files.missing = path.join(mediaDir, 'missing.png');
         const items = Object.entries(files).map(([id, filePath], index) => ({ id, filePath, kind: 'media', mediaType: 'image',
             x: 40 + (index % 3) * 270, y: 90 + Math.floor(index / 3) * 350, width: 130, height: 260 }));
         await fs.writeFile(path.join(profile, 'data/board.json'), JSON.stringify({ version: 1, activeGroupId: 'recovery', items,
@@ -46,7 +48,13 @@ async function verify(resourceSaver) {
         const env = { ...process.env, FLOW_MEDIA_SMOKE_PROFILE: profile };
         delete env.ELECTRON_RUN_AS_NODE;
         app = await electron.launch({ executablePath: require('electron'), args: [path.join(__dirname, 'media-preview-smoke-entry.cjs')], env });
-        const page = await app.firstWindow();
+        // The first window is the splash screen, which closes once the canvas is ready.
+        let page;
+        for (let attempt = 0; attempt < 300 && !page; attempt++) {
+            page = app.windows().find(window => /dist[/\\]index\.html/.test(window.url()));
+            if (!page) await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        assert.ok(page, 'The main window must open');
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         await page.waitForFunction(() => window.flowCanvas?.thumb?.preview && window.Konva?.stages?.length);
@@ -101,6 +109,7 @@ async function verify(resourceSaver) {
     } finally {
         await app?.close();
         await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        await fs.rm(mediaDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
 }
 

@@ -15,6 +15,12 @@ async function waitForBoard(boardPath, predicate) {
     throw new Error(`Board save did not settle: ${board?.items?.length} items, ${board?.connections?.length} connections`);
 }
 
+async function dismissOnboarding(page) {
+    await page.waitForTimeout(400);
+    const onboarding = page.locator('#siteLoginDialog[open]');
+    if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
+}
+
 function assertInputs(board, targetId) {
     const inputs = board.connections.filter(connection => connection.to.nodeId === targetId);
     assert.deepEqual(inputs.map(connection => connection.from.nodeId), ['reference-a', 'reference-b']);
@@ -28,15 +34,23 @@ function assertInputs(board, targetId) {
     assert.ok(built.mtimeMs >= edited.mtimeMs, 'Run npm run build after editing src/canvas.js');
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-duplicate-node-'));
     const boardPath = path.join(profile, 'data/board.json');
+    // Reference media must be real board media files outside userData (media access policy).
+    const media = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-duplicate-node-media-'));
     let app;
     let page;
     const errors = [];
     try {
         const resultPath = path.join(profile, 'result.png');
         await fs.writeFile(resultPath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64'));
+        const sharp = require('sharp');
+        const referencePaths = {};
+        for (const [key, color] of [['a', '#d04040'], ['b', '#4060d0']]) {
+            referencePaths[key] = path.join(media, `reference-${key}.png`);
+            await sharp({ create: { width: 180, height: 135, channels: 3, background: color } }).png().toFile(referencePaths[key]);
+        }
         const items = [
-            { id: 'reference-a', kind: 'media', mediaType: 'image', title: 'Reference A', x: 110, y: 140, width: 180, height: 135 },
-            { id: 'reference-b', kind: 'media', mediaType: 'image', title: 'Reference B', x: 110, y: 380, width: 180, height: 135 },
+            { id: 'reference-a', kind: 'media', mediaType: 'image', filePath: referencePaths.a, title: 'Reference A', x: 110, y: 140, width: 180, height: 135 },
+            { id: 'reference-b', kind: 'media', mediaType: 'image', filePath: referencePaths.b, title: 'Reference B', x: 110, y: 380, width: 180, height: 135 },
             { id: 'duplicate-target', kind: 'op', nodeType: 'image', title: 'Original result', x: 520, y: 120,
                 width: 264, height: 150, config: { prompt: 'Duplicate connection fixture', ratio: '16:9' },
                 resultEntries: [{ filePath: resultPath }], preserveGeneratorStack: true, runStatus: 'idle' }
@@ -63,6 +77,7 @@ function assertInputs(board, targetId) {
             window.setContentSize(1280, 900);
         });
         await page.waitForFunction(() => window.Konva?.stages[0]?.findOne('#original-b')?.isVisible());
+        await dismissOnboarding(page);
         await page.evaluate(() => window.Konva.stages[0].findOne('#duplicate-target')
             .fire('click', { evt: { button: 0, shiftKey: true } }));
         await page.locator('.canvas-selection-toolbar [data-action="duplicate"]').click();
@@ -97,6 +112,7 @@ function assertInputs(board, targetId) {
             const stage = window.Konva?.stages[0];
             return stage && ids.every(id => stage.findOne(`#${id}`)?.isVisible());
         }, savedBoard.connections.map(connection => connection.id));
+        await dismissOnboarding(page);
         const reloaded = JSON.parse(await fs.readFile(boardPath, 'utf8'));
         for (const id of ['duplicate-target', toolbarCopy.id, contextCopy.id]) assertInputs(reloaded, id);
         assert.equal(await page.evaluate(() => window.Konva.stages[0].find('.graphEdge').length), 6);
@@ -125,5 +141,6 @@ function assertInputs(board, targetId) {
         const relative = path.relative(os.tmpdir(), profile);
         assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative));
         await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        await fs.rm(media, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
 })().catch(error => { console.error(error); process.exitCode = 1; });
