@@ -142,3 +142,23 @@ test('Streamable HTTP MCP endpoint rejects foreign Host and Origin headers', asy
     assert.equal(await post({ Origin: 'http://evil.example' }), 403);
     assert.equal(await post({}), 200);
 });
+
+test('legacy REST routes reject DNS rebinding, cross-site and non-JSON requests', async t => {
+    const { port } = await startBridge(t);
+    const request = (method, path, headers, body) => new Promise((resolve, reject) => {
+        const req = require('node:http').request({ host: '127.0.0.1', port, path, method, headers }, res => {
+            res.resume();
+            res.on('end', () => resolve(res.statusCode));
+        });
+        req.on('error', reject);
+        req.end(body);
+    });
+    const body = JSON.stringify({ prompt: 'x' });
+    assert.equal(await request('GET', '/health', { Host: `rebind.example:${port}` }), 403);
+    assert.equal(await request('GET', '/health', { Origin: 'https://evil.example' }), 403);
+    assert.equal(await request('POST', '/images/generate', { 'Content-Type': 'text/plain' }, body), 403);
+    assert.equal(await request('POST', '/images/generate', { Origin: 'null', 'Content-Type': 'application/json' }, body), 403);
+    assert.equal(await request('GET', '/health', {}), 200);
+    assert.equal(await request('GET', '/health', { Host: `localhost:${port}` }), 200);
+    assert.equal(await request('GET', '/health', { Origin: `http://127.0.0.1:${port}` }), 200);
+});
