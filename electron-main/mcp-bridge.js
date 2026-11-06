@@ -601,6 +601,13 @@ class FlowCanvasBridge {
             this._sendJson(res, 403, { success: false, error: 'Only localhost clients are allowed' });
             return;
         }
+        // A loopback peer address does not prove a local client: browsers connect from
+        // loopback too. Host blocks DNS rebinding; Origin blocks cross-site requests.
+        const requestError = foreignRequestError(req, this.host, this.port);
+        if (requestError) {
+            this._sendJson(res, 403, { success: false, error: requestError });
+            return;
+        }
 
         if (req.method === 'OPTIONS') {
             this._sendJson(res, 204, null);
@@ -4209,6 +4216,22 @@ function isLocalAddress(address) {
         || address === '127.0.0.1'
         || address === '::1'
         || address === '::ffff:127.0.0.1';
+}
+
+function foreignRequestError(req, host, port) {
+    const authorities = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`, `${host}:${port}`]);
+    const requestHost = String(req.headers.host || '').toLowerCase();
+    if (!authorities.has(requestHost)) return 'Request Host is not a local Corvas address';
+    const origin = req.headers.origin;
+    if (origin !== undefined && !authorities.has(String(origin).toLowerCase().replace(/^http:\/\//, ''))) {
+        return 'Cross-origin requests are not allowed';
+    }
+    if (!['GET', 'HEAD', 'DELETE', 'OPTIONS'].includes(req.method)
+        && (Number(req.headers['content-length']) > 0 || req.headers['transfer-encoding'])
+        && !/^application\/json\s*(;|$)/i.test(String(req.headers['content-type'] || ''))) {
+        return 'Request body must be application/json';
+    }
+    return '';
 }
 
 function readJsonBody(req) {
