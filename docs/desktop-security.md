@@ -10,6 +10,10 @@ Files created or downloaded by the main-process generation pipeline are register
 
 `local-res` no longer bypasses CSP or returns wildcard CORS headers. It accepts application origins, rejects document/iframe embedding, sends `nosniff` and restrictive CSP, and keeps HEAD/range support for video. Streams verify the opened file against the authorized file identity. Main-frame shell IPC checks both the authorized path and a non-executable extension list. `.blend` and `.gh` files may be managed as assets but are not launched by the generic shell opener; application integrations have their own launch routes.
 
+## Local bridge HTTP API
+
+The local bridge (`127.0.0.1:18765` by default) serves `/mcp` and the older REST routes used by the stdio MCP entry and local scripts. A loopback peer address alone does not identify a local client, because a browser page also connects from loopback. Every REST route therefore requires a `Host` of `127.0.0.1`, `localhost` or `[::1]` on the bridge port, which blocks DNS rebinding. It rejects any `Origin` other than those addresses, including `null`, and requires `Content-Type: application/json` for request bodies, so a web page cannot send a CORS-simple cross-site POST. `/mcp` applies the same Host/Origin rules through the MCP SDK. There is no token, so any local process can still call the bridge.
+
 ## Windows and credentials
 
 The main and floating windows use `sandbox: true`, `contextIsolation: true` and `nodeIntegration: false`. Unrequested new windows and webview attachment are denied. Rhino/Blender launchers and MCP configuration retain their own interfaces.

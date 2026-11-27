@@ -206,7 +206,7 @@ Corvas 启动后，本地桥接直接提供 `http://127.0.0.1:18765/mcp`，客�
 
 图片生成失败会保留原始错误，不会自动退回本地预览图；显式 `provider: "builtin"` 同样受图片生成工具权限控制。
 
-Claude Code 可用 `claude mcp add --transport http corvas http://127.0.0.1:18765/mcp`。该端点为无状态模式，只监听本机，并校验 `Host`/`Origin` 头以防 DNS 重绑定；没有额外认证，本机任何进程都可调用，与原有桥接接口一致。
+Claude Code 可用 `claude mcp add --transport http corvas http://127.0.0.1:18765/mcp`。该端点为无状态模式，只监听本机，并校验 `Host`/`Origin` 头以防 DNS 重绑定。原有桥接接口也做同样的校验，并要求请求体为 `application/json`，网页无法跨站调用；没有额外认证，本机任何进程都可调用。
 
 ### stdio
 
