@@ -2360,13 +2360,14 @@ export class CanvasManager {
         preview.setAttribute('aria-modal', 'true');
         preview.setAttribute('aria-label', '素材预览');
         const source = filePath
-            ? `local-res://${encodeURIComponent(filePath)}`
+            ? `${mediaType === 'image' ? 'local-res://' : 'local-media://file/'}${encodeURIComponent(filePath)}`
             : product.url;
         const media = mediaType === 'image'
             ? document.createElement('img')
             : mediaType === 'video'
                 ? document.createElement('video')
                 : document.createElement('audio');
+        if (mediaType !== 'image' && filePath) media.crossOrigin = 'anonymous';
         media.src = source;
         media.draggable = false;
         if (mediaType !== 'image') media.controls = true;
@@ -3602,9 +3603,10 @@ export class CanvasManager {
                 }));
             let imageUrls = collectDroppedImageUrls(e.dataTransfer);
             const files = Array.from(e.dataTransfer.files || []);
+            const filePathOf = file => file.path || window.flowCanvas?.getPathForFile?.(file) || '';
             const dropPosition = { offsetX: e.offsetX, offsetY: e.offsetY };
             const inMemoryFiles = files
-                .filter(file => !file.path && file.size > 0 && /^image\//i.test(file.type))
+                .filter(file => !filePathOf(file) && file.size > 0 && /^image\//i.test(file.type))
                 .map(file => ({
                     name: file.name,
                     type: file.type,
@@ -3639,14 +3641,15 @@ export class CanvasManager {
             if (files.length > 0) {
                 for (let i = 0; i < files.length; i++) {
                     const file = files[i];
-                    if (file.path) {
-                        const result = await this._archiveLocalDroppedFile(file.path, targetDir);
+                    const localPath = filePathOf(file);
+                    if (localPath) {
+                        const result = await this._archiveLocalDroppedFile(localPath, targetDir);
                         if (result?.success) {
                             this._addCapturedFile(result.filePath, dropPosition);
                             importedFileCount += 1;
                         } else {
                             console.error('[Canvas] 归档本地文件失败:', result?.error);
-                            this._addCapturedFile(file.path, dropPosition);
+                            this._addCapturedFile(localPath, dropPosition);
                             importedFileCount += 1;
                         }
                     }
@@ -3671,7 +3674,7 @@ export class CanvasManager {
                 return;
             }
             const typeHint = dropTypes.length > 0 ? `（${dropTypes.join(', ')}）` : '';
-            this._showCanvasStatus(`网页图片导入失败${lastRemoteError ? `：${lastRemoteError}` : `：拖拽数据中没有可用图片${typeHint}`}`, 0, 'error');
+            this._showCanvasStatus(`网页图片导入失败${lastRemoteError ? `：${lastRemoteError}` : `：拖拽数据中没有可用图片${typeHint}`}`, 0, 'error', !lastRemoteError);
         });
     }
 
@@ -5056,7 +5059,10 @@ export class CanvasManager {
     }
 
     async _createCard(data) {
-        if (!mediaPolicy.isBoardMediaFile(data?.filePath)) return null;
+        // Empty placeholders (addEmptyMediaNode: kind 'media', filePath '') are drawn as an upload slot.
+        const emptyPlaceholder = data?.kind === 'media' && !data.filePath
+            && ['image', 'video', 'audio'].includes(String(data.mediaType || '').toLowerCase());
+        if (!emptyPlaceholder && !mediaPolicy.isBoardMediaFile(data?.filePath)) return null;
         const fileType = this._getItemMediaType(data);
         const placeholderSize = this._mediaPlaceholderSize(fileType, data);
         data.mediaType = fileType;
@@ -6648,7 +6654,10 @@ export class CanvasManager {
                 }
             }, { once: true });
             video.addEventListener('seeked', drawFrame, { once: true });
-            video.src = source;
+            // Video needs the standard local-media scheme on Electron 45 to seek; keep `source` as the retain key.
+            const mediaSource = source.startsWith('local-res://') ? 'local-media://file/' + source.slice('local-res://'.length) : source;
+            if (mediaSource !== source) video.crossOrigin = 'anonymous';
+            video.src = mediaSource;
             const videos = ownerGroup.getAttr('generatorPreviewVideos') || [];
             videos.push(video);
             ownerGroup.setAttr('generatorPreviewVideos', videos);
@@ -15617,7 +15626,8 @@ export class CanvasManager {
         const group = item.group;
         const data = item.data;
         const video = document.createElement('video');
-        video.src = 'local-res://' + encodeURIComponent(data.filePath);
+        video.crossOrigin = 'anonymous';
+        video.src = 'local-media://file/' + encodeURIComponent(data.filePath);
         video.muted = true;
         video.playsInline = true;
         video.preload = 'metadata';
@@ -15848,7 +15858,8 @@ export class CanvasManager {
 
         // 创建一个隐藏的 HTML video 元素
         const video = document.createElement('video');
-        video.src = 'local-res://' + encodeURIComponent(data.filePath);
+        video.crossOrigin = 'anonymous';
+        video.src = 'local-media://file/' + encodeURIComponent(data.filePath);
         item.videoMuted = item.videoMuted !== false;
         video.muted = item.videoMuted;
         video.loop = true;

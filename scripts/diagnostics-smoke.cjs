@@ -13,8 +13,18 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         const env = { ...process.env, FLOW_MCP_SMOKE_PROFILE: profile };
         delete env.ELECTRON_RUN_AS_NODE;
         app = await electron.launch({ executablePath: require('electron'), args: [path.join(__dirname, 'mcp-client-smoke-entry.cjs')], env });
-        const page = await app.firstWindow();
+        // The first window is the splash screen, which closes once the canvas is ready.
+        let page;
+        for (let attempt = 0; attempt < 100 && !page; attempt++) {
+            page = app.windows().find(window => /dist[/\\]index\.html/.test(window.url()));
+            if (!page) await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        assert.ok(page, 'The main window must open');
         await page.waitForFunction(() => window.flowCanvas?.diagnostics);
+        await page.waitForFunction(() => window.Konva?.stages?.length);
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         await page.evaluate(async () => {
             await window.flowCanvas.apiConfig.save({ version: 1, revision: 100, providers: [
                 { id: 'fixture', name: 'Fixture', type: 'openai', capability: 'image', endpoint: 'https://fixture.test/v1',

@@ -78,6 +78,10 @@ const config = { schemaVersion: 1, revision: 1, catalogMode: 'remote', catalogSc
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         await page.waitForFunction(() => window.__flowCanvasGetModelConfigSnapshot?.().status.origin === 'remote');
+        await page.waitForFunction(() => window.Konva?.stages?.length);
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         await page.locator('#agentToggleBtn').hover();
         await page.locator('#agentSettingsBtn').click();
         await page.locator('#agentApiSettingsTab').click();

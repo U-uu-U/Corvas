@@ -2,12 +2,12 @@
 // Flow Canvas — Preload Script (IPC Bridge)
 // ============================================================
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 // Native File paths are registered before the page starts loading dropped media.
 // This channel is deliberately not exposed through the renderer API.
 window.addEventListener('drop', event => {
     if (!event.isTrusted) return;
-    const paths = Array.from(event.dataTransfer?.files || []).map(file => file.path).filter(Boolean);
+    const paths = Array.from(event.dataTransfer?.files || []).map(file => webUtils.getPathForFile(file)).filter(Boolean);
     if (paths.length) ipcRenderer.sendSync('media:grant-drop', paths);
 }, true);
 window.addEventListener('error', event => ipcRenderer.send('diagnostics:renderer', {
@@ -39,6 +39,10 @@ function savedStore(result) {
 
 contextBridge.exposeInMainWorld('flowCanvas', {
     platform: process.platform,
+    // Electron 32 removed File.path; resolve native paths for dropped files here.
+    getPathForFile: file => {
+        try { return webUtils.getPathForFile(file) || ''; } catch (_) { return ''; }
+    },
     startup: { ready: () => ipcRenderer.send('startup:ready') },
     appUpdates: {
         snapshot: () => ipcRenderer.invoke('app-updates:snapshot'),

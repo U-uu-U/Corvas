@@ -11,44 +11,62 @@ class RelaySessionStore {
         this.safeStorage = safeStorage;
     }
 
-    read() {
+    // Async encryption: serialize read-modify-write so concurrent saves cannot drop a site.
+    queue(work) {
+        const run = (this.pending || Promise.resolve()).then(work);
+        this.pending = run.catch(() => {});
+        return run;
+    }
+
+    // Resolves once every queued read/save/clear has finished; awaited before quit.
+    idle() { return this.pending || Promise.resolve(); }
+
+    async read() {
         if (!fs.existsSync(this.file)) return {};
-        if (!this.safeStorage?.isEncryptionAvailable()) throw unavailable();
+        if (!await this.safeStorage?.isAsyncEncryptionAvailable?.()) throw unavailable();
         const envelope = JSON.parse(fs.readFileSync(this.file, 'utf8'));
         if (envelope.version !== 1 || typeof envelope.encrypted !== 'string') throw unavailable();
-        const value = JSON.parse(this.safeStorage.decryptString(Buffer.from(envelope.encrypted, 'base64')));
+        const decrypted = await this.safeStorage.decryptStringAsync(Buffer.from(envelope.encrypted, 'base64'));
+        const value = JSON.parse(decrypted.result);
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw unavailable();
+        if (decrypted.shouldReEncrypt) { this.lastSaved = null; await this.write(value).catch(() => {}); }
         return value;
     }
 
     get(site, origin) {
-        const saved = this.read()[site];
-        return saved?.origin === origin ? saved : null;
+        return this.queue(async () => {
+            const saved = (await this.read())[site];
+            return saved?.origin === origin ? saved : null;
+        });
     }
 
-    save(site, origin, { cookies = [], storage = {} }) {
-        const values = this.read();
+    save(site, origin, data) { return this.queue(() => this.saveNow(site, origin, data)); }
+
+    async saveNow(site, origin, { cookies = [], storage = {} }) {
+        const values = await this.read();
         const selected = Object.fromEntries(STORAGE_KEYS.filter(key => typeof storage[key] === 'string'
             && storage[key].length <= 32768).map(key => [key, storage[key]]));
         values[site] = { origin, storage: selected, cookies: cookies.filter(cookie => !cookie.expirationDate
             || cookie.expirationDate > Date.now() / 1000).slice(0, 100).map(cookie => Object.fromEntries(
             COOKIE_FIELDS.filter(key => cookie[key] !== undefined).map(key => [key, cookie[key]]))) };
-        this.write(values);
+        await this.write(values);
     }
 
     clear(site) {
-        const values = this.read();
-        if (!Object.hasOwn(values, site)) return;
-        delete values[site];
-        this.write(values);
+        return this.queue(async () => {
+            const values = await this.read();
+            if (!Object.hasOwn(values, site)) return;
+            delete values[site];
+            await this.write(values);
+        });
     }
 
-    write(values) {
-        if (!this.safeStorage?.isEncryptionAvailable()) throw unavailable();
+    async write(values) {
+        if (!await this.safeStorage?.isAsyncEncryptionAvailable?.()) throw unavailable();
         const raw = JSON.stringify(values);
         if (Buffer.byteLength(raw) > 512 * 1024) throw unavailable();
         if (raw === this.lastSaved) return;
-        const envelope = { version: 1, encrypted: this.safeStorage.encryptString(raw).toString('base64') };
+        const envelope = { version: 1, encrypted: (await this.safeStorage.encryptStringAsync(raw)).toString('base64') };
         fs.mkdirSync(path.dirname(this.file), { recursive: true });
         const temporary = this.file + '.tmp';
         fs.writeFileSync(temporary, JSON.stringify(envelope), { mode: 0o600 });

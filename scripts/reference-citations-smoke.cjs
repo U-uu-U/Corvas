@@ -6,17 +6,20 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
 
 (async () => {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-citations-'));
+    // User media lives outside userData; the media policy rejects files at the profile root.
+    const mediaDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-citations-media-'));
     let app;
     try {
         await fs.mkdir(path.join(profile, 'data'));
-        const previewPaths = ['first', 'second'].map(name => path.join(profile, `${name}.png`));
+        const previewPaths = ['first', 'second'].map(name => path.join(mediaDir, `${name}.png`));
         for (const [index, file] of previewPaths.entries()) {
             await require('sharp')({ create: { width: 160, height: 100, channels: 3,
                 background: index ? '#bb7f50' : '#559b8c' } }).png().toFile(file);
         }
-        const audioPath = path.join(profile, 'narration.wav');
+        const audioPath = path.join(mediaDir, 'narration.wav');
         await fs.writeFile(audioPath, 'smoke-audio');
-        await fs.writeFile(path.join(profile, 'data/board.json'), JSON.stringify({ version: 1, items: [], folderGroups: [], mcp: { enabled: false } }));
+        await fs.writeFile(path.join(profile, 'data/board.json'), JSON.stringify({ version: 1, items: [], folderGroups: [], mcp: { enabled: false },
+            assetLibrary: { folders: [mediaDir] } }));
         const env = { ...process.env, FLOW_MCP_SMOKE_PROFILE: profile };
         delete env.ELECTRON_RUN_AS_NODE;
         app = await electron.launch({ executablePath: require('electron'),
@@ -29,6 +32,10 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         }
         if (!page) throw new Error('Corvas main window did not open');
         await page.waitForFunction(() => window.flowCanvas?.store);
+        await page.waitForFunction(() => window.Konva?.stages?.length);
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         const source = await fs.readFile(path.join(__dirname, '../src/canvas.js'), 'utf8');
         // Exercise the production composer methods with real Electron selection/contenteditable behavior.
         const methods = source.slice(source.indexOf('    _generationComposerPromptValue('), source.indexOf('    _syncGenerationComposerModelButton('));
@@ -69,6 +76,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             fixture._getVideoReferenceLimitsForConfig = () => ({ image: 9, video: 3, audio: 3 });
             fixture._getVideoReferenceOverflow = () => [];
             fixture._syncGenerationComposerPromptMergeButton = () => {};
+            fixture._syncGenerationComposerSalePrice = () => {};
             fixture._positionGenerationComposer = () => {};
             fixture._cacheMediaGenerationPromptDraft = () => {};
             fixture.emit = () => {};
@@ -261,5 +269,6 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
     } finally {
         await app?.close();
         await fs.rm(profile, { recursive: true, force: true });
+        await fs.rm(mediaDir, { recursive: true, force: true });
     }
 })().catch(error => { console.error(error); process.exitCode = 1; });

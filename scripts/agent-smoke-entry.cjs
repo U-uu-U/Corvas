@@ -5,11 +5,11 @@ const { ApiConfigStore } = require('../electron-main/api-config-store');
 const profile = process.env.FLOW_CANVAS_SMOKE_PROFILE;
 if (!profile) throw new Error('FLOW_CANVAS_SMOKE_PROFILE is required');
 app.setPath('userData', profile);
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     let config = JSON.parse(fs.readFileSync(path.join(profile, 'fixture-api.json'), 'utf8'));
     if (process.env.FLOW_CANVAS_SMOKE_LIVE === '1') {
-        const live = new ApiConfigStore(path.join(app.getPath('appData'), 'flow-canvas'), {
-            unprotect: bytes => safeStorage.decryptString(bytes)
+        const live = await new ApiConfigStore(path.join(app.getPath('appData'), 'flow-canvas'), {
+            unprotect: async value => (await safeStorage.decryptStringAsync(value)).result
         }).load();
         if (!live.success || !live.config) throw new Error('Live API configuration is unavailable');
         config = live.config;
@@ -32,7 +32,7 @@ app.whenReady().then(() => {
         }
         fs.writeFileSync(boardFile, JSON.stringify(board));
     }
-    new ApiConfigStore(profile, { protect: text => safeStorage.encryptString(text), unprotect: bytes => safeStorage.decryptString(bytes) }).save(config);
+    await new ApiConfigStore(profile, { protect: value => safeStorage.encryptStringAsync(value), unprotect: async value => (await safeStorage.decryptStringAsync(value)).result }).save(config);
 });
 if (process.env.FLOW_CANVAS_SMOKE_ASAR) {
     Object.defineProperty(app, 'isPackaged', { value: true });

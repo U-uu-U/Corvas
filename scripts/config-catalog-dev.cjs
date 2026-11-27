@@ -20,16 +20,16 @@ if (!fs.existsSync(path.join(profile, 'data', 'api-config.v1.json'))) {
 process.env.FLOW_CANVAS_REMOTE_CATALOG = '1';
 process.env.FLOW_CANVAS_CONFIG_URL ||= 'https://artconfig.ravenhash.org/config/preview';
 
-app.whenReady().then(() => {
-    const protection = { protect: value => safeStorage.encryptString(value), unprotect: value => safeStorage.decryptString(value) };
+app.whenReady().then(async () => {
+    const protection = { protect: value => safeStorage.encryptStringAsync(value), unprotect: async value => (await safeStorage.decryptStringAsync(value)).result };
     const target = new ApiConfigStore(profile, protection);
-    const existing = target.load();
+    const existing = await target.load();
     if (!existing.config?.providers?.length) {
-        const original = new ApiConfigStore(originalProfile, protection).load();
+        const original = await new ApiConfigStore(originalProfile, protection).load();
         if (!original.success || !original.config) throw new Error('API accounts are unavailable');
         // The lab copies encrypted account bindings but starts with no locally listed models.
         const providers = original.config.providers.map(provider => ({ ...provider, model: '', models: [] }));
-        const saved = target.save({ ...original.config, providers, revision: 1,
+        const saved = await target.save({ ...original.config, providers, revision: 1,
             globalConfig: { ...original.config.globalConfig, videoProviderId: null, imageProviderId: null, textProviderId: null } });
         if (!saved.success) throw new Error(saved.error);
     }

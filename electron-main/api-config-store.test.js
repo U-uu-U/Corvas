@@ -14,20 +14,20 @@ function createStore(root) {
     });
 }
 
-test('ApiConfigStore encrypts credentials and restores the latest config', () => {
+test('ApiConfigStore encrypts credentials and restores the latest config', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-canvas-api-config-'));
     try {
         const store = createStore(root);
-        const result = store.save({
+        const result = (await store.save({
             revision: 4,
             providers: [{ id: 'image', apiKey: 'secret-value', model: 'gpt-image-2' }],
             globalConfig: { imageProviderId: 'image' }
-        });
+        }));
 
         assert.equal(result.success, true);
         const raw = fs.readFileSync(path.join(root, 'data', 'api-config.v1.json'), 'utf8');
         assert.equal(raw.includes('secret-value'), false);
-        const loaded = store.load();
+        const loaded = (await store.load());
         assert.equal(loaded.config.providers[0].apiKey, 'secret-value');
         assert.equal(loaded.config.revision, 4);
     } finally {
@@ -35,15 +35,15 @@ test('ApiConfigStore encrypts credentials and restores the latest config', () =>
     }
 });
 
-test('ApiConfigStore falls back to a rotated backup when the primary is corrupt', () => {
+test('ApiConfigStore falls back to a rotated backup when the primary is corrupt', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-canvas-api-config-'));
     try {
         const store = createStore(root);
-        store.save({ revision: 1, providers: [{ id: 'first', apiKey: 'one' }] });
-        store.save({ revision: 2, providers: [{ id: 'second', apiKey: 'two' }] });
+        (await store.save({ revision: 1, providers: [{ id: 'first', apiKey: 'one' }] }));
+        (await store.save({ revision: 2, providers: [{ id: 'second', apiKey: 'two' }] }));
         fs.writeFileSync(path.join(root, 'data', 'api-config.v1.json'), '{broken', 'utf8');
 
-        const loaded = store.load();
+        const loaded = (await store.load());
         assert.equal(loaded.success, true);
         assert.equal(loaded.recoveredFromBackup, true);
         assert.equal(loaded.config.providers[0].id, 'first');
@@ -52,63 +52,85 @@ test('ApiConfigStore falls back to a rotated backup when the primary is corrupt'
     }
 });
 
-test('ApiConfigStore refuses plaintext fallback and leaves the previous credentials untouched', t => {
+test('ApiConfigStore refuses plaintext fallback and leaves the previous credentials untouched', async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-canvas-api-config-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const secure = createStore(root);
-    secure.save({ revision: 1, providers: [{ apiKey: 'original-secret' }] });
+    (await secure.save({ revision: 1, providers: [{ apiKey: 'original-secret' }] }));
     const original = fs.readFileSync(secure.filePath, 'utf8');
     for (const protect of [null, () => null, () => Buffer.alloc(0)]) {
         const store = new ApiConfigStore(root, { protect, unprotect: value => Buffer.from(value).map(byte => byte ^ 0x5a).toString('utf8') });
-        const result = store.save({ revision: 2, providers: [{ apiKey: 'new-secret' }] });
+        const result = (await store.save({ revision: 2, providers: [{ apiKey: 'new-secret' }] }));
         assert.equal(result.success, false); assert.match(result.error, /加密不可用/);
         assert.equal(fs.readFileSync(store.filePath, 'utf8'), original);
     }
     assert.equal(fs.existsSync(secure.backupDir), false);
 });
 
-test('legacy plaintext is readable but saves and new backups are encrypted even for unchanged config', t => {
+test('legacy plaintext is readable but saves and new backups are encrypted even for unchanged config', async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-canvas-api-config-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const store = createStore(root);
     fs.mkdirSync(store.dataDir, { recursive: true });
     fs.writeFileSync(store.filePath, JSON.stringify({ format: 'plain-json', payload: JSON.stringify({
         revision: 1, providers: [{ apiKey: 'legacy-secret' }], updatedAt: '2026-01-01T00:00:00Z' }) }));
-    const loaded = store.load(); assert.equal(loaded.config.providers[0].apiKey, 'legacy-secret');
-    assert.equal(store.save(loaded.config).success, true);
+    const loaded = (await store.load()); assert.equal(loaded.config.providers[0].apiKey, 'legacy-secret');
+    assert.equal((await store.save(loaded.config)).success, true);
     for (const file of [store.filePath, ...store._backupFiles()]) {
         const raw = fs.readFileSync(file, 'utf8'); assert.equal(raw.includes('legacy-secret'), false);
         assert.equal(JSON.parse(raw).format, 'safe-storage');
     }
 });
 
-test('locked or unavailable credential decryption cannot replace existing configuration with an empty startup snapshot', t => {
+test('locked or unavailable credential decryption cannot replace existing configuration with an empty startup snapshot', async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-canvas-api-locked-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const working = createStore(root);
-    working.save({ revision: 1, providers: [{ id: 'saved', apiKey: 'saved-secret' }] });
-    working.save({ revision: 2, providers: [{ id: 'saved', apiKey: 'latest-secret' }] });
+    (await working.save({ revision: 1, providers: [{ id: 'saved', apiKey: 'saved-secret' }] }));
+    (await working.save({ revision: 2, providers: [{ id: 'saved', apiKey: 'latest-secret' }] }));
     const files = [working.filePath, ...working._backupFiles()];
     const before = files.map(file => fs.readFileSync(file));
     for (const unprotect of [() => null, () => { throw new Error('Keychain locked'); }]) {
         const locked = new ApiConfigStore(root, { protect: text => Buffer.from(text), unprotect });
-        assert.equal(locked.load().success, false);
-        assert.equal(locked.load().code, 'API_CONFIG_UNREADABLE');
-        assert.equal(locked.save({ revision: 3, providers: [] }).success, false);
+        assert.equal((await locked.load()).success, false);
+        assert.equal((await locked.load()).code, 'API_CONFIG_UNREADABLE');
+        assert.equal((await locked.save({ revision: 3, providers: [] })).success, false);
         assert.deepEqual(files.map(file => fs.readFileSync(file)), before);
     }
-    assert.equal(working.load().config.providers[0].apiKey, 'latest-secret');
+    assert.equal((await working.load()).config.providers[0].apiKey, 'latest-secret');
 });
 
-test('missing stores remain a valid first start while damaged existing stores fail explicitly', t => {
+test('missing stores remain a valid first start while damaged existing stores fail explicitly', async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-canvas-api-damaged-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const store = createStore(root);
-    assert.equal(store.load().success, true);
-    assert.equal(store.load().config, null);
+    assert.equal((await store.load()).success, true);
+    assert.equal((await store.load()).config, null);
     fs.mkdirSync(store.dataDir, { recursive: true });
     fs.writeFileSync(store.filePath, '{broken');
-    assert.equal(store.load().success, false);
-    assert.equal(store.save({ providers: [] }).success, false);
+    assert.equal((await store.load()).success, false);
+    assert.equal((await store.save({ providers: [] })).success, false);
     assert.equal(fs.readFileSync(store.filePath, 'utf8'), '{broken');
+});
+
+test('a rotated safeStorage key re-encrypts the primary config on load and keeps it readable', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-canvas-api-rekey-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    let key = 0x11;
+    const store = new ApiConfigStore(root, {
+        protect: async value => Buffer.from(value, 'utf8').map(byte => byte ^ key),
+        unprotect: async value => {
+            for (const candidate of [0x22, 0x11]) {
+                const text = Buffer.from(value).map(byte => byte ^ candidate).toString('utf8');
+                if (text.startsWith('{')) return { result: text, shouldReEncrypt: candidate !== key };
+            }
+            return null;
+        }
+    });
+    await store.save({ revision: 1, providers: [{ apiKey: 'rotate-secret' }] });
+    const before = fs.readFileSync(store.filePath, 'utf8');
+    key = 0x22;
+    assert.equal((await store.load()).config.providers[0].apiKey, 'rotate-secret');
+    assert.notEqual(fs.readFileSync(store.filePath, 'utf8'), before);
+    assert.equal((await store.load()).config.providers[0].apiKey, 'rotate-secret');
 });

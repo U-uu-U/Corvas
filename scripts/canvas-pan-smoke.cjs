@@ -10,8 +10,9 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'corvas-pan-'));
     let app;
     try {
-        await fs.mkdir(path.join(profile, 'data'));
-        const filePath = path.join(profile, 'reference.jpg');
+        // Media inside the profile must sit in a managed root (electron-main/media-access.cjs _checkSensitive).
+        await fs.mkdir(path.join(profile, 'data', 'captured'), { recursive: true });
+        const filePath = path.join(profile, 'data', 'captured', 'reference.jpg');
         await sharp(path.join(root, 'electron-main/assets/app-icon.png')).resize(1280, 768, { fit: 'fill' }).jpeg().toFile(filePath);
         const items = Array.from({ length: 180 }, (_, i) => ({
             id: `pan-${i}`, kind: 'media', mediaType: 'image', filePath,
@@ -36,6 +37,9 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         assert.ok(page, 'Vite must be running on port 15321');
         await (await app.browserWindow(page)).evaluate(window => window.setSize(1400, 900));
         await page.waitForFunction(() => window.Konva?.stages[0]?.find('.nodeGroup').length === 180);
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         await page.evaluate(async () => {
             const moduleUrl = name => performance.getEntriesByType('resource').map(entry => entry.name)
                 .find(url => new URL(url).pathname === `/${name}.js`);

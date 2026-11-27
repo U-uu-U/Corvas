@@ -171,8 +171,30 @@ async function handleLocalResourceRequest(request, { accessPolicy, allowedOrigin
     catch { return new Response(null, { status: 404 }); }
 }
 
+// <video>/<audio> on Electron 45 cannot seek over the non-standard local-res scheme
+// (moov-at-end MP4s fail with MEDIA_ERR_SRC_NOT_SUPPORTED). Media elements use the
+// standard scheme local-media://file/<encoded path>, served by the same handler and policy.
+const LOCAL_MEDIA_PREFIX = 'local-media://file/';
+
+function localMediaToResourceRequest(request) {
+    const url = String(request?.url || '');
+    if (!url.startsWith(LOCAL_MEDIA_PREFIX)) throw new Error('Invalid scheme');
+    const encodedPath = url.slice(LOCAL_MEDIA_PREFIX.length).split(/[?#]/, 1)[0];
+    return new Request('local-res://' + encodedPath, { method: request.method || 'GET', headers: request.headers });
+}
+
+async function handleLocalMediaRequest(request, options) {
+    let inner;
+    try { inner = localMediaToResourceRequest(request); }
+    catch (_) { return new Response('Invalid local resource path', { status: 400 }); }
+    return handleLocalResourceRequest(inner, options);
+}
+
 module.exports = {
+    LOCAL_MEDIA_PREFIX,
     decodeLocalResourcePath,
+    handleLocalMediaRequest,
+    localMediaToResourceRequest,
     handleLocalResourceRequest,
     parseByteRange
 };

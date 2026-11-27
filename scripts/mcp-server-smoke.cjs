@@ -99,6 +99,10 @@ const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/cli
         await restarted.waitForFunction(async () => window.flowCanvas?.mcpServer && !(await window.flowCanvas.mcpServer.status()).enabled);
         const stopped = await restarted.evaluate(() => window.flowCanvas.mcpServer.status());
         assert.equal(stopped.running, false);
+        await restarted.waitForFunction(async () => (await window.flowCanvas.mcpServer.status()).windowVisible);
+        await restarted.waitForTimeout(400);
+        const restartOnboarding = restarted.locator('#siteLoginDialog[open]');
+        if (await restartOnboarding.count()) await restartOnboarding.locator('[data-login-skip]').click();
         await restarted.locator('#mcpStartupNotice').waitFor({ state: 'visible' });
         await restarted.locator('#mcpStartupNotice [data-action=close]').click();
         assert.equal(await restarted.locator('#mcpStartupNotice').count(), 0);

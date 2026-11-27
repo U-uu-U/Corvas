@@ -3,8 +3,8 @@ const { app, ipcMain, session, shell } = require('electron');
 const configUrl = process.env.FLOW_API_CATALOG_SMOKE_URL;
 if (!configUrl || new URL(configUrl).hostname !== '127.0.0.1') throw new Error('Local CONFIG fixture required');
 globalThis.apiCatalogSmoke = { fetchModelsCalls: 0, blockedRequests: [], openedSites: [], openedUrls: [], rendererErrors: [] };
-app.on('web-contents-created', (_event, web) => web.on('console-message', (_event, level, message) => {
-    if (level >= 2) globalThis.apiCatalogSmoke.rendererErrors.push(message);
+app.on('web-contents-created', (_event, web) => web.on('console-message', ({ level, message }) => {
+    if (level === 'warning' || level === 'error') globalThis.apiCatalogSmoke.rendererErrors.push(message);
 }));
 shell.openExternal = async url => { globalThis.apiCatalogSmoke.openedUrls.push(url); };
 

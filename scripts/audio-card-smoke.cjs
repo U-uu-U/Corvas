@@ -44,6 +44,9 @@ function wav() {
         }
         assert.ok(page, 'Main renderer created');
         await page.waitForFunction(() => window.Konva?.stages[0]?.findOne('#audio-fixture')?.findOne('.audioControls'), null, { timeout: 15000 });
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         const point = (selector, ratio = 0.5) => page.evaluate(({ selector, ratio }) => {
             const stage = window.Konva.stages[0];
             const node = stage.findOne('#audio-fixture').findOne(selector);

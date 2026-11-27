@@ -8,32 +8,32 @@ const { RelaySessionStore, restoreSessionCookies, restoreSessionStorage } = requ
 function fixture(t) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'corvas-session-store-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-    const safeStorage = { isEncryptionAvailable: () => true,
-        encryptString: text => Buffer.from(text.split('').reverse().join('')),
-        decryptString: bytes => bytes.toString().split('').reverse().join('') };
+    const safeStorage = { isAsyncEncryptionAvailable: async () => true,
+        encryptStringAsync: async text => Buffer.from(text.split('').reverse().join('')),
+        decryptStringAsync: async bytes => ({ result: bytes.toString().split('').reverse().join(''), shouldReEncrypt: false }) };
     return { directory, safeStorage, store: new RelaySessionStore({ directory, safeStorage }) };
 }
 
-test('session cookies and allowlisted storage survive restart encrypted and stay isolated by site and origin', t => {
+test('session cookies and allowlisted storage survive restart encrypted and stay isolated by site and origin', async t => {
     const h = fixture(t);
-    h.store.save('art', 'https://art.ravenhash.org', { storage: { token: 'private-login-token', user: '{"id":1}', password: 'must-not-save' },
-        cookies: [{ name: 'session', value: 'private-cookie', domain: 'art.ravenhash.org', path: '/', hostOnly: true, secure: true }] });
+    (await h.store.save('art', 'https://art.ravenhash.org', { storage: { token: 'private-login-token', user: '{"id":1}', password: 'must-not-save' },
+        cookies: [{ name: 'session', value: 'private-cookie', domain: 'art.ravenhash.org', path: '/', hostOnly: true, secure: true }] }));
     const raw = fs.readFileSync(h.store.file, 'utf8');
     assert.doesNotMatch(raw, /private-login-token|private-cookie|must-not-save/);
     const reopened = new RelaySessionStore(h);
-    assert.equal(reopened.get('art', 'https://art.ravenhash.org').storage.token, 'private-login-token');
-    assert.equal(reopened.get('art', 'https://cart.ravenhash.org'), null);
-    assert.equal(reopened.get('cart', 'https://cart.ravenhash.org'), null);
-    reopened.clear('art');
-    assert.equal(new RelaySessionStore(h).get('art', 'https://art.ravenhash.org'), null);
+    assert.equal((await reopened.get('art', 'https://art.ravenhash.org')).storage.token, 'private-login-token');
+    assert.equal((await reopened.get('art', 'https://cart.ravenhash.org')), null);
+    assert.equal((await reopened.get('cart', 'https://cart.ravenhash.org')), null);
+    (await reopened.clear('art'));
+    assert.equal((await new RelaySessionStore(h).get('art', 'https://art.ravenhash.org')), null);
 });
 
-test('unavailable encryption never stores plaintext or overwrites an encrypted session', t => {
+test('unavailable encryption never stores plaintext or overwrites an encrypted session', async t => {
     const h = fixture(t);
-    h.store.save('art', 'https://art.ravenhash.org', { storage: { token: 'private' } });
+    (await h.store.save('art', 'https://art.ravenhash.org', { storage: { token: 'private' } }));
     const before = fs.readFileSync(h.store.file);
-    h.safeStorage.isEncryptionAvailable = () => false;
-    assert.throws(() => h.store.save('art', 'https://art.ravenhash.org', { storage: { token: 'changed' } }));
+    h.safeStorage.isAsyncEncryptionAvailable = async () => false;
+    await assert.rejects(() => (h.store.save('art', 'https://art.ravenhash.org', { storage: { token: 'changed' } })));
     assert.deepEqual(fs.readFileSync(h.store.file), before);
 });
 
@@ -88,5 +88,5 @@ test('closing during an in-flight save captures logout again so an old token can
     const closing = browser.flushSessions();
     unblock();
     await staleSave; await closing;
-    assert.equal(new RelaySessionStore(h).get('art', origin), null);
+    assert.equal((await new RelaySessionStore(h).get('art', origin)), null);
 });

@@ -8,10 +8,10 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
 (async () => {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-ui-scale-'));
     const output = path.resolve(__dirname, '../output/playwright');
+    // Media lives outside userData: the media access policy refuses files inside the app profile.
+    const media = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-ui-scale-media-'));
     let app;
     try {
-        const media = path.join(profile, 'media');
-        await fs.mkdir(media);
         const video = path.join(media, 'sample.mp4');
         const encoded = spawnSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=10',
             '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', video], { encoding: 'utf8' });
@@ -54,6 +54,11 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
                 const node = window.Konva.stages[0].findOne(`#${id}`);
                 return node?.findOne('.videoControlGlyph') && node.findOne('.displayNode')?.image()?.readyState >= 2;
             }));
+        const dismissOnboarding = async () => {
+            await page.waitForTimeout(400);
+            const onboarding = page.locator('#siteLoginDialog[open]');
+            if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
+        };
         const zoom = async value => {
             await page.evaluate(value => {
                 const stage = window.Konva.stages[0];
@@ -97,6 +102,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             });
         };
         await ready();
+        await dismissOnboarding();
         await page.setViewportSize({ width: 1360, height: 900 });
         await openSettings();
         await zoom(0.25);
@@ -134,6 +140,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         await page.evaluate(() => document.dispatchEvent(new MouseEvent('mouseup', { clientX: -100, clientY: -100 })));
         await page.reload();
         await ready();
+        await dismissOnboarding();
         await zoom(0.25);
         assert.equal((await metrics()).portScale, 0.25, 'Saved cap is applied during graph creation');
         assert.equal((await metrics()).flowWidth, 0.8);
@@ -220,5 +227,6 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
     } finally {
         await app?.close();
         await fs.rm(profile, { recursive: true, force: true });
+        await fs.rm(media, { recursive: true, force: true });
     }
 })().catch(error => { console.error(error); process.exitCode = 1; });

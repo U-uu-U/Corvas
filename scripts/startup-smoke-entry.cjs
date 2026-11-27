@@ -28,7 +28,7 @@ ipcMain.handle = (channel, listener) => handle(channel, /^(thumb:get|thumb:previ
     return result;
 } : listener);
 app.whenReady().then(() => {
-    new ApiConfigStore(profile, { protect: text => safeStorage.encryptString(text), unprotect: bytes => safeStorage.decryptString(bytes) })
+    new ApiConfigStore(profile, { protect: value => safeStorage.encryptStringAsync(value), unprotect: async value => (await safeStorage.decryptStringAsync(value)).result })
         .save({ providers: [], globalConfig: {} });
     session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
         callback({ cancel: !details.url.startsWith('http://127.0.0.1:15321/') });

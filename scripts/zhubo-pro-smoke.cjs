@@ -29,10 +29,17 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         }
         assert.ok(page);
         await page.waitForFunction(() => window.flowCanvas?.store);
+        await page.waitForFunction(() => window.Konva?.stages?.length);
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         const source = await fs.readFile(path.join(__dirname, '../src/canvas.js'), 'utf8');
         const methods = source.slice(source.indexOf('    _showGenerationComposerModelMenu('), source.indexOf('    _showGenerationComposerPromptPresets('));
-        await page.evaluate(({ methods, providers }) => {
-            const Fixture = new Function(`return class { ${methods} }`)();
+        const healthModule = pathToFileURL(path.join(__dirname, '../src/generation-health-indicator.js')).href;
+        await page.evaluate(async ({ methods, providers, healthModule }) => {
+            // The picker methods use canvas.js's module-level appendGenerationHealth import.
+            const { appendGenerationHealth } = await import(healthModule);
+            const Fixture = new Function('appendGenerationHealth', `return class { ${methods} }`)(appendGenerationHealth);
             const fixture = new Fixture(), data = { nodeType: 'video', config: {} };
             fixture.items = new Map([['node', { data }]]);
             fixture._generationComposer = { nodeId: 'node' };
@@ -48,7 +55,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             for (const name of ['_syncGenerationComposerModelButton', '_renderGenerationComposerParameters', '_syncGenerationComposerCount', 'refreshOpNode', 'emit']) fixture[name] = () => {};
             window.zhuboFixture = { fixture, data };
             fixture._showGenerationComposerModelMenu('node', {});
-        }, { methods, providers });
+        }, { methods, providers, healthModule });
         const group = page.locator('.generation-composer-model-routes').filter({ has: page.locator('.generation-composer-route-trigger strong', { hasText: 'Seedance 2.5 推荐渠道' }) });
         assert.equal(await group.count(), 1);
         assert.equal(await group.locator('.generation-composer-route-trigger strong').innerText(), 'Seedance 2.5 推荐渠道');

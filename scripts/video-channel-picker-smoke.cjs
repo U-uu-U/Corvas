@@ -20,8 +20,15 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             { id: 'star', sourceProviderId: 'star', name: 'StarFrame API', model: 'ch1401-sd-2.5-720p', endpoint: 'https://api.xzapi.vip/v1' });
         const sidebar = await fs.readFile(path.join(__dirname, '../src/agent-sidebar.js'), 'utf8');
         const optionsMethod = sidebar.slice(sidebar.indexOf('    getGenerationProviderOptions('), sidebar.indexOf('    getImageProviderConfig('));
+        const { formatModelSalePrice, formatModelSalePriceDetails } = await import(pathToFileURL(path.join(__dirname, '../shared/model-presentation.mjs')));
+        const priceFunction = sidebar.slice(sidebar.indexOf('function providerSalePricePresentation('), sidebar.indexOf('const DEFAULT_IMAGE_SIZES'));
+        // No remote catalog is loaded, so the bundled pause list decides availability.
+        const modelConfigStore = { getConfig: () => null };
         const OptionsFixture = new Function('isVideoGenerationAvailable', 'describeVideoModelProfile', 'describeModelPresentation',
-            `return class { ${optionsMethod} }`)(isVideoGenerationAvailable, describeVideoModelProfile, () => '');
+            'modelConfigStore', 'formatModelSalePrice', 'formatModelSalePriceDetails',
+            `${priceFunction}
+return class { ${optionsMethod} }`)(isVideoGenerationAvailable, describeVideoModelProfile, () => '',
+            modelConfigStore, formatModelSalePrice, formatModelSalePriceDetails);
         const optionsFixture = new OptionsFixture();
         optionsFixture._providerVariants = () => raw;
         optionsFixture._isVideoProvider = () => true;
@@ -40,10 +47,19 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         }
         assert.ok(page);
         await page.waitForFunction(() => window.flowCanvas?.store);
+        await page.waitForFunction(() => window.Konva?.stages?.length);
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         const source = await fs.readFile(path.join(__dirname, '../src/canvas.js'), 'utf8');
         const methods = source.slice(source.indexOf('    _showGenerationComposerModelMenu('), source.indexOf('    _showGenerationComposerPromptPresets('));
+        const healthBundle = await require('esbuild').build({
+            entryPoints: [path.join(__dirname, '../src/generation-health-indicator.js')], bundle: true,
+            format: 'iife', globalName: 'GenerationHealthSmoke', write: false
+        });
+        await page.addScriptTag({ content: healthBundle.outputFiles[0].text });
         await page.evaluate(({ methods, providers }) => {
-            const Fixture = new Function(`return class { ${methods} }`)();
+            const Fixture = new Function('appendGenerationHealth', `return class { ${methods} }`)(window.GenerationHealthSmoke.appendGenerationHealth);
             const fixture = new Fixture(), data = { nodeType: 'video', config: {} };
             fixture.items = new Map([['node', { data }]]);
             fixture._generationComposer = { nodeId: 'node' };
@@ -111,7 +127,7 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             [backup, 'ch0107-sd-2.5-720p'], [backup, 'ch1401-sd-2.5-720p'], [version2, 'artsdance2-0-mini-intl-260701']]) {
             await group.locator('.generation-composer-route-trigger').focus();
             await page.keyboard.press('ArrowRight');
-            const index = await group.locator('.generation-composer-model-option small').allTextContents();
+            const index = await group.locator('.generation-composer-model-option small:not(.generation-composer-model-price)').allTextContents();
             const position = index.findIndex(text => text.startsWith(model + ' ·') || text === model);
             assert.ok(position >= 0, `Wire ID ${model} must be visible`);
             await group.locator('.generation-composer-model-option').nth(position).click();

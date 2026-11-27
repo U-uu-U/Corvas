@@ -47,6 +47,11 @@ const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio
         originalClipboard = await app.evaluate(({ clipboard }) => clipboard.readText());
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
+        // With no providers the "配置 API" dialog opens modally and covers the Agent controls.
+        await page.waitForFunction(() => window.Konva?.stages?.length);
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         await page.locator('#agentToggleBtn').hover();
         await page.waitForSelector('#agentSettingsBtn');
         await page.locator('#agentSettingsBtn').click();

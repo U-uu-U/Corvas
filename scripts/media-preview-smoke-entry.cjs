@@ -6,7 +6,7 @@ if (!profile) throw new Error('Isolated media smoke profile required');
 app.setPath('userData', profile);
 Object.defineProperty(app, 'isPackaged', { value: true });
 app.whenReady().then(() => {
-    new ApiConfigStore(profile, { protect: value => safeStorage.encryptString(value), unprotect: value => safeStorage.decryptString(value) })
+    new ApiConfigStore(profile, { protect: value => safeStorage.encryptStringAsync(value), unprotect: async value => (await safeStorage.decryptStringAsync(value)).result })
         .save({ version: 1, revision: 1, providers: [], globalConfig: {} });
 });
 require(process.env.FLOW_MEDIA_SMOKE_ASAR

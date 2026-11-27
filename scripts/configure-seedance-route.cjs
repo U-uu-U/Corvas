@@ -10,10 +10,10 @@ app.whenReady().then(async () => {
         ? ['seedance_v2.0-933', 'seedance_v2.5-101010', 'seedance_v2.5-301010']
         : ['sd2.5-route1', 'sd2.5'];
     const store = new ApiConfigStore(app.getPath('userData'), {
-        protect: value => safeStorage.encryptString(value),
-        unprotect: value => safeStorage.decryptString(value)
+        protect: value => safeStorage.encryptStringAsync(value),
+        unprotect: async value => (await safeStorage.decryptStringAsync(value)).result
     });
-    const loaded = store.load();
+    const loaded = await store.load();
     if (!loaded.config) throw new Error('No saved API configuration');
     const provider = loaded.config.providers.find(provider => {
         try { return new URL(provider.endpoint).hostname === 'art.ravenhash.org' && provider.apiKey
@@ -42,7 +42,7 @@ app.whenReady().then(async () => {
             error: task.error?.message || task.data?.error?.message, hasVideo: !!(task.video_url || task.data?.video_url) }));
     }
     if (process.argv.includes('--apply')) {
-        const latest = store.load().config;
+        const latest = (await store.load()).config;
         if (JSON.stringify(latest) !== JSON.stringify(loaded.config)) throw new Error('API configuration changed during discovery; retry with Flow Canvas closed');
         const current = Array.isArray(provider.models) ? provider.models : [provider.model];
         if (requiredModels.every(model => current.includes(model))) {
@@ -52,7 +52,7 @@ app.whenReady().then(async () => {
         provider.models = [...new Set([...current, ...requiredModels].filter(Boolean))];
         loaded.config.revision += 1;
         loaded.config.updatedAt = new Date().toISOString();
-        const result = store.save(loaded.config);
+        const result = await store.save(loaded.config);
         if (!result.success) throw new Error(result.error);
         console.log('Saved route models to existing RavenHash provider; credentials unchanged.');
     }

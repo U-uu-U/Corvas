@@ -1,5 +1,3 @@
-// Electron 28 does not expose Web Crypto globally; the SDK HTTP transport expects it.
-if (!globalThis.crypto) globalThis.crypto = require('node:crypto').webcrypto;
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { ListToolsRequestSchema, CallToolRequestSchema } = require('@modelcontextprotocol/sdk/types.js');

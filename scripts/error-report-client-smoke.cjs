@@ -40,6 +40,10 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             }
             assert.ok(page, 'Canvas window must load');
             await page.waitForFunction(() => window.flowCanvas?.diagnostics?.submit && document.querySelector('#diagnosticsReportDialog'));
+            await page.waitForFunction(() => window.Konva?.stages?.length);
+            await page.waitForTimeout(400);
+            const onboarding = page.locator('#siteLoginDialog[open]');
+            if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
             await app.evaluate(({ net }, shouldFail) => {
                 globalThis.errorReportSmoke = { requests: [] };
                 const original = net.fetch.bind(net);

@@ -52,6 +52,10 @@ const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         await page.waitForSelector('#rhinoWorkbenchPanel', { state: 'attached' });
+        await page.waitForFunction(() => window.Konva?.stages?.length > 0);
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         await page.evaluate(endpoint => window.flowCanvas.rhino.save({ endpoint }), live ? 'http://127.0.0.1:26929/mcp' : `http://127.0.0.1:${mcpHttp.address().port}/mcp`);
         await page.locator('#agentToggleBtn').hover();
         await page.locator('#corvasAppLauncher [data-app="rhino"]').click();

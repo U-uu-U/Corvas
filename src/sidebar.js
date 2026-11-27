@@ -853,7 +853,8 @@ export class SidebarManager {
                     }, { once: true });
                     previewMedia.addEventListener('loadeddata', revealFrame);
                     previewMedia.addEventListener('seeked', revealFrame, { once: true });
-                    previewMedia.src = `local-res://${encodeURIComponent(filePath)}`;
+                    previewMedia.crossOrigin = 'anonymous';
+                    previewMedia.src = `local-media://file/${encodeURIComponent(filePath)}`;
                     previewMedia.load();
                     return;
                 }

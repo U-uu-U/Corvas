@@ -51,8 +51,8 @@ class CreativeWebApps {
         const web = window.webContents;
         const reload = () => { void window.loadURL(platform.url).catch(() => {}); };
         window.setMenu(this.Menu.buildFromTemplate([{ label: platform.name, submenu: [
-            { label: '后退', accelerator: 'Alt+Left', click: () => { if (web.canGoBack()) web.goBack(); } },
-            { label: '前进', accelerator: 'Alt+Right', click: () => { if (web.canGoForward()) web.goForward(); } },
+            { label: '后退', accelerator: 'Alt+Left', click: () => { if (web.navigationHistory.canGoBack()) web.navigationHistory.goBack(); } },
+            { label: '前进', accelerator: 'Alt+Right', click: () => { if (web.navigationHistory.canGoForward()) web.navigationHistory.goForward(); } },
             { label: '刷新', accelerator: 'CmdOrCtrl+R', click: () => web.reload() },
             { label: '返回创作首页', click: reload },
             { type: 'separator' },

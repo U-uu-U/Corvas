@@ -6,11 +6,28 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
 
 (async () => {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-graph-visibility-'));
+    // The canvas only keeps media items backed by real image/video/audio files; keep them outside userData.
+    const media = await fs.mkdtemp(path.join(os.tmpdir(), 'flow-graph-visibility-media-'));
     let app;
     try {
-        const items = Array.from({ length: 262 }, (_, index) => ({ id: `filler-${index}`, kind: 'media',
-            mediaType: 'document', x: -10000 - index * 150, y: -10000, width: 100, height: 100 }));
-        items.push({ id: 'late-source', kind: 'media', mediaType: 'audio', x: 150, y: 220, width: 300, height: 96 },
+        const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64');
+        const items = [];
+        for (let index = 0; index < 262; index++) {
+            const filePath = path.join(media, `filler-${index}.png`);
+            await fs.writeFile(filePath, png);
+            items.push({ id: `filler-${index}`, kind: 'media', mediaType: 'image', filePath,
+                x: -10000 - index * 150, y: -10000, width: 100, height: 100 });
+        }
+        const samples = 8000;
+        const wav = Buffer.alloc(44 + samples * 2);
+        wav.write('RIFF', 0); wav.writeUInt32LE(36 + samples * 2, 4); wav.write('WAVE', 8);
+        wav.write('fmt ', 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+        wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+        wav.write('data', 36); wav.writeUInt32LE(samples * 2, 40);
+        for (let i = 0; i < samples; i++) wav.writeInt16LE(Math.round(8000 * Math.sin(i * 2 * Math.PI * 440 / 8000)), 44 + i * 2);
+        const audioPath = path.join(media, 'late-source.wav');
+        await fs.writeFile(audioPath, wav);
+        items.push({ id: 'late-source', kind: 'media', mediaType: 'audio', filePath: audioPath, x: 150, y: 220, width: 300, height: 96 },
             { id: 'late-target', kind: 'op', nodeType: 'video', x: 650, y: 160, width: 300, height: 170, config: {}, runStatus: 'running' });
         const connections = [{ id: 'late-edge', from: { nodeId: 'late-source', port: 'out' }, to: { nodeId: 'late-target', port: 'source' } }];
         await fs.mkdir(path.join(profile, 'data'));
@@ -33,6 +50,9 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
             const edge = window.Konva?.stages[0]?.findOne('#late-edge');
             return edge?.isVisible() && edge.points().every(Number.isFinite);
         }, null, { timeout: 15000 });
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         const shapeCount = () => page.evaluate(() => window.Konva.stages[0].find('.graphEdge').length);
         assert.equal(await shapeCount(), 1, 'The saved edge renders after the third node batch');
         await page.locator('#canvasConnectionsToggle').click();
@@ -65,5 +85,6 @@ const { _electron: electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwr
         const relative = path.relative(os.tmpdir(), profile);
         assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative));
         await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        await fs.rm(media, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
 })().catch(error => { console.error(error); process.exitCode = 1; });

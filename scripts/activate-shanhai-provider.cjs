@@ -19,12 +19,12 @@ app.setPath('userData', USER_DATA);
 app.whenReady().then(async () => {
     const key = String(process.env.FLOW_CANVAS_SHANHAI_KEY_TASK || stdinKey || await stdinKeyPromise).trim();
     if (!key) throw new Error('Missing Shanhai key');
-    if (!safeStorage.isEncryptionAvailable()) throw new Error('Electron safeStorage is unavailable');
+    if (!await safeStorage.isAsyncEncryptionAvailable()) throw new Error('Electron safeStorage is unavailable');
     const store = new ApiConfigStore(USER_DATA, {
-        protect: value => safeStorage.encryptString(value),
-        unprotect: value => safeStorage.decryptString(value)
+        protect: value => safeStorage.encryptStringAsync(value),
+        unprotect: async value => (await safeStorage.decryptStringAsync(value)).result
     });
-    const loaded = store.load();
+    const loaded = await store.load();
     const current = loaded.config || { version: 1, revision: 0, providers: [], globalConfig: {} };
     const providers = Array.isArray(current.providers) ? current.providers.map(provider => ({ ...provider })) : [];
     const index = providers.findIndex(provider => normalizeEndpoint(provider.endpoint) === normalizeEndpoint(ENDPOINT)
@@ -43,7 +43,7 @@ app.whenReady().then(async () => {
     };
     if (index >= 0) providers[index] = provider;
     else providers.push(provider);
-    const result = store.save({ ...current, revision: Math.max(0, Number(current.revision) || 0) + 1,
+    const result = await store.save({ ...current, revision: Math.max(0, Number(current.revision) || 0) + 1,
         updatedAt: new Date().toISOString(), providers });
     if (!result.success) throw new Error(result.error || 'Failed to save API configuration');
     process.stdout.write(JSON.stringify({ success: true, action: index >= 0 ? 'updated' : 'added', providerId: provider.id,

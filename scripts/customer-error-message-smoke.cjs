@@ -49,6 +49,10 @@ const { normalizeRelayFailure, publicErrorResult } = require('../shared/public-a
             }]));
         }, result);
         await page.reload();
+        await page.waitForFunction(() => window.Konva?.stages?.length);
+        await page.waitForTimeout(400);
+        const onboarding = page.locator('#siteLoginDialog[open]');
+        if (await onboarding.count()) await onboarding.locator('[data-login-skip]').click();
         await page.locator('#agentTaskHistoryBtn').click();
         const history = page.locator('#agentTaskHistory');
         await history.locator('.agent-task-analysis').waitFor();
